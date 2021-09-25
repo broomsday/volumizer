@@ -21,7 +21,10 @@ def main(
 
     pdbs = rcsb.build_pdb_set(cluster_file)
     db = mongo.fetch_database(pdbs)
-    print(db.command("dbstats")["objects"])
+    rcsb.download_biological_assemblies(db)
+
+    print("Downloaded", db.pdbs.find({"downloaded": True}).count())
+    print("Not downloaded:", db.pdbs.find({"downloaded": False}).count())
 
 
 if "__main__" in __name__:

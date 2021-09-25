@@ -70,3 +70,11 @@ def fetch_database(pdbs: set[str]) -> database.Database:
     update_database_pdbs(client.status, pdbs)
 
     return client.status
+
+
+def update_downloaded(db: database.Database, pdb: dict, downloaded: bool) -> None:
+    """
+    Update the downloaded field 
+    """
+    update_result = db.pdbs.update_one({"pdb_id": pdb["pdb_id"]}, {"$set": {"downloaded": downloaded}}, upsert=False)
+    assert update_result.matched_count == 1

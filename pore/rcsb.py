@@ -3,11 +3,15 @@ Functions for using the RCSB.
 """
 
 from pathlib import Path
-
 from urllib import request
+from urllib.error import HTTPError
 
-from pore.paths import RCSB_CLUSTER_FILE
+from pymongo import database
+from tqdm import tqdm
+
+from pore.paths import RCSB_CLUSTER_FILE, PDB_DIR
 from pore.constants import PDB_ID_LENGTH, RCSB_CLUSTER_URL
+from pore import mongo
 
 
 def cluster_file_exists(cluster_file: Path) -> bool:
@@ -55,3 +59,36 @@ def build_pdb_set(cluster_file: Path) -> set[str]:
         pdbs = parse_cluster_file(fi.readlines())
 
     return pdbs
+
+
+def download_biological_assembly(pdb_id: str) -> bool:
+    """
+    Check to see if the biological assembly is available at the RCSB.
+    If so, download it.
+
+    If not, download the standard PDB.
+
+    In both cases the file downloaded is compressed.
+    """
+    biounit_url = "https://ftp.wwpdb.org/pub/pdb/data/biounit/PDB/divided/" + f"{pdb_id[1:3].lower()}/{pdb_id.lower()}.pdb1.gz"
+    structure_url = "https://ftp.wwpdb.org/pub/pdb/data/structures/divided/pdb/" + f"{pdb_id[1:3].lower()}/pdb{pdb_id.lower()}.ent.gz"
+
+    try:
+        request.urlretrieve(biounit_url, PDB_DIR / f"{pdb_id}.pdb1.gz")
+        return True
+    except HTTPError:
+        try:
+            request.urlretrieve(structure_url, PDB_DIR / f"{pdb_id}.pdb1.gz")
+            return True
+        except HTTPError:
+            return False
+
+
+def download_biological_assemblies(db: database.Database):
+    """
+    If we have not already downloaded a PDB, do so now.
+    """
+    PDB_DIR.mkdir(exist_ok=True, parents=True)
+    for pdb in tqdm(list(db.pdbs.find()), "Downloading PDBs"):
+        if not pdb["downloaded"]:
+            mongo.update_downloaded(db, pdb, download_biological_assembly(pdb["pdb_id"]))
