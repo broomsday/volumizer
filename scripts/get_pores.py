@@ -20,7 +20,8 @@ def main(
         rcsb.get_rcsb_cluster_file()
 
     pdbs = rcsb.build_pdb_set(cluster_file)
-    print(pdbs)
+    db = mongo.fetch_database(pdbs)
+    print(db.command("dbstats")["objects"])
 
 
 if "__main__" in __name__:
