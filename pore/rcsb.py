@@ -4,18 +4,39 @@ Functions for using the RCSB.
 
 from pathlib import Path
 
-from pore.paths import DATA_DIR
-from pore.constants import PDB_ID_LENGTH
+from urllib import request
+
+from pore.paths import RCSB_CLUSTER_FILE
+from pore.constants import PDB_ID_LENGTH, RCSB_CLUSTER_URL
 
 
-def get_cluster_file() -> Path:
+def cluster_file_exists(cluster_file: Path) -> bool:
     """
+    Check if the RCSB cluster file exists locally.
     """
-    cluster_file = DATA_DIR / "rcsb_cluster" / "bc-90.out"
-    assert cluster_file.is_file()
+    return cluster_file.is_file()
 
-    return cluster_file
 
+def download_cluster_file() -> None:
+    """
+    Download the RCSB cluster file.
+    """
+    request.urlretrieve(RCSB_CLUSTER_URL, RCSB_CLUSTER_FILE)
+
+
+def get_rcsb_cluster_file() -> None:
+    """
+    Download the RCSB cluster file if it doesn't exist locally.
+
+    Return the path to the RCSB cluster file.
+    """
+    download_attempts = 0
+    while (not cluster_file_exists(RCSB_CLUSTER_FILE)) and (download_attempts < 10):
+        download_cluster_file()
+        download_attempts += 1
+
+    assert cluster_file_exists(RCSB_CLUSTER_FILE)
+        
 
 def parse_cluster_file(lines: list[str]) -> set[str]:
     """
@@ -24,11 +45,12 @@ def parse_cluster_file(lines: list[str]) -> set[str]:
     return {pdb[:PDB_ID_LENGTH] for pdb in lines}
 
 
-def build_pdb_list() -> set[str]:
+def build_pdb_set(cluster_file: Path) -> set[str]:
     """
+    Get a set of all the PDB IDs we want to download and process.
     """
-
-    with open(get_cluster_file(), mode="r", encoding="utf-8") as cluster_file:
-        pdbs = parse_cluster_file(cluster_file.readlines())
+    assert cluster_file_exists(cluster_file)
+    with open(cluster_file, mode="r", encoding="utf-8") as fi:
+        pdbs = parse_cluster_file(fi.readlines())
 
     return pdbs
