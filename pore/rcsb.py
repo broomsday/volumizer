@@ -30,6 +30,7 @@ def get_rcsb_cluster_file() -> None:
 
     Return the path to the RCSB cluster file.
     """
+    RCSB_CLUSTER_FILE.parent.mkdir(exist_ok=True, parents=True)
     download_attempts = 0
     while (not cluster_file_exists(RCSB_CLUSTER_FILE)) and (download_attempts < 10):
         download_cluster_file()
