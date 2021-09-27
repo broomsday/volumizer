@@ -98,4 +98,33 @@ def download_biological_assemblies(db: database.Database):
     PDB_DIR.mkdir(exist_ok=True, parents=True)
     for pdb in tqdm(list(db.pdbs.find()), "Downloading PDBs"):
         if not pdb["downloaded"]:
-            mongo.update_downloaded(db, pdb, download_biological_assembly(pdb["pdb_id"]))
+            if utils.is_pdb_downloaded(pdb["pdb_id"]):
+                mongo.update_downloaded(db, pdb, True)
+            else:
+                mongo.update_downloaded(db, pdb, download_biological_assembly(pdb["pdb_id"]))
+
+
+def download_component_definition():
+    """
+    """
+
+
+def build_protein_resname_set() -> set[str]:
+    """
+    Using the downloaded componets build a set of protein residue names.
+    """
+
+
+def is_component_protein() -> bool:
+    """
+    Return whether the supplied component is a protein residue.
+
+    This is based on having L-LINKING or D-LINKING properties
+    """
+
+
+def update_protein_resname_set() -> set[str]:
+    """
+    If the supplied component is part of a protein add it to the protein
+    component set.
+    """

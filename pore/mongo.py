@@ -78,3 +78,11 @@ def update_downloaded(db: database.Database, pdb: dict, downloaded: bool) -> Non
     """
     update_result = db.pdbs.update_one({"pdb_id": pdb["pdb_id"]}, {"$set": {"downloaded": downloaded}}, upsert=False)
     assert update_result.matched_count == 1
+
+
+def update_processed(db: database.Database, pdb: dict, processed: bool) -> None:
+    """
+    Update the downloaded field 
+    """
+    update_result = db.pdbs.update_one({"pdb_id": pdb["pdb_id"]}, {"$set": {"processed": processed}}, upsert=False)
+    assert update_result.matched_count == 1

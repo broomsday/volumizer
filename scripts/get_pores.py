@@ -26,6 +26,8 @@ def main(
     print("Downloaded", db.pdbs.find({"downloaded": True}).count())
     print("Not downloaded:", db.pdbs.find({"downloaded": False}).count())
 
+    pdb.process_all_pdbs(db)
+
 
 if "__main__" in __name__:
     typer.run(main)
