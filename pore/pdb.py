@@ -62,7 +62,7 @@ def process_all_pdbs(db: database.Database) -> None:
     Enter their state in the database.
     """
     # TODO: get an initial set of protein components
-    protein_residue_names = rcsb.
+    #protein_residue_names = rcsb.
     print(db.command("dbstats"))
     quit()
     for pdb in tqdm(list(db.pdbs.find()), "Processing PDBs"):
