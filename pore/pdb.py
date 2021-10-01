@@ -2,71 +2,74 @@
 Functions for parsing, cleaning, and modifying PDBs.
 """
 
+import warnings
 
 from pymongo import database
 from tqdm import tqdm
 
-from pore import utils, mongo, rcsb
+from Bio.PDB import PDBParser, Select
+from Bio.PDB.PDBIO import PDBIO
+
+from pore import utils, mongo
+from pore.paths import CLEANED_PDB_DIR
 
 
-def assemble_biological_unit():
-    """
-    Alter the chain IDs in order to make the biological unit follow expected PDB rules.
-    """
+PDB_IN = PDBParser()
+PDB_OUT = PDBIO()
 
 
-def remove_alternate_conformers():
-    """
-    Remove alternate conformers and remove the alt-loc identifier from the remaining conformer.
-    """
+class ProteinSelect(Select):
+    def __init__(self, components):
+        Select.__init__(self)
+        self.components = components
+
+    def accept_model(self, model):
+        if model.serial_num == 1:
+            return True
+        return False
+    def accept_residue(self, residue):
+        if residue.resname in self.components:
+            return True
+        return False
+    def accept_atom(self, atom):
+        if atom.element != "H":
+            return True
+        if (not atom.is_disordered()) or (atom.get_altloc() == "A"):
+            atom.set_altloc(" ")
+            return True
+        return False
 
 
-def remove_hydrogens():
-    """
-    Remove hydrogen atoms.
-    """
-
-
-def remove_non_protein():
-    """
-    Remove anything that isn't an L- or D- protein component
-    TODO: check RCSB components to get these definitions
-    """
-
-
-def renumber_residues():
-    """
-    Renumber residues, collapsing fake gaps but maintaining true ones.
-    """
-
-
-def process_one_pdb(pdb_id: str) -> bool:
+def clean_one_pdb(pdb_id: str, protein_components: set[str]) -> bool:
     """
     Decompress and cleanup a single PDB.
 
     Return False if the final processed PDB could not be created.
     """
-    # TODO: assemble the biological unit in a temporary space
-    # TODO: remove waters, salts and truly non-protein residues (TODO: need list of protein residues from RCSB-components)
-    # TODO: remove alternate conformers
-    # TODO: remove hydrogens
-    # TODO: renumber the residues
+    utils.decompress_pdb(pdb_id)
+    structure = PDB_IN.get_structure(pdb_id, CLEANED_PDB_DIR / f"{pdb_id}.pdb")
 
-    return False
+    PDB_OUT.set_structure(structure)
+    PDB_OUT.save(str(CLEANED_PDB_DIR / f"{pdb_id}.pdb"), select=ProteinSelect(protein_components))
+
+    return utils.is_pdb_cleaned(pdb_id)
 
 
-def process_all_pdbs(db: database.Database) -> None:
+def clean_all_pdbs(db: database.Database) -> None:
     """
     Decompress and cleanup all downloaded PDBs, and align to their major axis.
     
     Enter their state in the database.
     """
-    # TODO: get an initial set of protein components
-    #protein_residue_names = rcsb.
-    print(db.command("dbstats"))
-    quit()
-    for pdb in tqdm(list(db.pdbs.find()), "Processing PDBs"):
-        if utils.is_pdb_processed(pdb["pdb_id"]):
-            mongo.update_processed(db, pdb, True)
+    CLEANED_PDB_DIR.mkdir(exist_ok=True, parents=True)
+
+    protein_components = mongo.get_protein_components(db)
+
+    # biopython tends to have many warnings about PDB construction which can be ignored
+    warnings.filterwarnings("ignore")
+    for pdb in tqdm(list(db.pdbs.find({"downloaded": True})), "Cleaning PDBs"):
+        if utils.is_pdb_cleaned(pdb["pdb_id"]):
+            mongo.update_pdb_cleaned(db, pdb, True)
         else:
-            mongo.update_downloaded(db, pdb, process_one_pdb(pdb["pdb_id"]))
+            mongo.update_pdb_cleaned(db, pdb, clean_one_pdb(pdb["pdb_id"], protein_components))
+    warnings.filterwarnings("default")

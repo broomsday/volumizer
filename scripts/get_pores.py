@@ -12,26 +12,36 @@ from pore import rcsb, pdb, mongo, paths
 
 def main(
     cluster_file: Path = typer.Option(paths.RCSB_CLUSTER_FILE, help="Custom file containing one PDB ID per line"),
+    component_file: Path = typer.Option(paths.RCSB_CCD_FILE, help="Custom file containing one component name per line.  Only these components will be included in the cleaned PDBs."),
     skip_download: bool = typer.Option(False, help="Do not attempt to download any PDBs"),
-    skip_process: bool = typer.Option(False, help="Do not process raw downloaded PDBs"),
+    skip_clean: bool = typer.Option(False, help="Do not clean raw downloaded PDBs"),
 ) -> None:
     """
     Download biological assemblies, clean and process them, then find pores.
     """
     if cluster_file == paths.RCSB_CLUSTER_FILE:
-        rcsb.get_rcsb_cluster_file()
+        print("Downloading cluster file...")
+        rcsb.get_cluster_file()
+    if component_file == paths.RCSB_CCD_FILE:
+        print("Downloading component file...")
+        rcsb.get_component_file()
 
+    print("Building PDB set...")
     pdbs = rcsb.build_pdb_set(cluster_file)
-    db = mongo.fetch_database(pdbs)
+    print("Building component set...")
+    components = rcsb.build_component_set(component_file)
+    print("Getting the database...")
+    db = mongo.fetch_database(pdbs, set([component.component_id for component in components]))
 
     if not skip_download:
         rcsb.download_biological_assemblies(db)
 
-    print("Downloaded", db.pdbs.count_documents({"downloaded": True}))
-    print("Not downloaded:", db.pdbs.count_documents({"downloaded": False}))
+    print(f"Downloaded: {db.pdbs.count_documents({'downloaded': True})} PDBs")
+    print(f"Not downloaded: {db.pdbs.count_documents({'downloaded': False})} PDBs")
 
-    if not skip_process:
-        pdb.process_all_pdbs(db)
+    if not skip_clean:
+        rcsb.process_all_components(db, components)
+        pdb.clean_all_pdbs(db)
 
 
 if "__main__" in __name__:
