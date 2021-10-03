@@ -73,3 +73,23 @@ def clean_all_pdbs(db: database.Database) -> None:
         else:
             mongo.update_pdb_cleaned(db, pdb, clean_one_pdb(pdb["pdb_id"], protein_components))
     warnings.filterwarnings("default")
+
+
+def pdb_to_coords():
+    """
+    """
+    # TODO should be able to make point cloud just from raw x,y,z coords
+    # TODO consider taking only backbone and CB (e.g. as mutation to alanine), but use larger voxels
+
+
+def pdb_to_point_cloud():
+    """
+    """
+
+
+def pdb_to_voxel_grid():
+    """
+    """
+    # TODO first make a point cloud from the PDB coords
+    # TODO then make a voxel grid
+    # TODO see: https://www.kaggle.com/kmader/pyntcloud-voxel-grids
