@@ -67,7 +67,7 @@ def clean_all_pdbs(db: database.Database) -> None:
 
     # biopython tends to have many warnings about PDB construction which can be ignored
     warnings.filterwarnings("ignore")
-    for pdb in tqdm(list(db.pdbs.find({"downloaded": True})), "Cleaning PDBs"):
+    for pdb in tqdm(list(db.pdbs.find({"downloaded": True, "cleaned": False})), "Cleaning PDBs"):
         if utils.is_pdb_cleaned(pdb["pdb_id"]):
             mongo.update_pdb_cleaned(db, pdb, True)
         else:
