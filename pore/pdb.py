@@ -3,18 +3,21 @@ Functions for parsing, cleaning, and modifying PDBs.
 """
 
 import warnings
+from numpy.core.fromnumeric import size
 
 from pymongo import database
 from tqdm import tqdm
 from Bio.PDB import PDBParser, Select
 from Bio.PDB.PDBIO import PDBIO
 from pyntcloud import PyntCloud
+from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
+from tqdm import tqdm
 
 from pore import utils, mongo
-from pore.paths import CLEANED_PDB_DIR, PROCESSED_PDB_DIR
-from pore.constants import VOXEL_ATOM_NAMES, VOXEL_SIZE
+from pore.paths import CLEANED_PDB_DIR, DATA_DIR, PROCESSED_PDB_DIR
+from pore.constants import VOXEL_ATOM_NAMES, VOXEL_SIZE, DIMENSIONS_AND_DIRECTIONS, OCCLUDED_DIMENSION_LIMIT
 
 
 PDB_IN = PDBParser()
@@ -108,12 +111,19 @@ def add_voxel_grid(cloud: PyntCloud) -> tuple[PyntCloud, str]:
     return cloud, voxel_grid_id
 
 
-def create_protein_solvent_voxel_grid(cloud: PyntCloud, voxel_grid_id: str) -> np.ndarray:
+def create_voxel_grid(cloud: PyntCloud, voxel_grid_id: str) -> VoxelGrid:
     """
     Generate an array representing a binary voxel grid where zero represents no protein
     atoms in that voxel (e.g. solvent) and a non-zero represents a protein atom in that voxel.
     """
-    voxel_grid = cloud.structures[voxel_grid_id]
+    return cloud.structures[voxel_grid_id]
+
+
+def get_protein_solvent_voxels(voxel_grid: VoxelGrid) -> np.ndarray:
+    """
+    Generate an array representing a binary voxel grid where zero represents no protein
+    atoms in that voxel (e.g. solvent) and a non-zero represents a protein atom in that voxel.
+    """
     return voxel_grid.get_feature_vector(mode="binary")
 
 
@@ -139,6 +149,103 @@ def get_protein_and_solvent_voxels(
     return protein_voxels, solvent_voxels
 
 
+def get_voxel_limits(
+    solvent_voxels: tuple[np.ndarray, ...],
+    protein_voxels: tuple[np.ndarray, ...],
+) -> tuple[float, ...]:
+    """
+    Determine the maximum extents in each dimension of the voxel-grid.
+    """
+    return (
+        max(solvent_voxels[0].max(), protein_voxels[0].max()),
+        max(solvent_voxels[1].max(), protein_voxels[1].max()),
+        max(solvent_voxels[2].max(), protein_voxels[2].max()),
+    )
+
+
+def voxel_within_limits(voxel: tuple[float, ...], limits: tuple[float, ...]) -> bool:
+    """
+    Return False if the voxel indices are outside the limits in any dimension.
+    """
+    if voxel[0] > limits[0] or voxel[0] < 0:
+        return False
+    elif voxel[1] > limits[1] or voxel[1] < 0:
+        return False
+    elif voxel[2] > limits[2] or voxel[2] < 0:
+        return False
+
+    return True
+
+
+def increment_voxel(voxel: tuple[float, ...], increment: tuple[float, ...]) -> tuple[float, ...]:
+    """
+    Increment the voxel indices along one or more dimensions.
+    """
+    return (voxel[0] + increment[0], voxel[1] + increment[1], voxel[2] + increment[2])
+
+
+def get_exposed_and_buried_solvent_voxels(
+    solvent_voxels: tuple[np.ndarray, ...],
+    protein_voxels: tuple[np.ndarray, ...],
+) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+    """
+    Use simple geometric heuristics to determine if a given solvent voxel is buried or exposed.
+    """
+    voxel_limits = get_voxel_limits(solvent_voxels, protein_voxels)
+
+    protein_voxel_list = frozenset(
+        [(protein_voxels[0][i], protein_voxels[1][i], protein_voxels[2][i]) for i in range(protein_voxels[0].size)]
+    )
+
+    buried_solvent_voxels = ([], [], [])
+    exposed_solvent_voxels = ([], [], [])
+
+    # TODO performance here is an issue (takes ~20 seconds per structure, needs to take max 1 second)
+    #   simply having this nested in python maybe a significant issue
+    #       possible solution: use Cython, C, PyPy, cPython?
+    #       possible solution: since we trace paths, we might be able to quickly assign more voxels are exposed if they are
+    #           along the path of a voxel we just identified as exposed?  This needs more thinking, it's tough
+    #               would require having a tuple of the occluded dimensions premade for each voxel
+    #                   how to backtrack effectively?  Can only do this once we reach the dimensions end
+    for i in tqdm(range(solvent_voxels[0].size), desc="Searching voxels"):
+        query_voxel = (solvent_voxels[0][i], solvent_voxels[1][i], solvent_voxels[2][i])
+        occluded_dimensions = []
+        for dimension_increment in DIMENSIONS_AND_DIRECTIONS:
+            test_voxel = query_voxel
+            test_count = 0
+            while True:
+                test_count += 1
+                test_voxel = increment_voxel(test_voxel, dimension_increment)
+                if not voxel_within_limits(test_voxel, voxel_limits):
+                    break
+
+                if test_voxel in protein_voxel_list:
+                    occluded_dimensions.append(dimension_increment)
+                    break
+
+        if len(occluded_dimensions) >= OCCLUDED_DIMENSION_LIMIT:
+            buried_solvent_voxels[0].append(query_voxel[0])
+            buried_solvent_voxels[1].append(query_voxel[1])
+            buried_solvent_voxels[2].append(query_voxel[2])
+        else:
+            exposed_solvent_voxels[0].append(query_voxel[0])
+            exposed_solvent_voxels[1].append(query_voxel[1])
+            exposed_solvent_voxels[2].append(query_voxel[2])
+
+    return (
+        (
+            np.array(exposed_solvent_voxels[0]),
+            np.array(exposed_solvent_voxels[1]),
+            np.array(exposed_solvent_voxels[2]),
+        ),
+        (
+            np.array(buried_solvent_voxels[0]),
+            np.array(buried_solvent_voxels[1]),
+            np.array(buried_solvent_voxels[2]),
+        ),
+    )
+
+
 def process_one_pdb(pdb_id: str) -> bool:
     """
     Generate a voxelized representation of the protein.
@@ -154,13 +261,25 @@ def process_one_pdb(pdb_id: str) -> bool:
     coords = get_pdb_coords(pdb_id)
     cloud = coords_to_point_cloud(coords)
     cloud, voxel_grid_id = add_voxel_grid(cloud)
-    protein_solvent_voxel_grid = create_protein_solvent_voxel_grid(cloud, voxel_grid_id)
-    protein_voxels, solvent_voxels = get_protein_and_solvent_voxels(protein_solvent_voxel_grid)
+    voxel_grid = create_voxel_grid(cloud, voxel_grid_id)
+    protein_solvent_voxels = get_protein_solvent_voxels(voxel_grid)  # TODO simplify this
+    protein_voxels, solvent_voxels = get_protein_and_solvent_voxels(protein_solvent_voxels)
 
-    # TODO sub-divide the solvent voxels into exposed vs. buried
+    exposed_solvent_voxels, buried_solvent_voxels = get_exposed_and_buried_solvent_voxels(
+        solvent_voxels, protein_voxels
+    )
 
-    # TODO save the voxelized representation (may need colors to identify different label types)
+    print("\n")
+    print(pdb_id)
+    print(voxel_grid_id)
+    print("Protein Voxels:", protein_voxels[0].size)
+    print("Total Solvent Voxels:", solvent_voxels[0].size)
+    print("Exposed Solvent Voxels:", exposed_solvent_voxels[0].size)
+    print("Buried Solvent Voxels:", buried_solvent_voxels[0].size)
 
+    points_to_pdb(voxel_grid.voxel_centers, solvent_voxels)
+
+    quit()
     return False
 
 
@@ -182,3 +301,31 @@ def process_all_pdbs(db: database.Database) -> None:
             mongo.update_pdb_processed(db, pdb, True)
         else:
             mongo.update_pdb_processed(db, pdb, process_one_pdb(pdb["pdb_id"]))
+
+
+def make_atom_line(point: np.ndarray, solvent_voxel_indices: set[int], index: int) -> str:
+    """
+    """
+    if index in solvent_voxel_indices:
+        return f"ATOM      1  O   ALA A   1      {point[0]:6.3f} {point[1]:6.3f} {point[2]:6.3f} 1.00 0.00           C"
+    else:
+        return f"ATOM      1  C   ALA A   1      {point[0]:6.3f} {point[1]:6.3f} {point[2]:6.3f} 1.00 0.00           C"
+
+
+def points_to_pdb(points: np.ndarray, solvent_voxels: np.ndarray) -> None:
+    """
+    Write out points as though it was a PDB file.
+
+    Carbon -> protein
+    Nitrogen -> exposed solvent
+    Oxygen -> buried solvent
+    """
+    # TODO fix 25 by actually computing the range
+    solvent_voxel_indices = {(solvent_voxels[2][i]*25*25 + solvent_voxels[1][i]*25 + solvent_voxels[0][i]) for i in range(len(solvent_voxels[0]))}
+    print(solvent_voxel_indices)
+    print(len(solvent_voxel_indices))
+
+    output_lines = [make_atom_line(point, solvent_voxel_indices, i) for i, point in enumerate(points)]
+
+    with open(DATA_DIR / "tmp.pdb", mode="w", encoding="utf-8") as pdb_file:
+        pdb_file.write("\n".join(output_lines))
