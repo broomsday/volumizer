@@ -89,6 +89,13 @@ def update_database_components(db: database.Database, components: set[str]) -> N
     [db.components.insert_one(get_init_component_entry(component)._asdict()) for component in components_to_add]
 
 
+def quick_connect_database() -> database.Database:
+    """
+    Assume the database already exists and return it without updating.
+    """
+    return start_mongo_client().status
+
+
 def fetch_database(pdbs: set[str], components: set[str]) -> database.Database:
     """
     If a database already exists, ensure it is up-to-date in terms of PDB IDs, and return it.
