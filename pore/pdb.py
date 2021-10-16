@@ -304,12 +304,11 @@ def process_all_pdbs(db: database.Database) -> None:
 
 
 def make_atom_line(point: np.ndarray, solvent_voxel_indices: set[int], index: int) -> str:
-    """
-    """
+    """"""
     if index in solvent_voxel_indices:
-        return f"ATOM      1  O   ALA A   1      {point[0]:6.3f} {point[1]:6.3f} {point[2]:6.3f} 1.00 0.00           C"
+        return f"ATOM      1  O   ALA A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
     else:
-        return f"ATOM      1  C   ALA A   1      {point[0]:6.3f} {point[1]:6.3f} {point[2]:6.3f} 1.00 0.00           C"
+        return f"ATOM      1  C   ALA A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
 
 
 def points_to_pdb(points: np.ndarray, solvent_voxels: np.ndarray, grid_dimensions: np.ndarray) -> None:
