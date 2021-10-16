@@ -277,7 +277,7 @@ def process_one_pdb(pdb_id: str) -> bool:
     print("Exposed Solvent Voxels:", exposed_solvent_voxels[0].size)
     print("Buried Solvent Voxels:", buried_solvent_voxels[0].size)
 
-    points_to_pdb(voxel_grid.voxel_centers, solvent_voxels)
+    points_to_pdb(voxel_grid.voxel_centers, solvent_voxels, voxel_grid.x_y_z)
 
     quit()
     return False
@@ -312,7 +312,7 @@ def make_atom_line(point: np.ndarray, solvent_voxel_indices: set[int], index: in
         return f"ATOM      1  C   ALA A   1      {point[0]:6.3f} {point[1]:6.3f} {point[2]:6.3f} 1.00 0.00           C"
 
 
-def points_to_pdb(points: np.ndarray, solvent_voxels: np.ndarray) -> None:
+def points_to_pdb(points: np.ndarray, solvent_voxels: np.ndarray, grid_dimensions: np.ndarray) -> None:
     """
     Write out points as though it was a PDB file.
 
@@ -320,8 +320,10 @@ def points_to_pdb(points: np.ndarray, solvent_voxels: np.ndarray) -> None:
     Nitrogen -> exposed solvent
     Oxygen -> buried solvent
     """
-    # TODO fix 25 by actually computing the range
-    solvent_voxel_indices = {(solvent_voxels[2][i]*25*25 + solvent_voxels[1][i]*25 + solvent_voxels[0][i]) for i in range(len(solvent_voxels[0]))}
+    solvent_voxel_indices = {
+        (solvent_voxels[2][i] * grid_dimensions[0] * grid_dimensions[1] + solvent_voxels[1][i] * grid_dimensions[0] + solvent_voxels[0][i])
+        for i in range(len(solvent_voxels[0]))
+    }
     print(solvent_voxel_indices)
     print(len(solvent_voxel_indices))
 
