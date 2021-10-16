@@ -9,4 +9,7 @@ RCSB_CCD_URL = "https://ftp.wwpdb.org/pub/pdb/data/monomers/components.cif"
 RCSB_BIOUNIT_URL = "https://ftp.wwpdb.org/pub/pdb/data/biounit/PDB/divided/"
 RCSB_STRUCTURE_URL = "https://ftp.wwpdb.org/pub/pdb/data/structures/divided/pdb/"
 
+VOXEL_ATOM_NAMES = frozenset(["N", "CA", "C", "O", "CB", "CG", "CG1", "CG2"])
+VOXEL_SIZE = 2.0
+
 MONGO_CONNECTION_STRING = "mongodb://127.0.0.1:27017/"

@@ -2,7 +2,6 @@
 Module for interacting with the mongo database
 """
 
-
 from pymongo import MongoClient, database
 
 from pore.constants import MONGO_CONNECTION_STRING
@@ -103,6 +102,7 @@ def fetch_database(pdbs: set[str], components: set[str]) -> database.Database:
     If it does not exist, initialize it.
     """
     client = start_mongo_client()
+
     if not database_exists(client):
         initialize_pdb_database(client, pdbs)
         initialize_component_database(client, components)
@@ -145,3 +145,11 @@ def get_protein_components(db: database.Database) -> set[str]:
     Return a set of all component IDs that are protein.
     """
     return {component["component_id"] for component in db.components.find({"protein": True})}
+
+
+def update_pdb_processed(db: database.Database, pdb: dict, processed: bool) -> None:
+    """
+    Update the processed field of the pdb collection
+    """
+    update_result = db.pdbs.update_one({"pdb_id": pdb["pdb_id"]}, {"$set": {"processed": processed}}, upsert=False)
+    assert update_result.matched_count == 1

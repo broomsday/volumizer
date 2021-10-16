@@ -147,7 +147,7 @@ def format_component_type_line(component_type_line: str) -> str:
 
 def parse_component_file(lines: list[str]) -> list[ComponentData]:
     """
-    Read lines from a CCD .cif file and return a list of all component ids and a lsit of all component types.
+    Read lines from a CCD .cif file and return a list of all component ids and types.
     """
     id_search = re.compile("_chem_comp.id*")
     id_lines = list(filter(id_search.match, lines))
