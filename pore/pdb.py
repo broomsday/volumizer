@@ -111,7 +111,7 @@ def add_voxel_grid(cloud: PyntCloud) -> tuple[PyntCloud, str]:
     return cloud, voxel_grid_id
 
 
-def create_voxel_grid(cloud: PyntCloud, voxel_grid_id: str) -> VoxelGrid:
+def get_voxel_grid(cloud: PyntCloud, voxel_grid_id: str) -> VoxelGrid:
     """
     Generate an array representing a binary voxel grid where zero represents no protein
     atoms in that voxel (e.g. solvent) and a non-zero represents a protein atom in that voxel.
@@ -257,11 +257,12 @@ def process_one_pdb(pdb_id: str) -> bool:
 
     Save the voxelized represenation.
     """
+    pdb_id = "6MRT"  # TODO: temporary hard-coding of structure that should have obvious pore
 
     coords = get_pdb_coords(pdb_id)
     cloud = coords_to_point_cloud(coords)
     cloud, voxel_grid_id = add_voxel_grid(cloud)
-    voxel_grid = create_voxel_grid(cloud, voxel_grid_id)
+    voxel_grid = get_voxel_grid(cloud, voxel_grid_id)
     protein_solvent_voxels = get_protein_solvent_voxels(voxel_grid)  # TODO simplify this
     protein_voxels, solvent_voxels = get_protein_and_solvent_voxels(protein_solvent_voxels)
 
@@ -277,9 +278,7 @@ def process_one_pdb(pdb_id: str) -> bool:
     print("Exposed Solvent Voxels:", exposed_solvent_voxels[0].size)
     print("Buried Solvent Voxels:", buried_solvent_voxels[0].size)
 
-    points_to_pdb(
-        voxel_grid.voxel_centers, exposed_solvent_voxels, buried_solvent_voxels, voxel_grid.x_y_z
-    )
+    points_to_pdb(voxel_grid.voxel_centers, exposed_solvent_voxels, buried_solvent_voxels, voxel_grid.x_y_z)
 
     quit()
     return False
