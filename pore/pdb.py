@@ -254,11 +254,20 @@ def make_atom_line(
         return f"ATOM  {index:>5d}  C   PTN C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
 
 
+def compute_voxel_indices(voxels: tuple[np.ndarray, ...], grid_dimensions: np.ndarray) -> set[int]:
+    """
+    Given a 3D array of voxels, compute the 1D set of their indices.
+    """
+    return {
+        (voxels[0][i] * grid_dimensions[1] * grid_dimensions[2] + voxels[1][i] * grid_dimensions[2] + voxels[2][i])
+        for i in range(len(voxels[0]))
+    }
+
+
 def points_to_pdb(
-    points: np.ndarray,
-    exposed_solvent_voxels: np.ndarray,
-    buried_solvent_voxels: np.ndarray,
-    grid_dimensions: np.ndarray,
+    voxel_grid: VoxelGrid,
+    exposed_solvent_voxels: tuple[np.ndarray, ...],
+    buried_solvent_voxels: tuple[np.ndarray, ...],
 ) -> None:
     """
     Write out points as though it was a PDB file.
@@ -266,29 +275,13 @@ def points_to_pdb(
     Carbon -> protein
     Nitrogen -> exposed solvent
     Oxygen -> buried solvent
-    # TODO something for pores
     """
-    # TODO make these individual functions or reuse a single function for grabbing indices
-    exposed_solvent_voxel_indices = {
-        (
-            exposed_solvent_voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
-            + exposed_solvent_voxels[1][i] * grid_dimensions[2]
-            + exposed_solvent_voxels[2][i]
-        )
-        for i in range(len(exposed_solvent_voxels[0]))
-    }
-    buried_solvent_voxel_indices = {
-        (
-            buried_solvent_voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
-            + buried_solvent_voxels[1][i] * grid_dimensions[2]
-            + buried_solvent_voxels[2][i]
-        )
-        for i in range(len(buried_solvent_voxels[0]))
-    }
+    exposed_solvent_voxel_indices = compute_voxel_indices(exposed_solvent_voxels, voxel_grid.x_y_z)
+    buried_solvent_voxel_indices = compute_voxel_indices(buried_solvent_voxels, voxel_grid.x_y_z)
 
     output_lines = [
         make_atom_line(point, exposed_solvent_voxel_indices, buried_solvent_voxel_indices, i)
-        for i, point in enumerate(points)
+        for i, point in enumerate(voxel_grid.voxel_centers)
     ]
 
     with open(DATA_DIR / "tmp.pdb", mode="w", encoding="utf-8") as pdb_file:
@@ -327,7 +320,7 @@ def process_one_pdb(pdb_id: str) -> bool:
     print("Exposed Solvent Voxels:", exposed_solvent_voxels[0].size)
     print("Buried Solvent Voxels:", buried_solvent_voxels[0].size)
 
-    points_to_pdb(voxel_grid.voxel_centers, exposed_solvent_voxels, buried_solvent_voxels, voxel_grid.x_y_z)
+    points_to_pdb(voxel_grid, exposed_solvent_voxels, buried_solvent_voxels)
 
     quit()
     return False
