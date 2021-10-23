@@ -139,34 +139,55 @@ def get_protein_and_solvent_voxels(
     return protein_voxels, solvent_voxels
 
 
-def get_num_occluded_dimensions(
+def get_occluded_dimensions(
     query_voxel: tuple[int, int, int],
     possible_occluding_x: list[int],
     possible_occluding_y: list[int],
     possible_occluding_z: list[int],
-) -> int:
+) -> list[int]:
     """
     Determine how many ordinal axes are occluded.
     """
-    num_occluded_dimensions = 0
+    occluded_dimensions = [0, 0, 0, 0, 0, 0]
 
     if len(possible_occluding_z) != 0:
         if min(possible_occluding_z) < query_voxel[2]:
-            num_occluded_dimensions += 1
+            occluded_dimensions[4] = 1
         if max(possible_occluding_z) > query_voxel[2]:
-            num_occluded_dimensions += 1
+            occluded_dimensions[5] = 1
     if len(possible_occluding_y) != 0:
         if min(possible_occluding_y) < query_voxel[1]:
-            num_occluded_dimensions += 1
+            occluded_dimensions[2] = 1
         if max(possible_occluding_y) > query_voxel[1]:
-            num_occluded_dimensions += 1
+            occluded_dimensions[3] = 1
     if len(possible_occluding_x) != 0:
         if min(possible_occluding_x) < query_voxel[0]:
-            num_occluded_dimensions += 1
+            occluded_dimensions[0] = 1
         if max(possible_occluding_x) > query_voxel[0]:
-            num_occluded_dimensions += 1
+            occluded_dimensions[1] = 1
 
-    return num_occluded_dimensions
+    return occluded_dimensions
+
+
+def is_buried(occluded_dimensions: list[int]) -> bool:
+    """
+    If 5 or 6 dimensions are occluded, return True.
+    If less than 4 dimensions are occluded, return False.
+    If exactly 4 dimensions are occluded, return True if the two unoccluded dimensions are the same axis,
+    False otherwise
+    """
+
+    if occluded_dimensions.count(1) > OCCLUDED_DIMENSION_LIMIT:
+        return True
+    elif occluded_dimensions.count(1) ==  OCCLUDED_DIMENSION_LIMIT:
+        if occluded_dimensions[0] == 0 and occluded_dimensions[1] == 0:
+            return True
+        elif occluded_dimensions[2] == 0 and occluded_dimensions[3] == 0:
+            return True
+        elif occluded_dimensions[4] == 0 and occluded_dimensions[5] == 0:
+            return True
+
+    return False
 
 
 def get_exposed_and_buried_solvent_voxels(
@@ -199,11 +220,11 @@ def get_exposed_and_buried_solvent_voxels(
         possible_occluding_y = [protein_voxels[1][i] for i in possible_occluding_y_indices]
         possible_occluding_x = [protein_voxels[0][i] for i in possible_occluding_x_indices]
 
-        num_occluded_dimensions = get_num_occluded_dimensions(
+        occluded_dimensions = get_occluded_dimensions(
             query_voxel, possible_occluding_x, possible_occluding_y, possible_occluding_z
         )
 
-        if num_occluded_dimensions >= OCCLUDED_DIMENSION_LIMIT:
+        if is_buried(occluded_dimensions):
             buried_solvent_voxels[0].append(query_voxel[0])
             buried_solvent_voxels[1].append(query_voxel[1])
             buried_solvent_voxels[2].append(query_voxel[2])
