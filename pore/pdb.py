@@ -3,6 +3,8 @@ Functions for parsing, cleaning, and modifying PDBs.
 """
 
 import warnings
+from copy import deepcopy
+import itertools
 
 from pymongo import database
 from tqdm import tqdm
@@ -12,7 +14,6 @@ from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
-from tqdm import tqdm
 
 from pore import utils, mongo
 from pore.paths import CLEANED_PDB_DIR, DATA_DIR, PROCESSED_PDB_DIR
@@ -179,7 +180,7 @@ def is_buried(occluded_dimensions: list[int]) -> bool:
 
     if occluded_dimensions.count(1) > OCCLUDED_DIMENSION_LIMIT:
         return True
-    elif occluded_dimensions.count(1) ==  OCCLUDED_DIMENSION_LIMIT:
+    elif occluded_dimensions.count(1) == OCCLUDED_DIMENSION_LIMIT:
         if occluded_dimensions[0] == 0 and occluded_dimensions[1] == 0:
             return True
         elif occluded_dimensions[2] == 0 and occluded_dimensions[3] == 0:
@@ -247,10 +248,67 @@ def get_exposed_and_buried_solvent_voxels(
     )
 
 
+def is_neighbor_voxel(buried_solvent_voxels, reference_index, query_index) -> bool:
+    """
+    """
+    # TODO there are PyntCloud functions for these kind of operations
+    # TODO not sure if they operate on np.ndarrays, otherwise might need to write out own
+    
+    # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is exactly 1
+    reference_voxel = (buried_solvent_voxels[0][reference_index], buried_solvent_voxels[1][reference_index], buried_solvent_voxels[2][reference_index])
+    query_voxel = (buried_solvent_voxels[0][query_index], buried_solvent_voxels[1][query_index], buried_solvent_voxels[2][query_index])
+    differences = 0
+    for dimension in range(2):
+        differences += abs(reference_voxel[dimension] - query_voxel[dimension])
+    
+    if differences == 1:
+        return True
+    return False
+
+
+def get_pore_voxels(
+    buried_solvent_voxels: tuple[np.ndarray, ...], exposed_solvent_voxels: tuple[np.ndarray, ...]
+) -> dict[int, tuple[np.ndarray, ...]]:
+    """
+    Agglomerate buried solvent voxels into putative pores.
+    Then test which putative pores traverse the box (TODO: how to do this?)
+    """
+
+    putative_pore_indices = set(range(buried_solvent_voxels[0].size))
+    agglomerated_pore_indices = set()
+
+    putative_pores = {}
+    pore_id = 0
+    while len(agglomerated_pore_indices) < len(putative_pore_indices):
+        remaining_putative_pore_indices = putative_pore_indices - agglomerated_pore_indices
+        starting_pore_index = list(remaining_putative_pore_indices)[0]
+        this_pore_indices = set([starting_pore_index])
+        agglomerated_pore_indices.add(starting_pore_index)
+        remaining_putative_pore_indices.remove(starting_pore_index)
+        # search only over the currently unagglomerate/unassigned putative pore indices
+        for putative_pore_index in tqdm(remaining_putative_pore_indices, desc="Possible neighbor search"):
+            # this isn't the first voxel for the pore, so now we need to actually search over the others
+            # TODO: MVP-style we'll do this inefficiently and just check each one to see if it's next to an existing one
+            current_this_pore_indices = deepcopy(this_pore_indices)
+            for current_pore_index in current_this_pore_indices:
+                if is_neighbor_voxel(buried_solvent_voxels, putative_pore_index, current_pore_index):
+                    this_pore_indices.add(putative_pore_index)
+                    agglomerated_pore_indices.add(putative_pore_index)
+        putative_pores[pore_id] = (
+            np.array([buried_solvent_voxels[0][index] for index in this_pore_indices]),
+            np.array([buried_solvent_voxels[1][index] for index in this_pore_indices]),
+            np.array([buried_solvent_voxels[2][index] for index in this_pore_indices]),
+        )
+        pore_id += 1
+
+    return putative_pores
+
+
 def make_atom_line(
     point: np.ndarray,
     exposed_solvent_voxel_indices: set[int],
     buried_solvent_voxel_indices: set[int],
+    pore_voxel_index_map: dict[int, int],
     index: int,
 ) -> str:
     """
@@ -259,7 +317,10 @@ def make_atom_line(
     if index in exposed_solvent_voxel_indices:
         return f"ATOM  {index:>5d}  H   EXP A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
     elif index in buried_solvent_voxel_indices:
-        return f"ATOM  {index:>5d}  O   BUR B   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           O"
+        if index in list(pore_voxel_index_map.keys()):
+            return f"ATOM  {index:>5d}  O   POR D{pore_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           O"
+        else:
+            return f"ATOM  {index:>5d}  N   BUR B   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           N"
     else:
         return f"ATOM  {index:>5d}  C   PTN C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
 
@@ -278,6 +339,7 @@ def points_to_pdb(
     voxel_grid: VoxelGrid,
     exposed_solvent_voxels: tuple[np.ndarray, ...],
     buried_solvent_voxels: tuple[np.ndarray, ...],
+    pore_voxels: dict[int, tuple[np.ndarray, ...]]
 ) -> None:
     """
     Write out points as though it was a PDB file.
@@ -288,9 +350,16 @@ def points_to_pdb(
     """
     exposed_solvent_voxel_indices = compute_voxel_indices(exposed_solvent_voxels, voxel_grid.x_y_z)
     buried_solvent_voxel_indices = compute_voxel_indices(buried_solvent_voxels, voxel_grid.x_y_z)
+    pore_voxel_indices = {i: compute_voxel_indices(voxels, voxel_grid.x_y_z) for i, voxels in pore_voxels.items()}
+    
+    # TODO change name of this next thing and possibly improve how made
+    pore_voxel_index_map = {}
+    for id, indices in pore_voxel_indices.items():
+        for index in indices:
+            pore_voxel_index_map[index] = id
 
     output_lines = [
-        make_atom_line(point, exposed_solvent_voxel_indices, buried_solvent_voxel_indices, i)
+        make_atom_line(point, exposed_solvent_voxel_indices, buried_solvent_voxel_indices, pore_voxel_index_map, i)
         for i, point in enumerate(voxel_grid.voxel_centers)
     ]
 
@@ -321,6 +390,7 @@ def process_one_pdb(pdb_id: str) -> bool:
     exposed_solvent_voxels, buried_solvent_voxels = get_exposed_and_buried_solvent_voxels(
         solvent_voxels, protein_voxels
     )
+    pore_voxels = get_pore_voxels(buried_solvent_voxels, exposed_solvent_voxels)
 
     print("\n")
     print(pdb_id)
@@ -329,8 +399,9 @@ def process_one_pdb(pdb_id: str) -> bool:
     print("Total Solvent Voxels:", solvent_voxels[0].size)
     print("Exposed Solvent Voxels:", exposed_solvent_voxels[0].size)
     print("Buried Solvent Voxels:", buried_solvent_voxels[0].size)
+    print("Pores:", len(pore_voxels))
 
-    points_to_pdb(voxel_grid, exposed_solvent_voxels, buried_solvent_voxels)
+    points_to_pdb(voxel_grid, exposed_solvent_voxels, buried_solvent_voxels, pore_voxels)
 
     quit()
     return False
