@@ -151,19 +151,19 @@ def get_num_occluded_dimensions(
     num_occluded_dimensions = 0
 
     if len(possible_occluding_z) != 0:
-        if min(possible_occluding_z) < query_voxel[0]:
+        if min(possible_occluding_z) < query_voxel[2]:
             num_occluded_dimensions += 1
-        elif max(possible_occluding_z) > query_voxel[0]:
+        if max(possible_occluding_z) > query_voxel[2]:
             num_occluded_dimensions += 1
     if len(possible_occluding_y) != 0:
-        if min(possible_occluding_y) < query_voxel[0]:
+        if min(possible_occluding_y) < query_voxel[1]:
             num_occluded_dimensions += 1
-        elif max(possible_occluding_y) > query_voxel[0]:
+        if max(possible_occluding_y) > query_voxel[1]:
             num_occluded_dimensions += 1
     if len(possible_occluding_x) != 0:
         if min(possible_occluding_x) < query_voxel[0]:
             num_occluded_dimensions += 1
-        elif max(possible_occluding_x) > query_voxel[0]:
+        if max(possible_occluding_x) > query_voxel[0]:
             num_occluded_dimensions += 1
 
     return num_occluded_dimensions
