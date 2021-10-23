@@ -257,8 +257,9 @@ def is_neighbor_voxel(buried_solvent_voxels, reference_index, query_index) -> bo
     # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is exactly 1
     reference_voxel = (buried_solvent_voxels[0][reference_index], buried_solvent_voxels[1][reference_index], buried_solvent_voxels[2][reference_index])
     query_voxel = (buried_solvent_voxels[0][query_index], buried_solvent_voxels[1][query_index], buried_solvent_voxels[2][query_index])
+
     differences = 0
-    for dimension in range(2):
+    for dimension in range(3):
         differences += abs(reference_voxel[dimension] - query_voxel[dimension])
     
     if differences == 1:
