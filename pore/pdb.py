@@ -127,15 +127,6 @@ def get_protein_solvent_voxels(voxel_grid: VoxelGrid) -> np.ndarray:
     return voxel_grid.get_feature_vector(mode="binary")
 
 
-def invert_binary_array(array: np.ndarray) -> np.ndarray:
-    """
-    Make all ones into zeros, and zeros into ones.
-
-    This is only sensible if the array contains only zeros and ones
-    """
-    return (array * -1) + 1
-
-
 def get_protein_and_solvent_voxels(
     binary_voxel_grid: np.ndarray,
 ) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
@@ -143,8 +134,8 @@ def get_protein_and_solvent_voxels(
     From the voxel grid, return the indices of the protein containing voxels,
     and those not containing protein (e.g. solvent).
     """
-    protein_voxels = binary_voxel_grid.nonzero()
-    solvent_voxels = invert_binary_array(binary_voxel_grid).nonzero()
+    protein_voxels = np.nonzero(binary_voxel_grid)
+    solvent_voxels = np.nonzero(binary_voxel_grid == 0)
 
     return protein_voxels, solvent_voxels
 
