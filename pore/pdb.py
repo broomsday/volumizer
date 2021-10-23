@@ -237,6 +237,64 @@ def get_exposed_and_buried_solvent_voxels(
     )
 
 
+def make_atom_line(
+    point: np.ndarray,
+    exposed_solvent_voxel_indices: set[int],
+    buried_solvent_voxel_indices: set[int],
+    index: int,
+) -> str:
+    """
+    Make each exposed solvent point a hydrogen, buried solvent ponit an oxygen, and protein point a carbon
+    """
+    if index in exposed_solvent_voxel_indices:
+        return f"ATOM  {index:>5d}  H   EXP A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
+    elif index in buried_solvent_voxel_indices:
+        return f"ATOM  {index:>5d}  O   BUR B   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           O"
+    else:
+        return f"ATOM  {index:>5d}  C   PTN C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
+
+
+def points_to_pdb(
+    points: np.ndarray,
+    exposed_solvent_voxels: np.ndarray,
+    buried_solvent_voxels: np.ndarray,
+    grid_dimensions: np.ndarray,
+) -> None:
+    """
+    Write out points as though it was a PDB file.
+
+    Carbon -> protein
+    Nitrogen -> exposed solvent
+    Oxygen -> buried solvent
+    # TODO something for pores
+    """
+    # TODO make these individual functions or reuse a single function for grabbing indices
+    exposed_solvent_voxel_indices = {
+        (
+            exposed_solvent_voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
+            + exposed_solvent_voxels[1][i] * grid_dimensions[2]
+            + exposed_solvent_voxels[2][i]
+        )
+        for i in range(len(exposed_solvent_voxels[0]))
+    }
+    buried_solvent_voxel_indices = {
+        (
+            buried_solvent_voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
+            + buried_solvent_voxels[1][i] * grid_dimensions[2]
+            + buried_solvent_voxels[2][i]
+        )
+        for i in range(len(buried_solvent_voxels[0]))
+    }
+
+    output_lines = [
+        make_atom_line(point, exposed_solvent_voxel_indices, buried_solvent_voxel_indices, i)
+        for i, point in enumerate(points)
+    ]
+
+    with open(DATA_DIR / "tmp.pdb", mode="w", encoding="utf-8") as pdb_file:
+        pdb_file.write("\n".join(output_lines))
+
+
 def process_one_pdb(pdb_id: str) -> bool:
     """
     Generate a voxelized representation of the protein.
@@ -293,59 +351,3 @@ def process_all_pdbs(db: database.Database) -> None:
             mongo.update_pdb_processed(db, pdb, True)
         else:
             mongo.update_pdb_processed(db, pdb, process_one_pdb(pdb["pdb_id"]))
-
-
-def make_atom_line(
-    point: np.ndarray,
-    exposed_solvent_voxel_indices: set[int],
-    buried_solvent_voxel_indices: set[int],
-    index: int,
-) -> str:
-    """
-    Make each exposed solvent point a hydrogen, buried solvent ponit an oxygen, and protein point a carbon
-    """
-    if index in exposed_solvent_voxel_indices:
-        return f"ATOM      1  H   ALA A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
-    elif index in buried_solvent_voxel_indices:
-        return f"ATOM      1  O   ALA A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           O"
-    else:
-        return f"ATOM      1  C   ALA A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
-
-
-def points_to_pdb(
-    points: np.ndarray,
-    exposed_solvent_voxels: np.ndarray,
-    buried_solvent_voxels: np.ndarray,
-    grid_dimensions: np.ndarray,
-) -> None:
-    """
-    Write out points as though it was a PDB file.
-
-    Carbon -> protein
-    Nitrogen -> exposed solvent
-    Oxygen -> buried solvent
-    """
-    exposed_solvent_voxel_indices = {
-        (
-            exposed_solvent_voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
-            + exposed_solvent_voxels[1][i] * grid_dimensions[2]
-            + exposed_solvent_voxels[2][i]
-        )
-        for i in range(len(exposed_solvent_voxels[0]))
-    }
-    buried_solvent_voxel_indices = {
-        (
-            buried_solvent_voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
-            + buried_solvent_voxels[1][i] * grid_dimensions[2]
-            + buried_solvent_voxels[2][i]
-        )
-        for i in range(len(buried_solvent_voxels[0]))
-    }
-
-    output_lines = [
-        make_atom_line(point, exposed_solvent_voxel_indices, buried_solvent_voxel_indices, i)
-        for i, point in enumerate(points)
-    ]
-
-    with open(DATA_DIR / "tmp.pdb", mode="w", encoding="utf-8") as pdb_file:
-        pdb_file.write("\n".join(output_lines))
