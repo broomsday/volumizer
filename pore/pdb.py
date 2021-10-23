@@ -3,7 +3,6 @@ Functions for parsing, cleaning, and modifying PDBs.
 """
 
 import warnings
-from numpy.core.fromnumeric import size
 
 from pymongo import database
 from tqdm import tqdm
@@ -17,7 +16,7 @@ from tqdm import tqdm
 
 from pore import utils, mongo
 from pore.paths import CLEANED_PDB_DIR, DATA_DIR, PROCESSED_PDB_DIR
-from pore.constants import VOXEL_ATOM_NAMES, VOXEL_SIZE, DIMENSIONS_AND_DIRECTIONS, OCCLUDED_DIMENSION_LIMIT
+from pore.constants import VOXEL_ATOM_NAMES, VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT
 
 
 PDB_IN = PDBParser()
@@ -140,39 +139,34 @@ def get_protein_and_solvent_voxels(
     return protein_voxels, solvent_voxels
 
 
-def get_voxel_limits(
-    solvent_voxels: tuple[np.ndarray, ...],
-    protein_voxels: tuple[np.ndarray, ...],
-) -> tuple[float, ...]:
+def get_num_occluded_dimensions(
+    query_voxel: tuple[int, int, int],
+    possible_occluding_x: list[int],
+    possible_occluding_y: list[int],
+    possible_occluding_z: list[int],
+) -> int:
     """
-    Determine the maximum extents in each dimension of the voxel-grid.
+    Determine how many ordinal axes are occluded.
     """
-    return (
-        max(solvent_voxels[0].max(), protein_voxels[0].max()),
-        max(solvent_voxels[1].max(), protein_voxels[1].max()),
-        max(solvent_voxels[2].max(), protein_voxels[2].max()),
-    )
+    num_occluded_dimensions = 0
 
+    if len(possible_occluding_z) != 0:
+        if min(possible_occluding_z) < query_voxel[0]:
+            num_occluded_dimensions += 1
+        elif max(possible_occluding_z) > query_voxel[0]:
+            num_occluded_dimensions += 1
+    if len(possible_occluding_y) != 0:
+        if min(possible_occluding_y) < query_voxel[0]:
+            num_occluded_dimensions += 1
+        elif max(possible_occluding_y) > query_voxel[0]:
+            num_occluded_dimensions += 1
+    if len(possible_occluding_x) != 0:
+        if min(possible_occluding_x) < query_voxel[0]:
+            num_occluded_dimensions += 1
+        elif max(possible_occluding_x) > query_voxel[0]:
+            num_occluded_dimensions += 1
 
-def voxel_within_limits(voxel: tuple[float, ...], limits: tuple[float, ...]) -> bool:
-    """
-    Return False if the voxel indices are outside the limits in any dimension.
-    """
-    if voxel[0] > limits[0] or voxel[0] < 0:
-        return False
-    elif voxel[1] > limits[1] or voxel[1] < 0:
-        return False
-    elif voxel[2] > limits[2] or voxel[2] < 0:
-        return False
-
-    return True
-
-
-def increment_voxel(voxel: tuple[float, ...], increment: tuple[float, ...]) -> tuple[float, ...]:
-    """
-    Increment the voxel indices along one or more dimensions.
-    """
-    return (voxel[0] + increment[0], voxel[1] + increment[1], voxel[2] + increment[2])
+    return num_occluded_dimensions
 
 
 def get_exposed_and_buried_solvent_voxels(
@@ -182,39 +176,34 @@ def get_exposed_and_buried_solvent_voxels(
     """
     Use simple geometric heuristics to determine if a given solvent voxel is buried or exposed.
     """
-    voxel_limits = get_voxel_limits(solvent_voxels, protein_voxels)
-
-    protein_voxel_list = frozenset(
-        [(protein_voxels[0][i], protein_voxels[1][i], protein_voxels[2][i]) for i in range(protein_voxels[0].size)]
-    )
-
     buried_solvent_voxels = ([], [], [])
     exposed_solvent_voxels = ([], [], [])
 
-    # TODO performance here is an issue (takes ~20 seconds per structure, needs to take max 1 second)
-    #   simply having this nested in python maybe a significant issue
-    #       possible solution: use Cython, C, PyPy, cPython?
-    #       possible solution: since we trace paths, we might be able to quickly assign more voxels are exposed if they are
-    #           along the path of a voxel we just identified as exposed?  This needs more thinking, it's tough
-    #               would require having a tuple of the occluded dimensions premade for each voxel
-    #                   how to backtrack effectively?  Can only do this once we reach the dimensions end
+    previous_voxel = (-1, -1, -1)
     for i in tqdm(range(solvent_voxels[0].size), desc="Searching voxels"):
+        # TODO numpy.where() is somewhat slow, might be a way to improve
         query_voxel = (solvent_voxels[0][i], solvent_voxels[1][i], solvent_voxels[2][i])
-        occluded_dimensions = []
-        for dimension_increment in DIMENSIONS_AND_DIRECTIONS:
-            test_voxel = query_voxel
-            test_count = 0
-            while True:
-                test_count += 1
-                test_voxel = increment_voxel(test_voxel, dimension_increment)
-                if not voxel_within_limits(test_voxel, voxel_limits):
-                    break
+        if query_voxel[0] != previous_voxel[0]:
+            match_x_protein_voxel_indices = set(np.where(protein_voxels[0] == query_voxel[0])[0])
+        if query_voxel[1] != previous_voxel[1]:
+            match_y_protein_voxel_indices = set(np.where(protein_voxels[1] == query_voxel[1])[0])
+        if query_voxel[2] != previous_voxel[2]:
+            match_z_protein_voxel_indices = set(np.where(protein_voxels[2] == query_voxel[2])[0])
+        previous_voxel = query_voxel
 
-                if test_voxel in protein_voxel_list:
-                    occluded_dimensions.append(dimension_increment)
-                    break
+        possible_occluding_z_indices = match_x_protein_voxel_indices.intersection(match_y_protein_voxel_indices)
+        possible_occluding_y_indices = match_x_protein_voxel_indices.intersection(match_z_protein_voxel_indices)
+        possible_occluding_x_indices = match_y_protein_voxel_indices.intersection(match_z_protein_voxel_indices)
 
-        if len(occluded_dimensions) >= OCCLUDED_DIMENSION_LIMIT:
+        possible_occluding_z = [protein_voxels[2][i] for i in possible_occluding_z_indices]
+        possible_occluding_y = [protein_voxels[1][i] for i in possible_occluding_y_indices]
+        possible_occluding_x = [protein_voxels[0][i] for i in possible_occluding_x_indices]
+
+        num_occluded_dimensions = get_num_occluded_dimensions(
+            query_voxel, possible_occluding_x, possible_occluding_y, possible_occluding_z
+        )
+
+        if num_occluded_dimensions >= OCCLUDED_DIMENSION_LIMIT:
             buried_solvent_voxels[0].append(query_voxel[0])
             buried_solvent_voxels[1].append(query_voxel[1])
             buried_solvent_voxels[2].append(query_voxel[2])

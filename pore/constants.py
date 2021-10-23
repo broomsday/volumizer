@@ -48,7 +48,6 @@ VOXEL_ATOM_NAMES = frozenset(
     ]
 )
 VOXEL_SIZE = 3.0
-DIMENSIONS_AND_DIRECTIONS = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
 OCCLUDED_DIMENSION_LIMIT = 4
 
 MONGO_CONNECTION_STRING = "mongodb://127.0.0.1:27017/"
