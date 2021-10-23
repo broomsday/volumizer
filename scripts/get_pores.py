@@ -15,7 +15,7 @@ def main(
     component_file: Path = typer.Option(paths.RCSB_CCD_FILE, help="Custom file containing one component name per line.  Only these components will be included in the cleaned PDBs."),
     skip_download: bool = typer.Option(False, help="Do not attempt to download any PDBs"),
     skip_clean: bool = typer.Option(False, help="Do not clean raw downloaded PDBs"),
-    quick_connect: bool = typer.Option(False),
+    quick_connect: bool = typer.Option(False, help="Don't update the database, use as is"),
 ) -> None:
     """
     Download biological assemblies, clean and process them, then find pores.
@@ -49,7 +49,6 @@ def main(
         pdb.clean_all_pdbs(db)
 
     pdb.process_all_pdbs(db)
-
 
 
 if "__main__" in __name__:
