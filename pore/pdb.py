@@ -257,23 +257,22 @@ def get_exposed_and_buried_solvent_voxels(
     )
 
 
-def is_neighbor_voxel(buried_solvent_voxels, reference_index, query_index) -> bool:
-    """"""
-    # TODO there are PyntCloud functions for these kind of operations
-    # TODO not sure if they operate on np.ndarrays, otherwise might need to write out own
-
-    # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is exactly 1
+def is_neighbor_voxel(voxels, reference_index, query_index) -> bool:
+    """
+    Given two voxels return True if they are ordinal neighbors.
+    """
     reference_voxel = (
-        buried_solvent_voxels[0][reference_index],
-        buried_solvent_voxels[1][reference_index],
-        buried_solvent_voxels[2][reference_index],
+        voxels[0][reference_index],
+        voxels[1][reference_index],
+        voxels[2][reference_index],
     )
     query_voxel = (
-        buried_solvent_voxels[0][query_index],
-        buried_solvent_voxels[1][query_index],
-        buried_solvent_voxels[2][query_index],
+        voxels[0][query_index],
+        voxels[1][query_index],
+        voxels[2][query_index],
     )
 
+    # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is exactly 1
     differences = 0
     for dimension in range(3):
         differences += abs(reference_voxel[dimension] - query_voxel[dimension])
@@ -283,44 +282,57 @@ def is_neighbor_voxel(buried_solvent_voxels, reference_index, query_index) -> bo
     return False
 
 
+def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+    """
+    Given a set of voxels and list of possible indices to add,
+    add indices for all ordinal neighbors iteratively until no more such neighbors exist.
+    """
+    start_index = searchable_indices.pop()
+    queue_indices = set([start_index])
+    neighbor_indices = set([start_index])
+
+    while len(queue_indices) > 0:
+        current_index = queue_indices.pop()
+        for searched_index in searchable_indices:
+            if is_neighbor_voxel(voxels, current_index, searched_index):
+                queue_indices.add(searched_index)
+                neighbor_indices.add(searched_index)
+        searchable_indices -= neighbor_indices
+
+    return neighbor_indices
+
+
 def get_pore_voxels(
     buried_solvent_voxels: tuple[np.ndarray, ...], exposed_solvent_voxels: tuple[np.ndarray, ...]
 ) -> dict[int, tuple[np.ndarray, ...]]:
     """
     Agglomerate buried solvent voxels into putative pores.
 
-    Then test which putative pores traverse the box (TODO: how to do this?)
+    TODO: Then test which putative pores traverse the box.
     """
-
-    # TODO the issue here is that we're not properly backtracking to find additional neighbours
-    # e.g. we find a neighbour, then immediately move to it, and don't check that there might be MORE neighbours
-
-    putative_pore_indices = set(range(buried_solvent_voxels[0].size))
-    agglomerated_pore_indices = set()
+    # TODO rename function as it will return pore and cavity voxels
+    # TODO some problem with the chains being returned here?
+    buried_indices = set(range(buried_solvent_voxels[0].size))
+    agglomerated_indices = set()
 
     putative_pores = {}
-    pore_id = 0
-    while len(agglomerated_pore_indices) < len(putative_pore_indices):
-        remaining_putative_pore_indices = putative_pore_indices - agglomerated_pore_indices
-        starting_pore_index = list(remaining_putative_pore_indices)[0]
-        this_pore_indices = set([starting_pore_index])
-        agglomerated_pore_indices.add(starting_pore_index)
-        remaining_putative_pore_indices.remove(starting_pore_index)
-        # search only over the currently unagglomerate/unassigned putative pore indices
-        for putative_pore_index in tqdm(remaining_putative_pore_indices, desc="Possible neighbor search"):
-            # this isn't the first voxel for the pore, so now we need to actually search over the others
-            # TODO: MVP-style we'll do this inefficiently and just check each one to see if it's next to an existing one
-            current_this_pore_indices = deepcopy(this_pore_indices)
-            for current_pore_index in current_this_pore_indices:
-                if is_neighbor_voxel(buried_solvent_voxels, putative_pore_index, current_pore_index):
-                    this_pore_indices.add(putative_pore_index)
-                    agglomerated_pore_indices.add(putative_pore_index)
-        putative_pores[pore_id] = (
-            np.array([buried_solvent_voxels[0][index] for index in this_pore_indices]),
-            np.array([buried_solvent_voxels[1][index] for index in this_pore_indices]),
-            np.array([buried_solvent_voxels[2][index] for index in this_pore_indices]),
+    putative_pore_id = 0
+    while len(agglomerated_indices) < len(buried_indices):
+        remaining_indices = buried_indices - agglomerated_indices
+
+        # perform BFS over the remaining indices
+        putative_pore_indices = breadth_first_search(buried_solvent_voxels, deepcopy(remaining_indices))
+        # iterate our counter of finished indices
+        agglomerated_indices = agglomerated_indices.union(putative_pore_indices)
+        # define the pore
+        putative_pores[putative_pore_id] = (
+            np.array([buried_solvent_voxels[0][index] for index in putative_pore_indices]),
+            np.array([buried_solvent_voxels[1][index] for index in putative_pore_indices]),
+            np.array([buried_solvent_voxels[2][index] for index in putative_pore_indices]),
         )
-        pore_id += 1
+        putative_pore_id += 1
+
+    # TODO add in test for box traversal to identify pores vs. cavities
 
     return putative_pores
 
