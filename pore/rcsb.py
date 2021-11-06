@@ -8,14 +8,9 @@ from urllib.error import HTTPError, URLError
 from time import sleep
 import re
 
-from pymongo import database
-from tqdm import tqdm
-
-from pore.paths import RCSB_CLUSTER_FILE, PDB_DIR, RCSB_CCD_FILE
+from pore.paths import RCSB_CLUSTER_FILE, DOWNLOADED_PDB_DIR, RCSB_CCD_FILE
 from pore.constants import PDB_ID_LENGTH, RCSB_CLUSTER_URL, RCSB_BIOUNIT_URL, RCSB_STRUCTURE_URL, RCSB_CCD_URL
 from pore.types import ComponentData
-from pore import mongo
-from pore import utils
 
 
 def cluster_file_exists(cluster_file: Path) -> bool:
@@ -77,11 +72,11 @@ def download_biological_assembly(pdb_id: str, retries: int=10) -> bool:
 
     for _ in range(retries):
         try:
-            request.urlretrieve(biounit_url, PDB_DIR / f"{pdb_id}.pdb1.gz")
+            request.urlretrieve(biounit_url, DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.gz")
             return True
         except HTTPError:
             try:
-                request.urlretrieve(structure_url, PDB_DIR / f"{pdb_id}.pdb1.gz")
+                request.urlretrieve(structure_url, DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.gz")
                 return True
             except HTTPError:
                 return False
@@ -91,24 +86,11 @@ def download_biological_assembly(pdb_id: str, retries: int=10) -> bool:
     return False
 
 
-def download_biological_assemblies(db: database.Database) -> None:
-    """
-    If we have not already downloaded a PDB, do so now.
-    """
-    PDB_DIR.mkdir(exist_ok=True, parents=True)
-    for pdb in tqdm(list(db.pdbs.find()), "Downloading PDBs"):
-        if not pdb["downloaded"]:
-            if utils.is_pdb_downloaded(pdb["pdb_id"]):
-                mongo.update_pdb_downloaded(db, pdb, True)
-            else:
-                mongo.update_pdb_downloaded(db, pdb, download_biological_assembly(pdb["pdb_id"]))
-
-
-def component_file_exists(component_file: Path) -> bool:
+def component_file_exists() -> bool:
     """
     Check if the Chemical Component Dictionary file exists locally.
     """
-    return component_file.is_file()
+    return RCSB_CCD_FILE.is_file()
 
 
 def download_component_file() -> None:
@@ -124,11 +106,11 @@ def get_component_file() -> None:
     """
     RCSB_CCD_FILE.parent.mkdir(exist_ok=True, parents=True)
     download_attempts = 0
-    while (not component_file_exists(RCSB_CCD_FILE)) and (download_attempts < 10):
+    while (not component_file_exists()) and (download_attempts < 10):
         download_component_file()
         download_attempts += 1
 
-    assert component_file_exists(RCSB_CCD_FILE)
+    assert component_file_exists()
 
 
 def format_component_id_line(component_id_line: str) -> str:
@@ -170,23 +152,20 @@ def is_component_protein(component: ComponentData) -> bool:
     return ("PEPTIDE LINKING" in component.component_type) or ("petide linking" in component.component_type)
 
 
-def process_all_components(db: database.Database, components: list[ComponentData]) -> None:
+def build_protein_component_set(components: list[ComponentData]) -> set[str]:
     """
-    Assign to the component database if the type of each component is peptide linking or not.
+    Build a set of the component id (name) of all components that are protein
     """
-    processed_component_ids = [component["component_id"] for component in db.components.find({"processed": True})]
-    if len(processed_component_ids) != len(components):
-        for component in tqdm(components, "Processing Components"):
-            if not component.component_id in processed_component_ids:
-                mongo.update_component_is_protein(db, component, is_component_protein(component))
+    return {component.component_id for component in components if is_component_protein(component)}
 
 
-def build_component_set(component_file: Path) -> list[ComponentData]:
+def get_components() -> list[ComponentData]:
     """
-    Get a set of all the component IDs we want to download and process.
+    Get all components and their types.
     """
-    assert component_file_exists(component_file)
-    with open(component_file, mode="r", encoding="utf-8") as fi:
+    if not component_file_exists():
+        get_component_file()
+    with open(RCSB_CCD_FILE, mode="r", encoding="utf-8") as fi:
         component_data = parse_component_file(fi.readlines())
 
     return component_data

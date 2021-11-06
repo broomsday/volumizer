@@ -3,15 +3,7 @@ Definition of custom types.
 """
 
 
-from typing import NamedTuple, Optional
-
-
-class PdbStatus(NamedTuple):
-    pdb_id: str
-    downloaded: bool
-    cleaned: bool
-    processed: bool
-    pore: Optional[bool]
+from typing import NamedTuple
 
 
 class ComponentData(NamedTuple):
@@ -19,7 +11,10 @@ class ComponentData(NamedTuple):
     component_type: str
 
 
-class ComponentStatus(NamedTuple):
-    component_id: str
-    processed: bool
-    protein: Optional[bool]
+class Annotation(NamedTuple):
+    total_pore_volume: float
+    total_cavity_volume: float
+    largest_pore_volume: float
+    largest_cavity_volume: float
+    pore_volumes: dict[int, float]
+    cavity_volumes: dict[int, float]
