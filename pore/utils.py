@@ -75,6 +75,7 @@ def setup_dirs():
     """
     DOWNLOADED_PDB_DIR.mkdir(parents=True, exist_ok=True)
     PREPARED_PDB_DIR.mkdir(parents=True, exist_ok=True)
+    ANNOTATED_PDB_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_protein_components() -> set[str]:
