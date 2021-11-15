@@ -47,5 +47,5 @@ VOXEL_ATOM_NAMES = frozenset(
         "SD",
     ]
 )
-VOXEL_SIZE = 5.0
+VOXEL_SIZE = 3.5
 OCCLUDED_DIMENSION_LIMIT = 4

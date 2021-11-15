@@ -40,7 +40,8 @@ class ProteinSelect(Select):
 
         if atom.element != "H":
                 return True
-        return False
+        #return False
+        return True
 
 
 def save_pdb(structure: Structure, pdb_file: Path) -> None:
