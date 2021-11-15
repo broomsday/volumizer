@@ -25,7 +25,7 @@ class ProteinSelect(Select):
         self.components = components
 
     def accept_model(self, model):
-        if model.serial_num == 1:
+        if (model.serial_num == 0) or (model.serial_num == 1):
             return True
         return False
 
@@ -37,7 +37,8 @@ class ProteinSelect(Select):
     def accept_atom(self, atom):
         if (not atom.is_disordered()) or (atom.get_altloc() == "A"):
             atom.set_altloc(" ")
-            if atom.element != "H":
+
+        if atom.element != "H":
                 return True
         return False
 
@@ -76,6 +77,7 @@ def get_structure_coords(structure: Structure) -> pd.DataFrame:
 
     Return the coordinates of backbone heavy atoms and CB atoms as a dataframe.
     """
+    # TODO used of VOXEL_ATOM_NAMES should be optional
     coordinates = [atom.coord for atom in structure.get_atoms() if atom.name in VOXEL_ATOM_NAMES]
     return pd.DataFrame(coordinates, columns=["x", "y", "z"])
 
