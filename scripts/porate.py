@@ -2,6 +2,7 @@
 Command-line entry-point to find pores and cavities in PDBs.
 """
 
+from pathlib import Path
 
 import typer
 
@@ -24,7 +25,10 @@ def main(
         pdb_path = pore.download_pdb_file(input)
         annotation = pore.process_pdb_file(pdb_path)
         print(annotation)
-        quit()
+    elif input_type == "pdb_file":
+        pdb_path = Path(input)
+        annotation = pore.process_pdb_file(pdb_path)
+        print(annotation)
     else:
         raise RuntimeError("File mode not implemented")
 
