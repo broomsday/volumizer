@@ -60,8 +60,6 @@ def prepare_pdb_structure(structure: Structure) -> Structure:
 
     structure = pdb.clean_structure(structure, protein_components)
 
-    # TODO add hydrogens
-
     # TODO align
 
     return structure

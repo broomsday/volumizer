@@ -40,7 +40,6 @@ class ProteinSelect(Select):
 
         if atom.element != "H":
                 return True
-        #return False
         return True
 
 
