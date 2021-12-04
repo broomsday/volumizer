@@ -8,6 +8,7 @@ from pathlib import Path
 from Bio.PDB import Structure
 
 from pore import rcsb, utils, pdb, voxel
+from pore.constants import VOXEL_SIZE
 from pore.types import Annotation
 from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
 
@@ -17,6 +18,9 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     Perform analysis of a prepared structure.
     """
     coords = pdb.get_structure_coords(structure)
+    # TODO here need to get the elements for the coords, or in the above function even
+    coords = utils.add_extra_points(coords, VOXEL_SIZE)
+
     cloud = voxel.coords_to_point_cloud(coords)
     cloud, voxel_grid_id = voxel.add_voxel_grid(cloud)
     voxel_grid = voxel.get_voxel_grid(cloud, voxel_grid_id)
@@ -29,6 +33,8 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     )
     pores, cavities = voxel.get_pores_and_cavities(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
     # TODO what about void voxels? e.g. pores that DO NOT span the box
+        # these should actually be called 'cavities' and the current should be called 'pockets'
+        # buried solvent that fails a minimium volume cutoff should just be reclassed as part of the bulk solvent
 
     print("\n")
     print(voxel_grid_id)

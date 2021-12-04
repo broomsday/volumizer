@@ -47,5 +47,34 @@ VOXEL_ATOM_NAMES = frozenset(
         "SD",
     ]
 )
-VOXEL_SIZE = 5
+BASE_ATOMIC_RADII = 2.0
+ATOMIC_RADII = {
+    "H": 1.11,
+    "He": 1.40,
+    "Li": 1.82,
+    "Be": 1.53,
+    "B": 1.92,
+    "C": 1.70,
+    "N": 1.55,
+    "O": 1.52,
+    "F": 1.47,
+    "Na": 2.27,
+    "Mg": 1.73,
+    "Al": 1.84,
+    "Si": 2.10,
+    "P": 1.80,
+    "S": 1.80,
+    "Cl": 1.75,
+    "K": 2.75,
+    "Ca": 2.31,
+    "Ni": 1.63,
+    "Cu": 1.40,
+    "Zn": 1.39,
+    "Se": 1.90,
+    "Br": 1.85,
+    "I": 1.98,
+    "X": BASE_ATOMIC_RADII,
+}
+VOXEL_SIZE = 2.0
 OCCLUDED_DIMENSION_LIMIT = 4
+
