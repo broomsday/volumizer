@@ -20,24 +20,26 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     cloud = voxel.coords_to_point_cloud(coords)
     cloud, voxel_grid_id = voxel.add_voxel_grid(cloud)
     voxel_grid = voxel.get_voxel_grid(cloud, voxel_grid_id)
-    protein_solvent_voxels = voxel.get_protein_solvent_voxels(voxel_grid)
-    protein_voxels, solvent_voxels = voxel.get_protein_and_solvent_voxels(protein_solvent_voxels)
 
-    exposed_solvent_voxels, buried_solvent_voxels = voxel.get_exposed_and_buried_solvent_voxels(
+    protein_solvent_voxels = voxel.get_protein_solvent_voxel_array(voxel_grid)
+    protein_voxels, solvent_voxels = voxel.get_protein_and_solvent_voxels(protein_solvent_voxels, voxel_grid.x_y_z)
+
+    exposed_voxels, buried_voxels = voxel.get_exposed_and_buried_voxels(
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
-    pore_voxels, cavity_voxels = voxel.get_pore_and_cavity_voxels(buried_solvent_voxels, exposed_solvent_voxels)
+    pores, cavities = voxel.get_pores_and_cavities(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
+    # TODO what about void voxels? e.g. pores that DO NOT span the box
 
     print("\n")
     print(voxel_grid_id)
-    print("Protein Voxels:", protein_voxels[0].size)
-    print("Total Solvent Voxels:", solvent_voxels[0].size)
-    print("Exposed Solvent Voxels:", exposed_solvent_voxels[0].size)
-    print("Buried Solvent Voxels:", buried_solvent_voxels[0].size)
-    print("Pores:", len(pore_voxels))
-    print("Cavities:", len(cavity_voxels))
+    print("Protein Voxels:", protein_voxels.num_voxels)
+    print("Total Solvent Voxels:", solvent_voxels.num_voxels)
+    print("Exposed Solvent Voxels:", exposed_voxels.num_voxels)
+    print("Buried Solvent Voxels:", buried_voxels.num_voxels)
+    print("Pores:", len(pores))
+    print("Cavities:", len(cavities))
 
-    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_solvent_voxels, buried_solvent_voxels, pore_voxels, cavity_voxels)
+    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, cavities)
     with open(ANNOTATED_PDB_DIR / f"{structure.id}.pdb", mode="w", encoding="utf-8") as pdb_file:
         pdb_file.write("\n".join(pdb_lines))
 

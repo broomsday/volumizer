@@ -13,6 +13,10 @@ from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
 from pore.constants import VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT
+from pore.types import VoxelGroup
+
+
+VOXEL_VOLUME = VOXEL_SIZE ** 3
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -40,25 +44,44 @@ def get_voxel_grid(cloud: PyntCloud, voxel_grid_id: str) -> VoxelGrid:
     return cloud.structures[voxel_grid_id]
 
 
-def get_protein_solvent_voxels(voxel_grid: VoxelGrid) -> np.ndarray:
+def get_protein_solvent_voxel_array(voxel_grid: VoxelGrid) -> np.ndarray:
     """
-    Generate an array representing a binary voxel grid where zero represents no protein
-    atoms in that voxel (e.g. solvent) and a non-zero represents a protein atom in that voxel.
+    Generate a 3D array of x[y[z]] as the voxel coordinate and the value of that array entry
+    being zero for no protein and one when a protein atom is in that voxel.
     """
     return voxel_grid.get_feature_vector(mode="binary")
 
 
 def get_protein_and_solvent_voxels(
-    binary_voxel_grid: np.ndarray,
-) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+    binary_voxel_array: np.ndarray,
+    voxel_grid_dimensions: np.ndarray,
+) -> tuple[VoxelGroup, VoxelGroup]:
     """
     From the voxel grid, return the indices of the protein containing voxels,
     and those not containing protein (e.g. solvent).
     """
-    protein_voxels = np.nonzero(binary_voxel_grid)
-    solvent_voxels = np.nonzero(binary_voxel_grid == 0)
+    protein_voxels = np.nonzero(binary_voxel_array)
+    solvent_voxels = np.nonzero(binary_voxel_array == 0)
 
-    return protein_voxels, solvent_voxels
+    protein_voxel_indices = compute_voxel_indices(protein_voxels, voxel_grid_dimensions)
+    solvent_voxel_indices = compute_voxel_indices(solvent_voxels, voxel_grid_dimensions)
+
+    return (
+        VoxelGroup(
+            voxels=protein_voxels,
+            indices=protein_voxel_indices,
+            num_voxels=len(protein_voxel_indices),
+            voxel_type="protein",
+            volume=len(protein_voxel_indices) * VOXEL_VOLUME,
+        ),
+        VoxelGroup(
+            voxels=solvent_voxels,
+            indices=solvent_voxel_indices,
+            num_voxels=len(solvent_voxel_indices),
+            voxel_type="solvent",
+            volume=len(solvent_voxel_indices) * VOXEL_VOLUME,
+        ),
+    )
 
 
 def get_occluded_dimensions(
@@ -131,21 +154,21 @@ def build_planar_voxel_coordinate_arrays(
     return z_array, y_array, x_array
 
 
-def get_exposed_and_buried_solvent_voxels(
-    solvent_voxels: tuple[np.ndarray, ...],
-    protein_voxels: tuple[np.ndarray, ...],
+def get_exposed_and_buried_voxels(
+    solvent_voxels: VoxelGroup,
+    protein_voxels: VoxelGroup,
     voxel_grid_dimensions: np.ndarray,
-) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+) -> tuple[VoxelGroup, VoxelGroup]:
     """
-    Use simple geometric heuristics to determine if a given solvent voxel is buried or exposed.
+    Use simple geometric heuristics to determine if a group of solvent voxels is buried or exposed.
     """
-    buried_solvent_voxels = ([], [], [])
-    exposed_solvent_voxels = ([], [], [])
+    buried_voxels = ([], [], [])
+    exposed_voxels = ([], [], [])
 
-    z_array, y_array, x_array = build_planar_voxel_coordinate_arrays(protein_voxels, voxel_grid_dimensions)
+    z_array, y_array, x_array = build_planar_voxel_coordinate_arrays(protein_voxels.voxels, voxel_grid_dimensions)
 
-    for i in tqdm(range(solvent_voxels[0].size), desc="Searching voxels"):
-        query_voxel = (solvent_voxels[0][i], solvent_voxels[1][i], solvent_voxels[2][i])
+    for i in tqdm(range(solvent_voxels.voxels[0].size), desc="Searching voxels"):
+        query_voxel = (solvent_voxels.voxels[0][i], solvent_voxels.voxels[1][i], solvent_voxels.voxels[2][i])
 
         occluded_dimensions = get_occluded_dimensions(
             query_voxel,
@@ -155,24 +178,31 @@ def get_exposed_and_buried_solvent_voxels(
         )
 
         if is_buried(occluded_dimensions):
-            buried_solvent_voxels[0].append(query_voxel[0])
-            buried_solvent_voxels[1].append(query_voxel[1])
-            buried_solvent_voxels[2].append(query_voxel[2])
+            buried_voxels[0].append(query_voxel[0])
+            buried_voxels[1].append(query_voxel[1])
+            buried_voxels[2].append(query_voxel[2])
         else:
-            exposed_solvent_voxels[0].append(query_voxel[0])
-            exposed_solvent_voxels[1].append(query_voxel[1])
-            exposed_solvent_voxels[2].append(query_voxel[2])
+            exposed_voxels[0].append(query_voxel[0])
+            exposed_voxels[1].append(query_voxel[1])
+            exposed_voxels[2].append(query_voxel[2])
+
+    buried_voxel_indices = compute_voxel_indices(buried_voxels, voxel_grid_dimensions)
+    exposed_voxel_indices = compute_voxel_indices(exposed_voxels, voxel_grid_dimensions)
 
     return (
-        (
-            np.array(exposed_solvent_voxels[0]),
-            np.array(exposed_solvent_voxels[1]),
-            np.array(exposed_solvent_voxels[2]),
+        VoxelGroup(
+            voxels=(np.array(exposed_voxels[0]), np.array(exposed_voxels[1]), np.array(exposed_voxels[2])),
+            indices=exposed_voxel_indices,
+            num_voxels=len(exposed_voxel_indices),
+            voxel_type="exposed",
+            volume=len(exposed_voxel_indices) * VOXEL_VOLUME,
         ),
-        (
-            np.array(buried_solvent_voxels[0]),
-            np.array(buried_solvent_voxels[1]),
-            np.array(buried_solvent_voxels[2]),
+        VoxelGroup(
+            voxels=(np.array(buried_voxels[0]), np.array(buried_voxels[1]), np.array(buried_voxels[2])),
+            indices=buried_voxel_indices,
+            num_voxels=len(buried_voxel_indices),
+            voxel_type="buried",
+            volume=len(buried_voxel_indices) * VOXEL_VOLUME,
         ),
     )
 
@@ -207,7 +237,7 @@ def compute_voxel_indices(voxels: tuple[np.ndarray, ...], grid_dimensions: np.nd
     """
     Given a 3D array of voxels, compute the 1D set of their indices.
     """
-    # TODO: is this built-in easier?: x, y, z = np.unravel_index(voxel, self.x_y_z)
+    # TODO: is this built-in easier and correct?: x, y, z = np.unravel_index(voxel, self.x_y_z)
     return {
         (voxels[0][i] * grid_dimensions[1] * grid_dimensions[2] + voxels[1][i] * grid_dimensions[2] + voxels[2][i])
         for i in range(len(voxels[0]))
@@ -246,7 +276,7 @@ def is_pore(
     """
     # TODO function needs significant cleanup
 
-    SURFACE_NEIGHBOR_DISTANCE = 1   # TODO put this constant somewhere else
+    SURFACE_NEIGHBOR_DISTANCE = 1  # TODO put this constant somewhere else # TODO why isn't this used?
 
     direct_surface_indices = set()
     for putative_pore_index in putative_pore_indices:
@@ -255,6 +285,8 @@ def is_pore(
             exposed_voxel = get_single_voxel(exposed_voxels, exposed_voxel_index)
             if is_neighbor_voxel(putative_pore_voxel, exposed_voxel):
                 direct_surface_indices.add(putative_pore_index)
+
+    # TODO if len(direct_surface_indices) == 0 this is actually a void and should return that
 
     # after collecting these, add all direct putative pore neighbours (could be adjustable)
     neighbor_surface_indices = set()
@@ -279,15 +311,18 @@ def is_pore(
     return True
 
 
-def get_pore_and_cavity_voxels(
-    buried_solvent_voxels: tuple[np.ndarray, ...], exposed_solvent_voxels: tuple[np.ndarray, ...]
-) -> tuple[dict[int, tuple[np.ndarray, ...]], dict[int, tuple[np.ndarray, ...]]]:
+def get_pores_and_cavities(
+    buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid_dimensions: np.ndarray
+    # TODO this return type is not what one would expect from the name
+    # TODO we might be able to just return the groups, and sort later
+) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
     Agglomerate buried solvent voxels into putative pores.
 
     Then test which putative pores traverse the box.
+    Those that do are pores, those that don't are cavities
     """
-    buried_indices = set(range(buried_solvent_voxels[0].size))
+    buried_indices = set(range(buried_voxels.voxels[0].size))
     agglomerated_indices = set()
 
     pores = {}
@@ -298,23 +333,40 @@ def get_pore_and_cavity_voxels(
         remaining_indices = buried_indices - agglomerated_indices
 
         # perform BFS over the remaining indices (TODO: BFS is currently slow, needs optimizing)
-        putative_pore_indices = breadth_first_search(buried_solvent_voxels, remaining_indices)
+        putative_pore_indices = breadth_first_search(buried_voxels.voxels, remaining_indices)
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(putative_pore_indices)
 
         # identify if this is in fact a pore or just a cavity
-        if is_pore(putative_pore_indices, buried_solvent_voxels, exposed_solvent_voxels):
-            pores[pore_id] = (
-                np.array([buried_solvent_voxels[0][index] for index in putative_pore_indices]),
-                np.array([buried_solvent_voxels[1][index] for index in putative_pore_indices]),
-                np.array([buried_solvent_voxels[2][index] for index in putative_pore_indices]),
+        # TODO there is another case where there are NO voxels in contact with the exposed! in this case it should be recorded a void
+        if is_pore(putative_pore_indices, buried_voxels.voxels, exposed_voxels.voxels):
+            pore_voxels = (
+                np.array([buried_voxels.voxels[0][index] for index in putative_pore_indices]),
+                np.array([buried_voxels.voxels[1][index] for index in putative_pore_indices]),
+                np.array([buried_voxels.voxels[2][index] for index in putative_pore_indices]),
+            )
+            pore_indices = compute_voxel_indices(pore_voxels, voxel_grid_dimensions)
+            pores[pore_id] = VoxelGroup(
+                voxels=pore_voxels,
+                indices=pore_indices,
+                num_voxels=len(pore_indices),
+                voxel_type="pore",
+                volume=len(pore_indices)*VOXEL_VOLUME # TODO should write function for this?
             )
             pore_id += 1
         else:
-            cavities[cavity_id] = (
-                np.array([buried_solvent_voxels[0][index] for index in putative_pore_indices]),
-                np.array([buried_solvent_voxels[1][index] for index in putative_pore_indices]),
-                np.array([buried_solvent_voxels[2][index] for index in putative_pore_indices]),
+            cavity_voxels = (
+                np.array([buried_voxels.voxels[0][index] for index in putative_pore_indices]),
+                np.array([buried_voxels.voxels[1][index] for index in putative_pore_indices]),
+                np.array([buried_voxels.voxels[2][index] for index in putative_pore_indices]),
+            )
+            cavity_indices = compute_voxel_indices(cavity_voxels, voxel_grid_dimensions)
+            cavities[cavity_id] = VoxelGroup(
+                voxels=cavity_voxels,
+                indices=cavity_indices,
+                num_voxels=len(cavity_indices),
+                voxel_type="cavity",
+                volume=len(cavity_indices)*VOXEL_VOLUME # TODO should write function for this?
             )
             cavity_id += 1
 

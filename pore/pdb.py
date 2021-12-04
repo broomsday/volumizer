@@ -13,6 +13,7 @@ import numpy as np
 
 from pore import voxel
 from pore.constants import VOXEL_ATOM_NAMES
+from pore.types import VoxelGroup
 
 
 PDB_IN = PDBParser()
@@ -108,10 +109,10 @@ def make_atom_line(
 
 def points_to_pdb(
     voxel_grid: VoxelGrid,
-    exposed_solvent_voxels: tuple[np.ndarray, ...],
-    buried_solvent_voxels: tuple[np.ndarray, ...],
-    pore_voxels: dict[int, tuple[np.ndarray, ...]],
-    cavity_voxels: dict[int, tuple[np.ndarray, ...]],
+    exposed_voxels: VoxelGroup,
+    buried_voxels: VoxelGroup,
+    pores: dict[int, VoxelGroup],
+    cavities: dict[int, VoxelGroup],
 ) -> list[str]:
     """
     Write out points as though it was a PDB file.
@@ -120,10 +121,8 @@ def points_to_pdb(
     Nitrogen -> exposed solvent
     Oxygen -> buried solvent
     """
-    exposed_solvent_voxel_indices = voxel.compute_voxel_indices(exposed_solvent_voxels, voxel_grid.x_y_z)
-    buried_solvent_voxel_indices = voxel.compute_voxel_indices(buried_solvent_voxels, voxel_grid.x_y_z)
-    pore_voxel_indices = {i: voxel.compute_voxel_indices(voxels, voxel_grid.x_y_z) for i, voxels in pore_voxels.items()}
-    cavity_voxel_indices = {i: voxel.compute_voxel_indices(voxels, voxel_grid.x_y_z) for i, voxels in cavity_voxels.items()}
+    pore_voxel_indices = {i: voxels.indices for i, voxels in pores.items()}
+    cavity_voxel_indices = {i: voxels.indices for i, voxels in cavities.items()}
 
     pore_voxel_index_map = {}
     for id, indices in pore_voxel_indices.items():
@@ -138,8 +137,8 @@ def points_to_pdb(
     return [
         make_atom_line(
             point,
-            exposed_solvent_voxel_indices,
-            buried_solvent_voxel_indices,
+            exposed_voxels.indices,
+            buried_voxels.indices,
             pore_voxel_index_map,
             cavity_voxel_index_map,
             i,
