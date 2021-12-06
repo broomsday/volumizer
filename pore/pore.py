@@ -7,7 +7,7 @@ from pathlib import Path
 
 from Bio.PDB import Structure
 
-from pore import rcsb, utils, pdb, voxel
+from pore import rcsb, utils, pdb, voxel, fib_sphere
 from pore.constants import VOXEL_SIZE
 from pore.types import Annotation
 from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
@@ -19,7 +19,7 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     """
     coords = pdb.get_structure_coords(structure)
     # TODO here need to get the elements for the coords, or in the above function even
-    coords = utils.add_extra_points(coords, VOXEL_SIZE)
+    coords = fib_sphere.add_extra_points(coords, VOXEL_SIZE)
 
     cloud = voxel.coords_to_point_cloud(coords)
     cloud, voxel_grid_id = voxel.add_voxel_grid(cloud)
