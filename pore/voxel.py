@@ -267,55 +267,57 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     return neighbor_indices
 
 
-def is_pore(
-    putative_pore_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...]
-) -> bool:
+def get_agglomerated_type(
+    query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...]
+) -> str:
     """
-    Find the voxels that lie on the putative pore surface in direct contact with an exposed voxel.
-    If these surface voxels can be agglomerated (BFS) into a single unit, this is a cavity, otherwise a pore.
-    """
-    # TODO function needs significant cleanup
+    Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Three possibilites:
 
+    a) there are no "surface" voxels -> this is a cavity
+    b) all "surface" voxels can be agglomerated (BFS) into a single group -> this is a pocket
+    c) the "surafce" voxels cannot be agglomerated (BFS) into just one group -> this is a pore
+    """
     SURFACE_NEIGHBOR_DISTANCE = 1  # TODO put this constant somewhere else # TODO why isn't this used?
 
     direct_surface_indices = set()
-    for putative_pore_index in putative_pore_indices:
-        putative_pore_voxel = get_single_voxel(buried_voxels, putative_pore_index)
+    for query_index in query_indices:
+        query_voxel = get_single_voxel(buried_voxels, query_index)
         for exposed_voxel_index in range(len(exposed_voxels[0])):
             exposed_voxel = get_single_voxel(exposed_voxels, exposed_voxel_index)
-            if is_neighbor_voxel(putative_pore_voxel, exposed_voxel):
-                direct_surface_indices.add(putative_pore_index)
+            if is_neighbor_voxel(query_voxel, exposed_voxel):
+                direct_surface_indices.add(query_index)
 
-    # TODO if len(direct_surface_indices) == 0 this is actually a void and should return that
+    # if there are no surface contacts, this must be a cavity
+    if len(direct_surface_indices) == 0:
+        return "cavity"
 
-    # after collecting these, add all direct putative pore neighbours (could be adjustable)
+    # add all direct voxel neighbours (TODO could be adjustable)
     neighbor_surface_indices = set()
     for surface_index in direct_surface_indices:
         surface_voxel = get_single_voxel(buried_voxels, surface_index)
-        for putative_pore_index in putative_pore_indices - direct_surface_indices:
-            putative_pore_voxel = get_single_voxel(buried_voxels, putative_pore_index)
+        for query_index in query_indices - direct_surface_indices:
+            query_voxel = get_single_voxel(buried_voxels, query_index)
             # TODO: need to add a dimension value to neighbour check and use SURFACE_NEIGHBOR_DISTANCE
-            if is_neighbor_voxel(surface_voxel, putative_pore_voxel):
-                neighbor_surface_indices.add(putative_pore_index)
+            if is_neighbor_voxel(surface_voxel, query_voxel):
+                neighbor_surface_indices.add(query_index)
 
-    # agglomerate and if that connects everything it's a cavity, otherwise pore
+    # we pass all surface indices and the buried voxels for BFS
+    # If there is more than one distinct surface (e.g. a pore) then
+    #   BFS will terminate after agglomerating just one of the surfaces
+    #   and `single_surface_indices` will be less than `surface_indices`
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
-    if len(surface_indices) == 0:
-        # TODO: why does this happen? Is this an internal void?  Maybe list them as something different to be ignored
-        return False
-
     single_surface_indices = breadth_first_search(buried_voxels, surface_indices)
-    if len(single_surface_indices) == len(surface_indices):
-        return False
+    if len(single_surface_indices) < len(surface_indices):
+        return "pore"
 
-    return True
+    return "pocket"
 
 
-def get_pores_and_cavities(
-    buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid_dimensions: np.ndarray
-    # TODO this return type is not what one would expect from the name
-    # TODO we might be able to just return the groups, and sort later
-) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup]]:
+def get_pores_pockets_cavities(
+    buried_voxels: VoxelGroup,
+    exposed_voxels: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray
+) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
     Agglomerate buried solvent voxels into putative pores.
 
@@ -326,39 +328,26 @@ def get_pores_and_cavities(
     agglomerated_indices = set()
 
     pores = {}
-    pore_id = 0
+    pockets = {}
     cavities = {}
+    pore_id = 0
+    pocket_id = 0
     cavity_id = 0
     while len(agglomerated_indices) < len(buried_indices):
         remaining_indices = buried_indices - agglomerated_indices
 
         # perform BFS over the remaining indices (TODO: BFS is currently slow, needs optimizing)
-        putative_pore_indices = breadth_first_search(buried_voxels.voxels, remaining_indices)
+        agglomerable_indices = breadth_first_search(buried_voxels.voxels, remaining_indices)
         # iterate our counter of finished indices
-        agglomerated_indices = agglomerated_indices.union(putative_pore_indices)
+        agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
 
-        # identify if this is in fact a pore or just a cavity
-        # TODO there is another case where there are NO voxels in contact with the exposed! in this case it should be recorded a void
-        if is_pore(putative_pore_indices, buried_voxels.voxels, exposed_voxels.voxels):
-            pore_voxels = (
-                np.array([buried_voxels.voxels[0][index] for index in putative_pore_indices]),
-                np.array([buried_voxels.voxels[1][index] for index in putative_pore_indices]),
-                np.array([buried_voxels.voxels[2][index] for index in putative_pore_indices]),
-            )
-            pore_indices = compute_voxel_indices(pore_voxels, voxel_grid_dimensions)
-            pores[pore_id] = VoxelGroup(
-                voxels=pore_voxels,
-                indices=pore_indices,
-                num_voxels=len(pore_indices),
-                voxel_type="pore",
-                volume=len(pore_indices)*VOXEL_VOLUME # TODO should write function for this?
-            )
-            pore_id += 1
-        else:
+        # identify what these agglomerated voxels are
+        agglomerated_type = get_agglomerated_type(agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels)
+        if agglomerated_type == "cavity":
             cavity_voxels = (
-                np.array([buried_voxels.voxels[0][index] for index in putative_pore_indices]),
-                np.array([buried_voxels.voxels[1][index] for index in putative_pore_indices]),
-                np.array([buried_voxels.voxels[2][index] for index in putative_pore_indices]),
+                np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
             )
             cavity_indices = compute_voxel_indices(cavity_voxels, voxel_grid_dimensions)
             cavities[cavity_id] = VoxelGroup(
@@ -366,8 +355,38 @@ def get_pores_and_cavities(
                 indices=cavity_indices,
                 num_voxels=len(cavity_indices),
                 voxel_type="cavity",
-                volume=len(cavity_indices)*VOXEL_VOLUME # TODO should write function for this?
+                volume=len(cavity_indices) * VOXEL_VOLUME,
             )
             cavity_id += 1
+        elif agglomerated_type == "pore":
+            pore_voxels = (
+                np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
+            )
+            pore_indices = compute_voxel_indices(pore_voxels, voxel_grid_dimensions)
+            pores[pore_id] = VoxelGroup(
+                voxels=pore_voxels,
+                indices=pore_indices,
+                num_voxels=len(pore_indices),
+                voxel_type="pore",
+                volume=len(pore_indices) * VOXEL_VOLUME,
+            )
+            pore_id += 1
+        elif agglomerated_type == "pocket":
+            pocket_voxels = (
+                np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
+            )
+            pocket_indices = compute_voxel_indices(pocket_voxels, voxel_grid_dimensions)
+            pockets[pocket_id] = VoxelGroup(
+                voxels=pocket_voxels,
+                indices=pocket_indices,
+                num_voxels=len(pocket_indices),
+                voxel_type="pocket",
+                volume=len(pocket_indices) * VOXEL_VOLUME,
+            )
+            pocket_id += 1
 
-    return pores, cavities
+    return pores, pockets, cavities

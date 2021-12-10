@@ -31,10 +31,7 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     exposed_voxels, buried_voxels = voxel.get_exposed_and_buried_voxels(
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
-    pores, cavities = voxel.get_pores_and_cavities(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
-    # TODO what about void voxels? e.g. pores that DO NOT span the box
-        # these should actually be called 'cavities' and the current should be called 'pockets'
-        # buried solvent that fails a minimium volume cutoff should just be reclassed as part of the bulk solvent
+    pores, pockets, cavities = voxel.get_pores_pockets_cavities(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
 
     print("\n")
     print(voxel_grid_id)
@@ -43,9 +40,10 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     print("Exposed Solvent Voxels:", exposed_voxels.num_voxels)
     print("Buried Solvent Voxels:", buried_voxels.num_voxels)
     print("Pores:", len(pores))
+    print("Pockets:", len(pockets))
     print("Cavities:", len(cavities))
 
-    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, cavities)
+    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, pockets, cavities)
     with open(ANNOTATED_PDB_DIR / f"{structure.id}.pdb", mode="w", encoding="utf-8") as pdb_file:
         pdb_file.write("\n".join(pdb_lines))
 

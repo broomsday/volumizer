@@ -88,6 +88,7 @@ def make_atom_line(
     exposed_solvent_voxel_indices: set[int],
     buried_solvent_voxel_indices: set[int],
     pore_voxel_index_map: dict[int, int],
+    pocket_voxel_index_map: dict[int, int],
     cavity_voxel_index_map: dict[int, int],
     index: int,
 ) -> str:
@@ -99,10 +100,12 @@ def make_atom_line(
     elif index in buried_solvent_voxel_indices:
         if index in list(pore_voxel_index_map.keys()):
             return f"ATOM  {index:>5d}  O   POR E{pore_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           O"
+        elif index in list(pocket_voxel_index_map.keys()):
+            return f"ATOM  {index:>5d}  N   POK D{pocket_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           N"
         elif index in list(cavity_voxel_index_map.keys()):
-            return f"ATOM  {index:>5d}  N   CAV D{cavity_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           N"
+            return f"ATOM  {index:>5d}  S   CAV F{cavity_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           S"
         else:
-            return f"ATOM  {index:>5d}  H   BUR C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           N"
+            return f"ATOM  {index:>5d}  H   BUR C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
     else:
         return f"ATOM  {index:>5d}  C   PTN A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
 
@@ -112,6 +115,7 @@ def points_to_pdb(
     exposed_voxels: VoxelGroup,
     buried_voxels: VoxelGroup,
     pores: dict[int, VoxelGroup],
+    pockets: dict[int, VoxelGroup],
     cavities: dict[int, VoxelGroup],
 ) -> list[str]:
     """
@@ -122,12 +126,18 @@ def points_to_pdb(
     Oxygen -> buried solvent
     """
     pore_voxel_indices = {i: voxels.indices for i, voxels in pores.items()}
+    pocket_voxel_indices = {i: voxels.indices for i, voxels in pockets.items()}
     cavity_voxel_indices = {i: voxels.indices for i, voxels in cavities.items()}
 
     pore_voxel_index_map = {}
     for id, indices in pore_voxel_indices.items():
         for index in indices:
             pore_voxel_index_map[index] = id
+
+    pocket_voxel_index_map = {}
+    for id, indices in pocket_voxel_indices.items():
+        for index in indices:
+            pocket_voxel_index_map[index] = id
 
     cavity_voxel_index_map = {}
     for id, indices in cavity_voxel_indices.items():
@@ -140,6 +150,7 @@ def points_to_pdb(
             exposed_voxels.indices,
             buried_voxels.indices,
             pore_voxel_index_map,
+            pocket_voxel_index_map,
             cavity_voxel_index_map,
             i,
         )
