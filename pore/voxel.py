@@ -12,7 +12,7 @@ from tqdm import tqdm
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from pore.constants import VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD
+from pore.constants import VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
 from pore.types import VoxelGroup
 
 
@@ -207,18 +207,23 @@ def get_exposed_and_buried_voxels(
     )
 
 
-def is_neighbor_voxel(voxel_one, voxel_two) -> bool:
+def is_neighbor_voxel(voxel_one, voxel_two, diagonal_neighbors: bool = DIAGONAL_NEIGHBORS) -> bool:
     """
     Given two voxels return True if they are ordinal neighbors.
     """
-    differences = 0
+    differences = []
     for dimension in range(3):
-        # TODO: we can early return False if any difference is > 1
-        differences += abs(voxel_one[dimension] - voxel_two[dimension])
+        differences.append(abs(voxel_one[dimension] - voxel_two[dimension]))
 
-    # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is exactly 1
-    if differences == 1:
+    # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is 1
+    if sum(differences) == 1:
         return True
+    # alternatively a voxel is a diagonal neighbour when the max distance on any axis is 1
+    # here we only count being diagonal on a plane, not in all 3 dimensions
+    #   which would be a longer distance between voxels
+    elif (diagonal_neighbors) and (sum(differences) == 2) and (max(differences) == 1):
+        return True
+
     return False
 
 
@@ -284,8 +289,6 @@ def get_agglomerated_type(
     b) all "surface" voxels can be agglomerated (BFS) into a single group -> this is a pocket
     c) the "surafce" voxels cannot be agglomerated (BFS) into just one group -> this is a pore
     """
-    SURFACE_NEIGHBOR_DISTANCE = 1  # TODO put this constant somewhere else # TODO why isn't this used?
-
     direct_surface_indices = set()
     for query_index in query_indices:
         query_voxel = get_single_voxel(buried_voxels, query_index)
@@ -298,7 +301,7 @@ def get_agglomerated_type(
     if len(direct_surface_indices) == 0:
         return "cavity"
 
-    # add all direct voxel neighbours (TODO could be adjustable)
+    # add all voxel neighbours
     neighbor_surface_indices = set()
     for surface_index in direct_surface_indices:
         surface_voxel = get_single_voxel(buried_voxels, surface_index)
@@ -342,28 +345,10 @@ def get_pores_pockets_cavities_occluded(
     while len(agglomerated_indices) < len(buried_indices):
         remaining_indices = buried_indices - agglomerated_indices
 
-        # perform BFS over the remaining indices (TODO: BFS is currently slow, needs optimizing)
+        # perform BFS over the remaining indices
         agglomerable_indices = breadth_first_search(buried_voxels.voxels, remaining_indices)
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
-
-        # if the total volume of agglomerated voxels is below a threshold, just classify them as occluded
-        if compute_voxel_group_volume(len(agglomerable_indices)) < OCCLUDED_VOLUME_THRESHOLD:
-            occluded_voxels = (
-                np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
-                np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
-                np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
-            )
-            occluded_indices = compute_voxel_indices(occluded_voxels, voxel_grid_dimensions)
-            occluded[occluded_id] = VoxelGroup(
-                voxels=occluded_voxels,
-                indices=occluded_indices,
-                num_voxels=len(occluded_indices),
-                voxel_type="occluded",
-                volume=compute_voxel_group_volume(len(occluded_indices)),
-            )
-            occluded_id += 1
-            continue
 
         # identify what these agglomerated voxels are
         agglomerated_type = get_agglomerated_type(agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels)
@@ -398,19 +383,37 @@ def get_pores_pockets_cavities_occluded(
             )
             pore_id += 1
         elif agglomerated_type == "pocket":
-            pocket_voxels = (
-                np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
-                np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
-                np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
-            )
-            pocket_indices = compute_voxel_indices(pocket_voxels, voxel_grid_dimensions)
-            pockets[pocket_id] = VoxelGroup(
-                voxels=pocket_voxels,
-                indices=pocket_indices,
-                num_voxels=len(pocket_indices),
-                voxel_type="pocket",
-                volume=compute_voxel_group_volume(len(pocket_indices)) * VOXEL_VOLUME,
-            )
-            pocket_id += 1
+            # if the total volume of agglomerated voxels is below a threshold, just classify them as occluded
+            if compute_voxel_group_volume(len(agglomerable_indices)) < OCCLUDED_VOLUME_THRESHOLD:
+                occluded_voxels = (
+                    np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
+                    np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
+                    np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
+                )
+                occluded_indices = compute_voxel_indices(occluded_voxels, voxel_grid_dimensions)
+                occluded[occluded_id] = VoxelGroup(
+                    voxels=occluded_voxels,
+                    indices=occluded_indices,
+                    num_voxels=len(occluded_indices),
+                    voxel_type="occluded",
+                    volume=compute_voxel_group_volume(len(occluded_indices)),
+                )
+                occluded_id += 1
+            # otherwise they are truly pockets
+            else:
+                pocket_voxels = (
+                    np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
+                    np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
+                    np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
+                )
+                pocket_indices = compute_voxel_indices(pocket_voxels, voxel_grid_dimensions)
+                pockets[pocket_id] = VoxelGroup(
+                    voxels=pocket_voxels,
+                    indices=pocket_indices,
+                    num_voxels=len(pocket_indices),
+                    voxel_type="pocket",
+                    volume=compute_voxel_group_volume(len(pocket_indices)) * VOXEL_VOLUME,
+                )
+                pocket_id += 1
 
     return pores, pockets, cavities, occluded
