@@ -90,6 +90,7 @@ def make_atom_line(
     pore_voxel_index_map: dict[int, int],
     pocket_voxel_index_map: dict[int, int],
     cavity_voxel_index_map: dict[int, int],
+    occluded_voxel_index_map: dict[int, int],
     index: int,
 ) -> str:
     """
@@ -104,8 +105,8 @@ def make_atom_line(
             return f"ATOM  {index:>5d}  N   POK D{pocket_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           N"
         elif index in list(cavity_voxel_index_map.keys()):
             return f"ATOM  {index:>5d}  S   CAV F{cavity_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           S"
-        else:
-            return f"ATOM  {index:>5d}  H   BUR C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
+        elif index in list(occluded_voxel_index_map.keys()):
+            return f"ATOM  {index:>5d}  H   OCC C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
     else:
         return f"ATOM  {index:>5d}  C   PTN A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
 
@@ -117,6 +118,7 @@ def points_to_pdb(
     pores: dict[int, VoxelGroup],
     pockets: dict[int, VoxelGroup],
     cavities: dict[int, VoxelGroup],
+    occluded: dict[int, VoxelGroup],
 ) -> list[str]:
     """
     Write out points as though it was a PDB file.
@@ -128,6 +130,7 @@ def points_to_pdb(
     pore_voxel_indices = {i: voxels.indices for i, voxels in pores.items()}
     pocket_voxel_indices = {i: voxels.indices for i, voxels in pockets.items()}
     cavity_voxel_indices = {i: voxels.indices for i, voxels in cavities.items()}
+    occluded_voxel_indices = {i: voxels.indices for i, voxels in occluded.items()}
 
     pore_voxel_index_map = {}
     for id, indices in pore_voxel_indices.items():
@@ -144,6 +147,11 @@ def points_to_pdb(
         for index in indices:
             cavity_voxel_index_map[index] = id
 
+    occluded_voxel_index_map = {}
+    for id, indices in occluded_voxel_indices.items():
+        for index in indices:
+            occluded_voxel_index_map[index] = id
+
     return [
         make_atom_line(
             point,
@@ -152,6 +160,7 @@ def points_to_pdb(
             pore_voxel_index_map,
             pocket_voxel_index_map,
             cavity_voxel_index_map,
+            occluded_voxel_index_map,
             i,
         )
         for i, point in enumerate(voxel_grid.voxel_centers)

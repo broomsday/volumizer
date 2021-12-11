@@ -31,7 +31,8 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     exposed_voxels, buried_voxels = voxel.get_exposed_and_buried_voxels(
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
-    pores, pockets, cavities = voxel.get_pores_pockets_cavities(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
+
+    pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
 
     print("\n")
     print(voxel_grid_id)
@@ -42,8 +43,9 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
     print("Pores:", len(pores))
     print("Pockets:", len(pockets))
     print("Cavities:", len(cavities))
+    print("Occluded:", len(occluded))
 
-    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, pockets, cavities)
+    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, pockets, cavities, occluded)
     with open(ANNOTATED_PDB_DIR / f"{structure.id}.pdb", mode="w", encoding="utf-8") as pdb_file:
         pdb_file.write("\n".join(pdb_lines))
 

@@ -12,7 +12,7 @@ from tqdm import tqdm
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from pore.constants import VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT
+from pore.constants import VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD
 from pore.types import VoxelGroup
 
 
@@ -244,6 +244,13 @@ def compute_voxel_indices(voxels: tuple[np.ndarray, ...], grid_dimensions: np.nd
     }
 
 
+def compute_voxel_group_volume(num_voxels: int) -> float:
+    """
+    Return the volume of a number of voxels
+    """
+    return num_voxels * VOXEL_VOLUME
+
+
 def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
@@ -313,16 +320,13 @@ def get_agglomerated_type(
     return "pocket"
 
 
-def get_pores_pockets_cavities(
+def get_pores_pockets_cavities_occluded(
     buried_voxels: VoxelGroup,
     exposed_voxels: VoxelGroup,
     voxel_grid_dimensions: np.ndarray
 ) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
-    Agglomerate buried solvent voxels into putative pores.
-
-    Then test which putative pores traverse the box.
-    Those that do are pores, those that don't are cavities
+    Agglomerate buried solvent voxels into pores, pockets, and cavities.
     """
     buried_indices = set(range(buried_voxels.voxels[0].size))
     agglomerated_indices = set()
@@ -330,9 +334,11 @@ def get_pores_pockets_cavities(
     pores = {}
     pockets = {}
     cavities = {}
+    occluded = {}
     pore_id = 0
     pocket_id = 0
     cavity_id = 0
+    occluded_id = 0
     while len(agglomerated_indices) < len(buried_indices):
         remaining_indices = buried_indices - agglomerated_indices
 
@@ -340,6 +346,24 @@ def get_pores_pockets_cavities(
         agglomerable_indices = breadth_first_search(buried_voxels.voxels, remaining_indices)
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
+
+        # if the total volume of agglomerated voxels is below a threshold, just classify them as occluded
+        if compute_voxel_group_volume(len(agglomerable_indices)) < OCCLUDED_VOLUME_THRESHOLD:
+            occluded_voxels = (
+                np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
+                np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
+            )
+            occluded_indices = compute_voxel_indices(occluded_voxels, voxel_grid_dimensions)
+            occluded[occluded_id] = VoxelGroup(
+                voxels=occluded_voxels,
+                indices=occluded_indices,
+                num_voxels=len(occluded_indices),
+                voxel_type="occluded",
+                volume=compute_voxel_group_volume(len(occluded_indices)),
+            )
+            occluded_id += 1
+            continue
 
         # identify what these agglomerated voxels are
         agglomerated_type = get_agglomerated_type(agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels)
@@ -355,7 +379,7 @@ def get_pores_pockets_cavities(
                 indices=cavity_indices,
                 num_voxels=len(cavity_indices),
                 voxel_type="cavity",
-                volume=len(cavity_indices) * VOXEL_VOLUME,
+                volume=compute_voxel_group_volume(len(cavity_indices)) * VOXEL_VOLUME,
             )
             cavity_id += 1
         elif agglomerated_type == "pore":
@@ -370,7 +394,7 @@ def get_pores_pockets_cavities(
                 indices=pore_indices,
                 num_voxels=len(pore_indices),
                 voxel_type="pore",
-                volume=len(pore_indices) * VOXEL_VOLUME,
+                volume=compute_voxel_group_volume(len(pore_indices)) * VOXEL_VOLUME,
             )
             pore_id += 1
         elif agglomerated_type == "pocket":
@@ -385,8 +409,8 @@ def get_pores_pockets_cavities(
                 indices=pocket_indices,
                 num_voxels=len(pocket_indices),
                 voxel_type="pocket",
-                volume=len(pocket_indices) * VOXEL_VOLUME,
+                volume=compute_voxel_group_volume(len(pocket_indices)) * VOXEL_VOLUME,
             )
             pocket_id += 1
 
-    return pores, pockets, cavities
+    return pores, pockets, cavities, occluded
