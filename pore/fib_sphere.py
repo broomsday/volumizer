@@ -21,7 +21,7 @@ def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) 
     y_coords = []
     z_coords = []
 
-    # TODO convert this to a dictionary comprehension right from the start once we know it works
+    # TODO convert this to a dictionary comprehension right from the start
     # TODO we could be more performant by generating phi, theta as np matrices/vectors and then the same for x,y,z
     for i in range(samples):
         phi = np.arccos(1 - 2 * (i + 0.5) / samples)
@@ -37,13 +37,13 @@ def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) 
 def get_example_point_distance(coords: dict[str, list[float]]) -> float:
     """
     Get the distance between two adjacent points on a fibonacci sphere.
+    Due to the way the spiral traverses the sphere, for an unknown number of points on the sphere,
+    we can only be certain that the first and second, or last and second last points are "adjacent"
     """
-    #i = np.random.randint(0, len(coords["x"]))
-    i = 0
     coord_diff = [
-        coords["x"][i] - coords["x"][i + 1],
-        coords["y"][i] - coords["y"][i + 1],
-        coords["z"][i] - coords["z"][i + 1],
+        coords["x"][0] - coords["x"][1],
+        coords["y"][0] - coords["y"][1],
+        coords["z"][0] - coords["z"][1],
     ]
     return np.linalg.norm(coord_diff)
 
