@@ -6,7 +6,8 @@ Functions for creating points on a sphere surface.
 import pandas as pd
 import numpy as np
 
-from pore.constants import VOXEL_SIZE, ATOMIC_RADII, BASE_ATOMIC_RADII
+from pore import utils
+from pore.constants import ATOMIC_RADII, BASE_ATOMIC_RADII
 
 
 GOLDEN_RATIO = (1 + np.sqrt(5.0)) / 4
@@ -72,15 +73,15 @@ def get_fibonacci_sphere_radii(element: str, voxel_size: float) -> list[float]:
     vdw_radius = ATOMIC_RADII.get(element, BASE_ATOMIC_RADII)
     radii = [vdw_radius]
 
-    scale_factor = 2
+    scale_factor = 1
     while min(radii) > voxel_size:
-        radii.append(vdw_radius / scale_factor)
-        scale_factor *= 2
+        radii.append(vdw_radius - (voxel_size * scale_factor))
+        scale_factor += 1
 
     return radii
 
 
-def add_extra_points(coords: pd.DataFrame, voxel_size: float = VOXEL_SIZE) -> pd.DataFrame:
+def add_extra_points(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE) -> pd.DataFrame:
     """
     For each given point which represents the center of a heavy atom,
     add additional points on a surface around that point at one or more radii.

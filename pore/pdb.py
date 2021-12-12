@@ -11,7 +11,6 @@ from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
 
-from pore import voxel
 from pore.constants import VOXEL_ATOM_NAMES
 from pore.types import VoxelGroup
 

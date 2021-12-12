@@ -10,7 +10,8 @@ from pore import pore, cli, utils
 
 
 def main(
-    input: str = typer.Argument(..., help="PDB ID, PDB file, file with one PDB ID per line, or folder containing PDB files")
+    input: str = typer.Argument(..., help="PDB ID, PDB file, file with one PDB ID per line, or folder containing PDB files"),
+    resolution: float = typer.Option(2.0, help="Edge-length of voxels used to discretize the structure.")
 ):
     """
     Find pores and cavities in the supplied PDB files.
@@ -18,6 +19,8 @@ def main(
 
     utils.setup_dirs()
     utils.ensure_protein_components_file()
+
+    utils.set_resolution(resolution)
 
     input_type = cli.guess_input_type(input)
 

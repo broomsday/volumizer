@@ -12,11 +12,12 @@ from tqdm import tqdm
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from pore.constants import VOXEL_SIZE, OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
+from pore import utils
+from pore.constants import OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
 from pore.types import VoxelGroup
 
 
-VOXEL_VOLUME = VOXEL_SIZE ** 3
+VOXEL_VOLUME = utils.VOXEL_SIZE ** 3
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -31,7 +32,11 @@ def add_voxel_grid(cloud: PyntCloud) -> tuple[PyntCloud, str]:
     Generate a voxel grid surrounding the point-cloud.
     """
     voxel_grid_id = cloud.add_structure(
-        "voxelgrid", size_x=VOXEL_SIZE, size_y=VOXEL_SIZE, size_z=VOXEL_SIZE, regular_bounding_box=False
+        "voxelgrid",
+        size_x=utils.VOXEL_SIZE,
+        size_y=utils.VOXEL_SIZE,
+        size_z=utils.VOXEL_SIZE,
+        regular_bounding_box=False,
     )
     return cloud, voxel_grid_id
 
@@ -307,7 +312,6 @@ def get_agglomerated_type(
         surface_voxel = get_single_voxel(buried_voxels, surface_index)
         for query_index in query_indices - direct_surface_indices:
             query_voxel = get_single_voxel(buried_voxels, query_index)
-            # TODO: need to add a dimension value to neighbour check and use SURFACE_NEIGHBOR_DISTANCE
             if is_neighbor_voxel(surface_voxel, query_voxel):
                 neighbor_surface_indices.add(query_index)
 
@@ -324,9 +328,7 @@ def get_agglomerated_type(
 
 
 def get_pores_pockets_cavities_occluded(
-    buried_voxels: VoxelGroup,
-    exposed_voxels: VoxelGroup,
-    voxel_grid_dimensions: np.ndarray
+    buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid_dimensions: np.ndarray
 ) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
     Agglomerate buried solvent voxels into pores, pockets, and cavities.

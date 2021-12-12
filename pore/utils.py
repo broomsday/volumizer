@@ -9,6 +9,10 @@ import gzip
 
 from pore.paths import DOWNLOADED_PDB_DIR, PREPARED_PDB_DIR, ANNOTATED_PDB_DIR, PROTEIN_COMPONENTS_FILE
 from pore import rcsb
+from pore import constants
+
+
+VOXEL_SIZE = constants.VOXEL_SIZE
 
 
 def get_downloaded_pdb_path(pdb_id: str) -> Path:
@@ -96,3 +100,11 @@ def ensure_protein_components_file() -> None:
         protein_components = rcsb.build_protein_component_set(components)
         with open(PROTEIN_COMPONENTS_FILE, mode="w", encoding="utf-8") as fo:
             fo.write("\n".join([component for component in protein_components]))
+
+
+def set_resolution(resolution: float) -> None:
+    """
+    Set the value of the VOXEL_SIZE global constant.
+    """
+    global VOXEL_SIZE
+    VOXEL_SIZE = resolution
