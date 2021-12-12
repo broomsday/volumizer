@@ -14,7 +14,7 @@ class ComponentData(NamedTuple):
 
 
 class VoxelGroup(NamedTuple):
-    voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+    voxels: tuple[np.ndarray, ...]
     indices: set[int]
     num_voxels: int
     voxel_type: Optional[str] = None
@@ -23,8 +23,14 @@ class VoxelGroup(NamedTuple):
 
 class Annotation(NamedTuple):
     total_pore_volume: float
+    total_cavity_volume: float
     total_pocket_volume: float
     largest_pore_volume: float
+    largest_cavity_volume: float
     largest_pocket_volume: float
-    pore_volumes: dict[int, float]
-    pocket_volumes: dict[int, float]
+    num_pores: int
+    num_cavities: int
+    num_pockets: int
+    pore_volumes: dict[int, Optional[float]]
+    cavity_volumes: dict[int, Optional[float]]
+    pocket_volumes: dict[int, Optional[float]]

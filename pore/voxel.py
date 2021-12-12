@@ -142,7 +142,7 @@ def is_buried(occluded_dimensions: list[int]) -> bool:
 
 def build_planar_voxel_coordinate_arrays(
     voxels: tuple[np.ndarray, ...], voxel_grid_dimensions: np.ndarray
-) -> tuple[list[list[int]], list[list[int]], list[list[int]]]:
+) -> tuple[list[list[list[int]]], list[list[list[int]]], list[list[list[int]]]]:
     """
     For each two-dimension pair, construct a list of coordinates in the 3rd dimension that match the first two dimensions.
     """
@@ -329,7 +329,7 @@ def get_agglomerated_type(
 
 def get_pores_pockets_cavities_occluded(
     buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid_dimensions: np.ndarray
-) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
+) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
     Agglomerate buried solvent voxels into pores, pockets, and cavities.
     """

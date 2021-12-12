@@ -4,12 +4,15 @@ Various utility functions
 
 
 from pathlib import Path
+from typing import Optional
 
 import gzip
+import numpy as np
 
 from pore.paths import DOWNLOADED_PDB_DIR, PREPARED_PDB_DIR, ANNOTATED_PDB_DIR, PROTEIN_COMPONENTS_FILE
 from pore import rcsb
 from pore import constants
+from pore.types import Annotation, VoxelGroup
 
 
 VOXEL_SIZE = constants.VOXEL_SIZE
@@ -108,3 +111,49 @@ def set_resolution(resolution: float) -> None:
     """
     global VOXEL_SIZE
     VOXEL_SIZE = resolution
+
+
+def get_volume_summary(voxel_group_dict: dict[int, VoxelGroup], summary_type: str = "total") -> float:
+    """
+    Compute a summary value for the volume
+    """
+    volumes = [voxel_group.volume for voxel_group in voxel_group_dict.values() if voxel_group.volume is not None]
+    if volumes:
+        if summary_type == "total":
+            return sum(volumes)
+        elif summary_type == "max":
+            return max(volumes)
+        elif summary_type == "mean":
+            return np.mean(volumes)
+        else:
+            print("Unsupported volume summary type")
+
+    return 0.0
+
+
+def print_annotation(annotation: Annotation) -> None:
+    """
+    Print the annotation to the terminal in a pretty manner.
+    """
+    print("")
+    print(f"Number of pores: {annotation.num_pores}")
+    print(f"Number of cavities: {annotation.num_cavities}")
+    print(f"Number of pockets: {annotation.num_pockets}")
+    print("")
+    print(f"Largest pore volume: {annotation.largest_pore_volume}")
+    print(f"Largest cavity volume: {annotation.largest_cavity_volume}")
+    print(f"Largest pocket volume: {annotation.largest_pocket_volume}")
+    print("")
+    print(f"Total pore volume: {annotation.total_pore_volume}")
+    print(f"Total cavity volume: {annotation.total_cavity_volume}")
+    print(f"Total pocket volume: {annotation.total_pocket_volume}")
+
+
+def save_annotated_pdb(pdb_name: str, pdb_lines: list[str]) -> None:
+    """
+    Save a PDB formatted coordinate file of the voxels.
+    Individual atoms/voxels are labelled according to type
+    """
+
+    with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as pdb_file:
+        pdb_file.write("\n".join(pdb_lines))

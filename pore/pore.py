@@ -9,10 +9,10 @@ from Bio.PDB import Structure
 
 from pore import rcsb, utils, pdb, voxel, fib_sphere
 from pore.types import Annotation
-from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
+from pore.paths import PREPARED_PDB_DIR
 
 
-def annotate_pdb_structure(structure: Structure) -> Annotation:
+def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]:
     """
     Perform analysis of a prepared structure.
     """
@@ -33,24 +33,24 @@ def annotate_pdb_structure(structure: Structure) -> Annotation:
 
     pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
 
-    print("\n")
-    print(voxel_grid_id)
-    print("Protein Voxels:", protein_voxels.num_voxels)
-    print("Total Solvent Voxels:", solvent_voxels.num_voxels)
-    print("Exposed Solvent Voxels:", exposed_voxels.num_voxels)
-    print("Buried Solvent Voxels:", buried_voxels.num_voxels)
-    print("Pores:", len(pores))
-    print("Pockets:", len(pockets))
-    print("Cavities:", len(cavities))
-    print("Occluded:", len(occluded))
-
     pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, pockets, cavities, occluded)
-    with open(ANNOTATED_PDB_DIR / f"{structure.id}.pdb", mode="w", encoding="utf-8") as pdb_file:
-        pdb_file.write("\n".join(pdb_lines))
 
-    # TODO need to return an actual annotation, generated from the voxels
+    annotation = Annotation(
+        total_pore_volume=utils.get_volume_summary(pores, "total"),
+        total_cavity_volume=utils.get_volume_summary(cavities, "total"),
+        total_pocket_volume=utils.get_volume_summary(pockets, "total"),
+        largest_pore_volume=utils.get_volume_summary(pores, "max"),
+        largest_cavity_volume=utils.get_volume_summary(cavities, "max"),
+        largest_pocket_volume=utils.get_volume_summary(pockets, "max"),
+        num_pores=len(pores),
+        num_cavities=len(cavities),
+        num_pockets=len(pockets),
+        pore_volumes={i: pore.volume for i, pore in pores.items()},
+        cavity_volumes={i: cavity.volume for i, cavity in cavities.items()},
+        pocket_volumes={i: pocket.volume for i, pocket in pockets.items()},
+    )
 
-    quit()
+    return (annotation, pdb_lines)
 
 
 def prepare_pdb_structure(structure: Structure) -> Structure:
@@ -85,7 +85,7 @@ def prepare_pdb_file(pdb_file: Path) -> Structure:
     return prepare_pdb_structure(pdb.load_pdb(pdb_file))
 
 
-def process_pdb_file(pdb_file: Path) -> Annotation:
+def process_pdb_file(pdb_file: Path) -> tuple[Annotation, list[str]]:
     """
     Perform end-to-end pipeline on a single PDB file.
     """
