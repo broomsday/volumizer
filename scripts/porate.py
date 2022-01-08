@@ -27,14 +27,14 @@ def main(
 
     if input_type == "pdb_id":
         pdb_path = pore.download_pdb_file(input)
-        annotation, pdb_lines = pore.process_pdb_file(pdb_path)
+        annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_path)
         utils.print_annotation(annotation)
-        utils.save_annotated_pdb(input, pdb_lines)
+        utils.save_annotated_pdb(input, annotated_pdb_lines)
     elif input_type == "pdb_file":
         pdb_path = Path(input)
-        annotation, pdb_lines = pore.process_pdb_file(pdb_path)
+        annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_path)
         utils.print_annotation(annotation)
-        utils.save_annotated_pdb(Path(input).stem, pdb_lines)
+        utils.save_annotated_pdb(Path(input).stem, annotated_pdb_lines)
     else:
         raise RuntimeError("File mode not implemented")
 

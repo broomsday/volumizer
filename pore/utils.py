@@ -148,14 +148,24 @@ def print_annotation(annotation: Annotation) -> None:
     print(f"Total pocket volume: {annotation.total_pocket_volume}")
 
 
-def save_annotated_pdb(pdb_name: str, pdb_lines: list[str]) -> None:
+def save_annotated_pdb(pdb_name: str, annotated_lines: list[str]) -> None:
     """
     Save a PDB formatted coordinate file of the voxels.
     Individual atoms/voxels are labelled according to type
     """
+    # get the original PDB lines so that our annotation can be appended
+    with open(PREPARED_PDB_DIR / f"{pdb_name}.pdb", mode="r", encoding="utf-8") as input_pdb_file:
+        input_pdb_lines = input_pdb_file.readlines()
+    input_pdb_lines = [line.rstrip("\n") for line in input_pdb_lines]
 
-    with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as pdb_file:
-        pdb_file.write("\n".join(pdb_lines))
+    # remove the terminal END line
+    for line in input_pdb_lines[::-1]:
+        if ("END" in line) or (line.strip() == ""):
+            input_pdb_lines.pop()
+    
+    # add the annotated lines and save
+    with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as annotated_pdb_file:
+        annotated_pdb_file.write("\n".join([*input_pdb_lines, "END", *annotated_lines]))
 
 
 def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, VoxelGroup]:
