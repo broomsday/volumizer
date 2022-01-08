@@ -4,7 +4,6 @@ Various utility functions
 
 
 from pathlib import Path
-from typing import Optional
 
 import gzip
 import numpy as np
@@ -133,7 +132,7 @@ def get_volume_summary(voxel_group_dict: dict[int, VoxelGroup], summary_type: st
 
 def print_annotation(annotation: Annotation) -> None:
     """
-    Print the annotation to the terminal in a pretty manner.
+    Print the annotation to the terminal in a readable manner.
     """
     print("")
     print(f"Number of pores: {annotation.num_pores}")
@@ -147,6 +146,7 @@ def print_annotation(annotation: Annotation) -> None:
     print(f"Total pore volume: {annotation.total_pore_volume}")
     print(f"Total cavity volume: {annotation.total_cavity_volume}")
     print(f"Total pocket volume: {annotation.total_pocket_volume}")
+    print(annotation) # debug
 
 
 def save_annotated_pdb(pdb_name: str, pdb_lines: list[str]) -> None:
@@ -157,3 +157,11 @@ def save_annotated_pdb(pdb_name: str, pdb_lines: list[str]) -> None:
 
     with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as pdb_file:
         pdb_file.write("\n".join(pdb_lines))
+
+
+def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, VoxelGroup]:
+    """
+    Take a dictionary with indices as the keys and VoxelGroups as the values.
+    Reassign the keys such that the VoxelGroups are sorted by volume.
+    """
+    return {i: voxelgroup for i, voxelgroup in enumerate(sorted(voxelgroups.values(), key=lambda group: group.volume, reverse=True))}

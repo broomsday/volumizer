@@ -331,7 +331,7 @@ def get_pores_pockets_cavities_occluded(
     buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid_dimensions: np.ndarray
 ) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
-    Agglomerate buried solvent voxels into pores, pockets, and cavities.
+    Agglomerate buried solvent voxels into pores, pockets, cavities, and simply occluded.
     """
     buried_indices = set(range(buried_voxels.voxels[0].size))
     agglomerated_indices = set()
