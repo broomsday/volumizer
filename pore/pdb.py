@@ -4,6 +4,7 @@ Functions for parsing, cleaning, and modifying PDBs.
 
 from pathlib import Path
 import tempfile
+import itertools
 
 from Bio.PDB import PDBParser, Select, Structure
 from Bio.PDB.PDBIO import PDBIO
@@ -11,7 +12,7 @@ from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
 
-from pore.constants import VOXEL_ATOM_NAMES
+from pore.constants import VOXEL_ATOM_NAMES, VOXEL_TYPE_CHAIN_MAP, VOXEL_TYPE_ATOM_MAP
 from pore.types import VoxelGroup
 
 
@@ -39,7 +40,7 @@ class ProteinSelect(Select):
             atom.set_altloc(" ")
 
         if atom.element != "H":
-                return True
+            return True
         return True
 
 
@@ -83,85 +84,64 @@ def get_structure_coords(structure: Structure) -> pd.DataFrame:
 
 
 def make_atom_line(
+    voxel_type: str,
+    resnum: int,
+    voxel_index: int,
     point: np.ndarray,
-    exposed_solvent_voxel_indices: set[int],
-    buried_solvent_voxel_indices: set[int],
-    pore_voxel_index_map: dict[int, int],
-    pocket_voxel_index_map: dict[int, int],
-    cavity_voxel_index_map: dict[int, int],
-    occluded_voxel_index_map: dict[int, int],
-    index: int,
 ) -> str:
     """
-    Make each exposed solvent point a hydrogen, buried solvent ponit an oxygen, and protein point a carbon
+    Make a single atom line for a single voxel
     """
-    if index in exposed_solvent_voxel_indices:
-        return f"ATOM  {index:>5d}  H   EXP B   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
-    elif index in buried_solvent_voxel_indices:
-        if index in list(pore_voxel_index_map.keys()):
-            return f"ATOM  {index:>5d}  O   POR E{pore_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           O"
-        elif index in list(pocket_voxel_index_map.keys()):
-            return f"ATOM  {index:>5d}  N   POK D{pocket_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           N"
-        elif index in list(cavity_voxel_index_map.keys()):
-            return f"ATOM  {index:>5d}  S   CAV F{cavity_voxel_index_map[index]:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           S"
-        elif index in list(occluded_voxel_index_map.keys()):
-            return f"ATOM  {index:>5d}  H   OCC C   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           H"
-    else:
-        return f"ATOM  {index:>5d}  C   PTN A   1    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           C"
+    return f"ATOM  {voxel_index:>5d}  {VOXEL_TYPE_ATOM_MAP[voxel_type]}   {voxel_type} {VOXEL_TYPE_CHAIN_MAP[voxel_type]}{resnum:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           {VOXEL_TYPE_ATOM_MAP[voxel_type]}"
+
+
+def make_atom_lines(
+    voxel_type: str,
+    resnum: int,
+    voxel_indices: set[int],
+    voxel_grid_centers: np.ndarray,
+) -> list[str]:
+    """
+    Make all atom lines for a given set of voxel indices
+    """
+    return [
+        make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index])
+        for voxel_index in voxel_indices
+    ]
 
 
 def points_to_pdb(
     voxel_grid: VoxelGrid,
-    exposed_voxels: VoxelGroup,
-    buried_voxels: VoxelGroup,
     pores: dict[int, VoxelGroup],
     pockets: dict[int, VoxelGroup],
     cavities: dict[int, VoxelGroup],
     occluded: dict[int, VoxelGroup],
 ) -> list[str]:
     """
-    Write out points as though it was a PDB file.
-
-    Carbon -> protein
-    Nitrogen -> exposed solvent
-    Oxygen -> buried solvent
+    Write out voxels of our volumes as though they were atoms in a PDB file.
     """
     pore_voxel_indices = {i: voxels.indices for i, voxels in pores.items()}
     pocket_voxel_indices = {i: voxels.indices for i, voxels in pockets.items()}
     cavity_voxel_indices = {i: voxels.indices for i, voxels in cavities.items()}
     occluded_voxel_indices = {i: voxels.indices for i, voxels in occluded.items()}
 
-    pore_voxel_index_map = {}
-    for id, indices in pore_voxel_indices.items():
-        for index in indices:
-            pore_voxel_index_map[index] = id
-
-    pocket_voxel_index_map = {}
-    for id, indices in pocket_voxel_indices.items():
-        for index in indices:
-            pocket_voxel_index_map[index] = id
-
-    cavity_voxel_index_map = {}
-    for id, indices in cavity_voxel_indices.items():
-        for index in indices:
-            cavity_voxel_index_map[index] = id
-
-    occluded_voxel_index_map = {}
-    for id, indices in occluded_voxel_indices.items():
-        for index in indices:
-            occluded_voxel_index_map[index] = id
-
-    return [
-        make_atom_line(
-            point,
-            exposed_voxels.indices,
-            buried_voxels.indices,
-            pore_voxel_index_map,
-            pocket_voxel_index_map,
-            cavity_voxel_index_map,
-            occluded_voxel_index_map,
-            i,
+    return list(
+        itertools.chain(
+            *[
+                make_atom_lines("POK", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
+                for voxel_group_index, voxel_indices in pocket_voxel_indices.items()
+            ],
+            *[
+                make_atom_lines("POR", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
+                for voxel_group_index, voxel_indices in pore_voxel_indices.items()
+            ],
+            *[
+                make_atom_lines("CAV", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
+                for voxel_group_index, voxel_indices in cavity_voxel_indices.items()
+            ],
+            *[
+                make_atom_lines("OCC", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
+                for voxel_group_index, voxel_indices in occluded_voxel_indices.items()
+            ],
         )
-        for i, point in enumerate(voxel_grid.voxel_centers)
-    ]
-
+    )

@@ -146,7 +146,6 @@ def print_annotation(annotation: Annotation) -> None:
     print(f"Total pore volume: {annotation.total_pore_volume}")
     print(f"Total cavity volume: {annotation.total_cavity_volume}")
     print(f"Total pocket volume: {annotation.total_pocket_volume}")
-    print(annotation) # debug
 
 
 def save_annotated_pdb(pdb_name: str, pdb_lines: list[str]) -> None:

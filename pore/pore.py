@@ -37,7 +37,7 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
     cavities = utils.sort_voxelgroups_by_volume(cavities)
     occluded = utils.sort_voxelgroups_by_volume(occluded)
 
-    pdb_lines = pdb.points_to_pdb(voxel_grid, exposed_voxels, buried_voxels, pores, pockets, cavities, occluded)
+    pdb_lines = pdb.points_to_pdb(voxel_grid, pores, pockets, cavities, occluded)
 
     annotation = Annotation(
         total_pore_volume=utils.get_volume_summary(pores, "total"),
