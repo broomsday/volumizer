@@ -72,15 +72,23 @@ def clean_structure(structure: Structure, protein_components: set[str]) -> Struc
     return structure
 
 
-def get_structure_coords(structure: Structure) -> pd.DataFrame:
+def get_structure_coords(structure: Structure, canonical_protein_atoms_only: bool = False) -> pd.DataFrame:
     """
     Load the PDB file using Biopython.
 
     Return the coordinates of backbone heavy atoms and CB atoms as a dataframe.
     """
-    # TODO used of VOXEL_ATOM_NAMES should be optional
-    coordinates = [atom.coord for atom in structure.get_atoms() if atom.name in VOXEL_ATOM_NAMES]
-    return pd.DataFrame(coordinates, columns=["x", "y", "z"])
+    if canonical_protein_atoms_only:
+        coordinates = [atom.coord for atom in structure.get_atoms() if atom.name in VOXEL_ATOM_NAMES]
+        elements = [atom.element for atom in structure.get_atoms() if atom.name in VOXEL_ATOM_NAMES]
+    else:
+        coordinates = [atom.coord for atom in structure.get_atoms()]
+        elements = [atom.element for atom in structure.get_atoms()]
+
+    coordinates = pd.DataFrame(coordinates, columns=["x", "y", "z"])
+    coordinates["element"] = elements
+
+    return coordinates
 
 
 def make_atom_line(

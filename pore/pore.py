@@ -17,7 +17,6 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
     Perform analysis of a prepared structure.
     """
     coords = pdb.get_structure_coords(structure)
-    # TODO here need to get the elements for the coords, or in the above function even
     coords = fib_sphere.add_extra_points(coords, utils.VOXEL_SIZE)
 
     cloud = voxel.coords_to_point_cloud(coords)

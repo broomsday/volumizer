@@ -47,7 +47,7 @@ VOXEL_ATOM_NAMES = frozenset(
         "SD",
     ]
 )
-BASE_ATOMIC_RADII = 2.0
+BASE_ATOMIC_RADIUS = 2.0
 ATOMIC_RADII = {
     "H": 1.11,
     "He": 1.40,
@@ -73,7 +73,7 @@ ATOMIC_RADII = {
     "Se": 1.90,
     "Br": 1.85,
     "I": 1.98,
-    "X": BASE_ATOMIC_RADII,
+    "X": BASE_ATOMIC_RADIUS,
 }
 VOXEL_SIZE = 2.0
 OCCLUDED_DIMENSION_LIMIT = 4

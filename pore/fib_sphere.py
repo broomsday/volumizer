@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 from pore import utils
-from pore.constants import ATOMIC_RADII, BASE_ATOMIC_RADII
+from pore.constants import ATOMIC_RADII, BASE_ATOMIC_RADIUS
 
 
 GOLDEN_RATIO = (1 + np.sqrt(5.0)) / 4
@@ -70,7 +70,7 @@ def get_fibonacci_sphere_radii(element: str, voxel_size: float) -> list[float]:
     We always place a single radii at the VDW radius for the element corresponding to this
     atom, and only use additional, smaller radii when needed.
     """
-    vdw_radius = ATOMIC_RADII.get(element, BASE_ATOMIC_RADII)
+    vdw_radius = ATOMIC_RADII.get(element, BASE_ATOMIC_RADIUS)
     radii = [vdw_radius]
 
     scale_factor = 1
@@ -86,16 +86,17 @@ def add_extra_points(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE)
     For each given point which represents the center of a heavy atom,
     add additional points on a surface around that point at one or more radii.
     """
-    # TODO elements should be added to the coords dataframe (done before this function is called)
-    # TODO use the actual element to get the radii rather than assuming carbon
-    radii = get_fibonacci_sphere_radii("C", voxel_size)
+    elemental_radii = {element: get_fibonacci_sphere_radii(element, voxel_size) for element in set(coords["element"])}
 
-    extra_coords = pd.DataFrame.from_dict({"x": [], "y": [], "z": []})
-    for radius in radii:
-        num_samples = estimate_fibonacci_sphere_samples(radius, voxel_size)
-        for _, coord in coords.iterrows():
-            extra_points = pd.DataFrame.from_dict(fibonacci_sphere(radius, coord.x, coord.y, coord.z, num_samples))
-            extra_coords = extra_coords.append(extra_points, ignore_index=True)
+    extra_coords = pd.DataFrame.from_dict({"x": [], "y": [], "z": [], "element": []})
+    for element, radii in elemental_radii.items():
+        for radius in radii:
+            num_samples = estimate_fibonacci_sphere_samples(radius, voxel_size)
+            for _, coord in coords[coords["element"] == element].iterrows():
+                extra_points = pd.DataFrame.from_dict(fibonacci_sphere(radius, coord.x, coord.y, coord.z, num_samples))
+                extra_points["element"] = element
+                extra_coords = extra_coords.append(extra_points, ignore_index=True)
 
     coords = coords.append(extra_coords, ignore_index=True)
+
     return coords
