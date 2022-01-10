@@ -13,7 +13,9 @@ import pandas as pd
 import numpy as np
 
 from pore.constants import VOXEL_ATOM_NAMES, VOXEL_TYPE_CHAIN_MAP, VOXEL_TYPE_ATOM_MAP
+from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
 from pore.types import VoxelGroup
+from pore import utils
 
 
 PDB_IN = PDBParser()
@@ -28,12 +30,12 @@ class ProteinSelect(Select):
     def accept_model(self, model):
         if (model.serial_num == 0) or (model.serial_num == 1):
             return True
-        return False
+        return utils.KEEP_MODELS
 
     def accept_residue(self, residue):
         if residue.resname in self.components:
             return True
-        return False
+        return utils.KEEP_NON_PROTEIN
 
     def accept_atom(self, atom):
         if (not atom.is_disordered()) or (atom.get_altloc() == "A"):
@@ -41,7 +43,7 @@ class ProteinSelect(Select):
 
         if atom.element != "H":
             return True
-        return True
+        return utils.KEEP_HYDROGENS
 
 
 def save_pdb(structure: Structure, pdb_file: Path) -> None:
@@ -153,3 +155,26 @@ def points_to_pdb(
             ],
         )
     )
+
+
+def save_annotated_pdb(pdb_name: str, annotated_lines: list[str]) -> None:
+    """
+    Save a PDB formatted coordinate file of the voxels.
+    Individual atoms/voxels are labelled according to type
+    """
+    # get the original PDB lines so that our annotation can be appended
+    with open(PREPARED_PDB_DIR / f"{pdb_name}.pdb", mode="r", encoding="utf-8") as input_pdb_file:
+        pdb_lines = input_pdb_file.readlines()
+    pdb_lines = [line.rstrip("\n") for line in pdb_lines]
+
+    # remove the terminal END line (NOTE: also removes terminal ENDMDL line)
+    for line in pdb_lines[::-1]:
+        if line.strip() == "":
+            pdb_lines.pop()
+        if ("ENDMDL" not in line) and ("END" in line):
+            pdb_lines.pop()
+            break
+    
+    # add the annotated lines and save
+    with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as annotated_pdb_file:
+        annotated_pdb_file.write("\n".join([*pdb_lines, "END", *annotated_lines]))

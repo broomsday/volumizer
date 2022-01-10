@@ -18,7 +18,7 @@ class VoxelGroup(NamedTuple):
     indices: set[int]
     num_voxels: int
     voxel_type: Optional[str] = None
-    volume: Optional[float] = None
+    volume: float = 0.0
 
 
 class Annotation(NamedTuple):
