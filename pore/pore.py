@@ -7,7 +7,7 @@ from pathlib import Path
 
 from Bio.PDB import Structure
 
-from pore import rcsb, utils, pdb, voxel, fib_sphere
+from pore import rcsb, utils, pdb, voxel, fib_sphere, align
 from pore.types import Annotation
 from pore.paths import PREPARED_PDB_DIR
 
@@ -70,7 +70,7 @@ def prepare_pdb_structure(structure: Structure) -> Structure:
 
     structure = pdb.clean_structure(structure, protein_components)
 
-    # TODO align
+    structure = align.align_structure(structure)
 
     return structure
 
