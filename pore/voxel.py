@@ -12,7 +12,7 @@ from tqdm import tqdm
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from pore import utils
+from pore import utils, align
 from pore.constants import OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
 from pore.types import VoxelGroup
 
@@ -327,8 +327,36 @@ def get_agglomerated_type(
     return "pocket"
 
 
+def get_voxel_group_center(voxel_indices: set[int], voxel_grid: VoxelGrid) -> np.ndarray:
+    """
+    Compute the center of geometry for the voxel group.
+    """
+    voxel_coords = np.array([voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices])
+    return np.mean(voxel_coords, axis=0)
+
+
+def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Align the voxel group to it's principal axes, then compute the maximum length along each axis.
+    """
+    voxel_coords = np.array([voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices])
+
+    rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
+    print(rotation)
+    print(translation)
+
+    # TODO apply the rotation and translation
+
+    # TODO compute the maximum length across each axis
+
+    # TODO order the lengths greatest to least
+
+    quit()
+    return None
+
+
 def get_pores_pockets_cavities_occluded(
-    buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid_dimensions: np.ndarray
+    buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid: VoxelGrid
 ) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
     """
     Agglomerate buried solvent voxels into pores, pockets, cavities, and simply occluded.
@@ -360,13 +388,15 @@ def get_pores_pockets_cavities_occluded(
                 np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
                 np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
             )
-            cavity_indices = compute_voxel_indices(cavity_voxels, voxel_grid_dimensions)
+            cavity_indices = compute_voxel_indices(cavity_voxels, voxel_grid.x_y_z)
             cavities[cavity_id] = VoxelGroup(
                 voxels=cavity_voxels,
                 indices=cavity_indices,
                 num_voxels=len(cavity_indices),
                 voxel_type="cavity",
                 volume=compute_voxel_group_volume(len(cavity_indices)) * VOXEL_VOLUME,
+                center=get_voxel_group_center(cavity_indices, voxel_grid),
+                axial_lengths=get_voxel_group_axial_lengths(cavity_indices, voxel_grid),
             )
             cavity_id += 1
         elif agglomerated_type == "pore":
@@ -375,13 +405,15 @@ def get_pores_pockets_cavities_occluded(
                 np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
                 np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
             )
-            pore_indices = compute_voxel_indices(pore_voxels, voxel_grid_dimensions)
+            pore_indices = compute_voxel_indices(pore_voxels, voxel_grid.x_y_z)
             pores[pore_id] = VoxelGroup(
                 voxels=pore_voxels,
                 indices=pore_indices,
                 num_voxels=len(pore_indices),
                 voxel_type="pore",
                 volume=compute_voxel_group_volume(len(pore_indices)) * VOXEL_VOLUME,
+                center=get_voxel_group_center(pore_indices, voxel_grid),
+                axial_lengths=get_voxel_group_axial_lengths(pore_indices, voxel_grid),
             )
             pore_id += 1
         elif agglomerated_type == "pocket":
@@ -392,13 +424,15 @@ def get_pores_pockets_cavities_occluded(
                     np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
                     np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
                 )
-                occluded_indices = compute_voxel_indices(occluded_voxels, voxel_grid_dimensions)
+                occluded_indices = compute_voxel_indices(occluded_voxels, voxel_grid.x_y_z)
                 occluded[occluded_id] = VoxelGroup(
                     voxels=occluded_voxels,
                     indices=occluded_indices,
                     num_voxels=len(occluded_indices),
                     voxel_type="occluded",
                     volume=compute_voxel_group_volume(len(occluded_indices)),
+                    center=get_voxel_group_center(occluded_indices, voxel_grid),
+                    axial_lengths=get_voxel_group_axial_lengths(occluded_indices, voxel_grid),
                 )
                 occluded_id += 1
             # otherwise they are truly pockets
@@ -408,13 +442,15 @@ def get_pores_pockets_cavities_occluded(
                     np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
                     np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
                 )
-                pocket_indices = compute_voxel_indices(pocket_voxels, voxel_grid_dimensions)
+                pocket_indices = compute_voxel_indices(pocket_voxels, voxel_grid.x_y_z)
                 pockets[pocket_id] = VoxelGroup(
                     voxels=pocket_voxels,
                     indices=pocket_indices,
                     num_voxels=len(pocket_indices),
                     voxel_type="pocket",
                     volume=compute_voxel_group_volume(len(pocket_indices)) * VOXEL_VOLUME,
+                    center=get_voxel_group_center(pocket_indices, voxel_grid),
+                    axial_lengths=get_voxel_group_axial_lengths(pocket_indices, voxel_grid),
                 )
                 pocket_id += 1
 

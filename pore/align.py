@@ -15,7 +15,7 @@ def get_centering_vector(array_coords: np.ndarray) -> np.ndarray:
     """
     Compute the translation vector to place the coordinates center-of-geometry at [0,0,0]
     """
-    return np.mean(array_coords, 0) * -1
+    return np.mean(array_coords, axis=0) * -1
 
 
 def compute_principal_axis_matrix(array_coords: np.ndarray) -> np.ndarray:
@@ -37,14 +37,11 @@ def get_numpy_coords(coords: pd.DataFrame) -> np.ndarray:
     ], float)
 
 
-def get_principal_axis_alignment_translation_rotation(coords: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def get_principal_axis_alignment_translation_rotation(array_coords: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Get the translation vector and rotation matrix to align the coords to their principal axis
     and place the center-of-geometry at the origin.
     """
-    # convert coordinates into a numpy array for math operations
-    array_coords = get_numpy_coords(coords)
-
     translation = get_centering_vector(array_coords)
     array_coords += translation
 
@@ -77,7 +74,7 @@ def align_structure(structure: Structure) -> tuple[Structure, np.ndarray, np.nda
     Return the aligned structure as well as the rotation matrix and translation vector used.
     """
 
-    coords = pdb.get_structure_coords(structure)
+    coords = get_numpy_coords(pdb.get_structure_coords(structure))
     rotation, translation = get_principal_axis_alignment_translation_rotation(coords)
     structure = apply_rotation_translation(structure, rotation, translation)
 

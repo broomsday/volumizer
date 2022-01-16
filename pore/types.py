@@ -19,6 +19,8 @@ class VoxelGroup(NamedTuple):
     num_voxels: int
     voxel_type: Optional[str] = None
     volume: float = 0.0
+    center: Optional[np.ndarray] = None
+    axial_lengths: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None
 
 
 class Annotation(NamedTuple):

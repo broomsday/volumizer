@@ -30,11 +30,14 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
 
-    pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(buried_voxels, exposed_voxels, voxel_grid.x_y_z)
+    pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(buried_voxels, exposed_voxels, voxel_grid)
     pores = utils.sort_voxelgroups_by_volume(pores)
     pockets = utils.sort_voxelgroups_by_volume(pockets)
     cavities = utils.sort_voxelgroups_by_volume(cavities)
     occluded = utils.sort_voxelgroups_by_volume(occluded)
+
+    print(pores)
+    quit()
 
     pdb_lines = pdb.points_to_pdb(voxel_grid, pores, pockets, cavities, occluded)
 

@@ -59,10 +59,8 @@ def save_pdb(structure: Structure, pdb_file: Path, remarks: Optional[str] = None
         with open(pdb_file, mode="r", encoding="utf-8") as in_file:
             lines = in_file.readlines()
 
-        lines.append(remarks)
-
         with open(pdb_file, mode="w", encoding="utf-8") as out_file:
-            out_file.writelines(lines)
+            out_file.write(remarks + "".join(lines))
 
 
 def load_pdb(pdb_file: Path) -> Structure:
@@ -198,7 +196,5 @@ def generate_rotation_translation_remarks(rotation: np.ndarray, translation: np.
     """
     return (
         f"REMARK TRANSLATION {str(translation)}\n"
-        f"REMARK ROTATION_1 {str(rotation[0])}\n"
-        f"REMARK ROTATION_2 {str(rotation[1])}\n"
-        f"REMARK ROTATION_3 {str(rotation[2])}\n"
+        f"REMARK ROTATION [{str(rotation[0])}, {str(rotation[1])}, {str(rotation[2])}]\n"
     )
