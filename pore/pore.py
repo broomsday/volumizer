@@ -56,7 +56,7 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
     return (annotation, pdb_lines)
 
 
-def prepare_pdb_structure(structure: Structure) -> Structure:
+def prepare_pdb_structure(structure: Structure) -> tuple[Structure, str]:
     """
     Prepares a biopython Structure object for analysis by:
 
@@ -70,12 +70,13 @@ def prepare_pdb_structure(structure: Structure) -> Structure:
 
     structure = pdb.clean_structure(structure, protein_components)
 
-    structure = align.align_structure(structure)
+    structure, rotation, translation = align.align_structure(structure)
+    remarks = pdb.generate_rotation_translation_remarks(rotation, translation)
 
-    return structure
+    return structure, remarks
 
 
-def prepare_pdb_file(pdb_file: Path) -> Structure:
+def prepare_pdb_file(pdb_file: Path) -> tuple[Structure, str]:
     """
     Prepares a PDB file at the given path for analysis by:
 
@@ -92,8 +93,8 @@ def process_pdb_file(pdb_file: Path) -> tuple[Annotation, list[str]]:
     """
     Perform end-to-end pipeline on a single PDB file.
     """
-    prepared_structure = prepare_pdb_file(pdb_file)
-    pdb.save_pdb(prepared_structure, PREPARED_PDB_DIR / pdb_file.name)
+    prepared_structure, remarks = prepare_pdb_file(pdb_file)
+    pdb.save_pdb(prepared_structure, PREPARED_PDB_DIR / pdb_file.name, remarks=remarks)
 
     return annotate_pdb_structure(prepared_structure)
 

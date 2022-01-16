@@ -5,6 +5,7 @@ Functions for parsing, cleaning, and modifying PDBs.
 from pathlib import Path
 import tempfile
 import itertools
+from typing import Optional
 
 from Bio.PDB import PDBParser, Select, Structure
 from Bio.PDB.PDBIO import PDBIO
@@ -46,12 +47,22 @@ class ProteinSelect(Select):
         return utils.KEEP_HYDROGENS
 
 
-def save_pdb(structure: Structure, pdb_file: Path) -> None:
+def save_pdb(structure: Structure, pdb_file: Path, remarks: Optional[str] = None) -> None:
     """
     Save a biopython PDB structure to a PDB file.
     """
     PDB_OUT.set_structure(structure)
     PDB_OUT.save(str(pdb_file))
+
+    # if we are adding remarks, read in the just written file, add the remarks and overwrite
+    if remarks is not None:
+        with open(pdb_file, mode="r", encoding="utf-8") as in_file:
+            lines = in_file.readlines()
+
+        lines.append(remarks)
+
+        with open(pdb_file, mode="w", encoding="utf-8") as out_file:
+            out_file.writelines(lines)
 
 
 def load_pdb(pdb_file: Path) -> Structure:
@@ -178,3 +189,16 @@ def save_annotated_pdb(pdb_name: str, annotated_lines: list[str]) -> None:
     # add the annotated lines and save
     with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as annotated_pdb_file:
         annotated_pdb_file.write("\n".join([*pdb_lines, "END", *annotated_lines]))
+
+
+def generate_rotation_translation_remarks(rotation: np.ndarray, translation: np.ndarray) -> str:
+    """
+    Given a rotation matrix and translation vector, generate a string allowing them to be
+    written as REMARKS to a PDB file.
+    """
+    return (
+        f"REMARK TRANSLATION {str(translation)}\n"
+        f"REMARK ROTATION_1 {str(rotation[0])}\n"
+        f"REMARK ROTATION_2 {str(rotation[1])}\n"
+        f"REMARK ROTATION_3 {str(rotation[2])}\n"
+    )

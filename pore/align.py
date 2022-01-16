@@ -5,6 +5,7 @@ Module containing functions for alignment of coordinates, e.g. along principal a
 
 import pandas as pd
 import numpy as np
+from scipy.spatial.transform import Rotation
 from Bio.PDB import Structure
 
 from pore import pdb
@@ -14,18 +15,7 @@ def get_centering_vector(array_coords: np.ndarray) -> np.ndarray:
     """
     Compute the translation vector to place the coordinates center-of-geometry at [0,0,0]
     """
-    return np.mean(array_coords, 0)
-
-
-def order_principal_axis_matrix(eigen_values: list, eigen_vectors: list) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Put the principal axis eigen values and vectors in order, largest to smallest.
-    """
-    order = np.argsort(eigen_values)
-    eigen_values = eigen_values[order]
-    eigen_vectors = eigen_vectors[:, order].transpose() # TODO why transposing here?
-
-    return eigen_values, eigen_vectors
+    return np.mean(array_coords, 0) * -1
 
 
 def compute_principal_axis_matrix(array_coords: np.ndarray) -> np.ndarray:
@@ -33,9 +23,7 @@ def compute_principal_axis_matrix(array_coords: np.ndarray) -> np.ndarray:
     Compute the eigen values and eigen vectors of the points making up the system
     """
     inertia = np.dot(array_coords.transpose(), array_coords)
-
-    eigen_values, eigen_vectors = np.linalg.eig(inertia)
-    eigen_values, eigen_vectors = order_principal_axis_matrix(eigen_values, eigen_vectors)
+    _, eigen_vectors = np.linalg.eig(inertia)
 
     return eigen_vectors
 
@@ -49,20 +37,21 @@ def get_numpy_coords(coords: pd.DataFrame) -> np.ndarray:
     ], float)
 
 
-def align_coords_to_principal_axes(coords: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def get_principal_axis_alignment_translation_rotation(coords: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """
-    Translate the center-of-geometry of a set of coordinates to [0,0,0].
-    Then align to the principal axes.
+    Get the translation vector and rotation matrix to align the coords to their principal axis
+    and place the center-of-geometry at the origin.
     """
     # convert coordinates into a numpy array for math operations
     array_coords = get_numpy_coords(coords)
 
-    # get rotation and translation matrices for alignment to principal axes
     translation = get_centering_vector(array_coords)
+    array_coords += translation
+
+    # get rotation matrix for alignment to principal axes
     eigen_vectors = compute_principal_axis_matrix(array_coords)
-    print(eigen_vectors)
-    # TODO need module to compute rotation matrix (TODO: do this last)
-    rotation = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])  # TODO
+    identity = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+    rotation = Rotation.align_vectors(identity, eigen_vectors)[0].as_matrix()
 
     return rotation, translation
 
@@ -79,14 +68,17 @@ def apply_rotation_translation(structure: Structure, rotation: np.ndarray, trans
 
     return structure
 
-def align_structure(structure: Structure) -> Structure:
+
+def align_structure(structure: Structure) -> tuple[Structure, np.ndarray, np.ndarray]:
     """
     Translate the center-of-geometry of a protein to [0,0,0].
     Then align to the principal axes.
+
+    Return the aligned structure as well as the rotation matrix and translation vector used.
     """
 
     coords = pdb.get_structure_coords(structure)
-    rotation, translation = align_coords_to_principal_axes(coords)
+    rotation, translation = get_principal_axis_alignment_translation_rotation(coords)
     structure = apply_rotation_translation(structure, rotation, translation)
 
-    return structure
+    return structure, rotation, translation
