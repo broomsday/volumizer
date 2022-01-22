@@ -7,6 +7,7 @@ from pathlib import Path
 
 import gzip
 import numpy as np
+import pandas as pd
 
 from pore.paths import DOWNLOADED_PDB_DIR, PREPARED_PDB_DIR, ANNOTATED_PDB_DIR, PROTEIN_COMPONENTS_FILE
 from pore import rcsb
@@ -158,6 +159,44 @@ def print_annotation(annotation: Annotation) -> None:
     print(f"Total pore volume: {annotation.total_pore_volume}")
     print(f"Total cavity volume: {annotation.total_cavity_volume}")
     print(f"Total pocket volume: {annotation.total_pocket_volume}")
+    print("")
+
+    pores_df = pd.DataFrame.from_dict([
+        {
+            "index": i,
+            "volume": annotation.pore_volumes[i],
+            "x": annotation.pore_dimensions[i][0],
+            "y": annotation.pore_dimensions[i][1],
+            "z": annotation.pore_dimensions[i][2],
+        }
+        for i in annotation.pore_volumes.keys()
+    ])
+
+    cavities_df = pd.DataFrame.from_dict([
+        {
+            "index": i,
+            "volume": annotation.cavity_volumes[i],
+            "x": annotation.cavity_dimensions[i][0],
+            "y": annotation.cavity_dimensions[i][1],
+            "z": annotation.cavity_dimensions[i][2],
+        }
+        for i in annotation.cavity_volumes.keys()
+    ])
+
+    pockets_df = pd.DataFrame.from_dict([
+        {
+            "index": i,
+            "volume": annotation.pocket_volumes[i],
+            "x": annotation.pocket_dimensions[i][0],
+            "y": annotation.pocket_dimensions[i][1],
+            "z": annotation.pocket_dimensions[i][2],
+        }
+        for i in annotation.pocket_volumes.keys()
+    ])
+
+    print("Pores\n", pores_df)
+    print("\nCavities\n", cavities_df)
+    print("\nPockets\n", pockets_df)
 
 
 def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, VoxelGroup]:
@@ -165,4 +204,7 @@ def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, 
     Take a dictionary with indices as the keys and VoxelGroups as the values.
     Reassign the keys such that the VoxelGroups are sorted by volume.
     """
-    return {i: voxelgroup for i, voxelgroup in enumerate(sorted(voxelgroups.values(), key=lambda group: group.volume, reverse=True))}
+    return {
+        i: voxelgroup
+        for i, voxelgroup in enumerate(sorted(voxelgroups.values(), key=lambda group: group.volume, reverse=True))
+    }

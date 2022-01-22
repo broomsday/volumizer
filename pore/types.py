@@ -20,7 +20,7 @@ class VoxelGroup(NamedTuple):
     voxel_type: Optional[str] = None
     volume: float = 0.0
     center: Optional[np.ndarray] = None
-    axial_lengths: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None
+    axial_lengths: list[float] = [0.0, 0.0, 0.0]
 
 
 class Annotation(NamedTuple):
@@ -36,3 +36,6 @@ class Annotation(NamedTuple):
     pore_volumes: dict[int, Optional[float]]
     cavity_volumes: dict[int, Optional[float]]
     pocket_volumes: dict[int, Optional[float]]
+    pore_dimensions: dict[int, list[float]]
+    cavity_dimensions: dict[int, list[float]]
+    pocket_dimensions: dict[int, list[float]]

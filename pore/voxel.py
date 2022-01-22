@@ -335,24 +335,23 @@ def get_voxel_group_center(voxel_indices: set[int], voxel_grid: VoxelGrid) -> np
     return np.mean(voxel_coords, axis=0)
 
 
-def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid) -> list[float]:
     """
     Align the voxel group to it's principal axes, then compute the maximum length along each axis.
     """
     voxel_coords = np.array([voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices])
 
     rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
-    print(rotation)
-    print(translation)
 
-    # TODO apply the rotation and translation
+    # apply the rotation and translation
+    voxel_coords = align.rotate_and_translate_coords(voxel_coords, rotation, translation)
 
-    # TODO compute the maximum length across each axis
+    # compute the maximum length across each axis
+    xs = [voxel_coord[0] for voxel_coord in voxel_coords]
+    ys = [voxel_coord[1] for voxel_coord in voxel_coords]
+    zs = [voxel_coord[2] for voxel_coord in voxel_coords]
 
-    # TODO order the lengths greatest to least
-
-    quit()
-    return None
+    return sorted([max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)], reverse=True)
 
 
 def get_pores_pockets_cavities_occluded(
