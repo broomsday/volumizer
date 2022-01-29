@@ -106,16 +106,6 @@ def prepare_pdb_file(pdb_file: Path) -> tuple[Structure, str]:
     return prepare_pdb_structure(pdb.load_pdb(pdb_file))
 
 
-def process_pdb_file(pdb_file: Path) -> tuple[Annotation, list[str]]:
-    """
-    Perform end-to-end pipeline on a single PDB file.
-    """
-    prepared_structure, remarks = prepare_pdb_file(pdb_file)
-    pdb.save_pdb(prepared_structure, PREPARED_PDB_DIR / pdb_file.name, remarks=remarks)
-
-    return annotate_pdb_structure(prepared_structure)
-
-
 def download_pdb_file(pdb_id: str) -> Path:
     """
     Download the biological assembly from the RCSB.
@@ -126,3 +116,13 @@ def download_pdb_file(pdb_id: str) -> Path:
         utils.decompress_pdb(pdb_id)
 
     return utils.get_downloaded_pdb_path(pdb_id)
+
+
+def process_pdb_file(pdb_file: Path) -> tuple[Annotation, list[str]]:
+    """
+    Perform end-to-end pipeline on a single PDB file.
+    """
+    prepared_structure, remarks = prepare_pdb_file(pdb_file)
+    pdb.save_pdb(prepared_structure, PREPARED_PDB_DIR / pdb_file.name, remarks=remarks)
+
+    return annotate_pdb_structure(prepared_structure)
