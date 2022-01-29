@@ -30,13 +30,13 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
 
-    pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(buried_voxels, exposed_voxels, voxel_grid)
+    pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
+        buried_voxels, exposed_voxels, voxel_grid
+    )
     pores = utils.sort_voxelgroups_by_volume(pores)
     pockets = utils.sort_voxelgroups_by_volume(pockets)
     cavities = utils.sort_voxelgroups_by_volume(cavities)
     occluded = utils.sort_voxelgroups_by_volume(occluded)
-
-    pdb_lines = pdb.points_to_pdb(voxel_grid, pores, pockets, cavities, occluded)
 
     annotation = Annotation(
         total_pore_volume=utils.get_volume_summary(pores, "total"),
@@ -53,8 +53,11 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
         pocket_volumes={i: pocket.volume for i, pocket in pockets.items()},
         pore_dimensions={i: pore.axial_lengths for i, pore in pores.items()},
         cavity_dimensions={i: cavity.axial_lengths for i, cavity in cavities.items()},
-        pocket_dimensions={i: pocket.axial_lengths for i, pocket in pores.items()},
+        pocket_dimensions={i: pocket.axial_lengths for i, pocket in pockets.items()},
     )
+
+    pdb_lines = pdb.points_to_pdb(voxel_grid, pores, pockets, cavities, occluded)
+    pdb_lines.extend(pdb.generate_volume_remarks(annotation))
 
     return (annotation, pdb_lines)
 

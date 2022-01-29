@@ -15,7 +15,7 @@ import numpy as np
 
 from pore.constants import VOXEL_ATOM_NAMES, VOXEL_TYPE_CHAIN_MAP, VOXEL_TYPE_ATOM_MAP
 from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
-from pore.types import VoxelGroup
+from pore.types import VoxelGroup, Annotation
 from pore import utils
 
 
@@ -183,7 +183,7 @@ def save_annotated_pdb(pdb_name: str, annotated_lines: list[str]) -> None:
         if ("ENDMDL" not in line) and ("END" in line):
             pdb_lines.pop()
             break
-    
+
     # add the annotated lines and save
     with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as annotated_pdb_file:
         annotated_pdb_file.write("\n".join([*pdb_lines, "END", *annotated_lines]))
@@ -198,3 +198,25 @@ def generate_rotation_translation_remarks(rotation: np.ndarray, translation: np.
         f"REMARK TRANSLATION {str(translation)}\n"
         f"REMARK ROTATION [{str(rotation[0])}, {str(rotation[1])}, {str(rotation[2])}]\n"
     )
+
+
+def generate_volume_remarks(annotation: Annotation) -> list[str]:
+    """
+    Return REMARKS for a PDB file to hold all volume information from an annotation object.
+    """
+    pore_remarks = [
+        f"REMARK PORE VOLUME {annotation.pore_volumes[i]} DIMENSIONS {annotation.pore_dimensions[i][0], annotation.pore_dimensions[i][1], annotation.pore_dimensions[i][2]}"
+        for i in annotation.pore_volumes
+    ]
+
+    cavity_remarks = [
+        f"REMARK CAVITY VOLUME {annotation.cavity_volumes[i]} DIMENSIONS {annotation.cavity_dimensions[i][0], annotation.cavity_dimensions[i][1], annotation.cavity_dimensions[i][2]}"
+        for i in annotation.cavity_volumes
+    ]
+
+    pocket_remarks = [
+        f"REMARK POCKET VOLUME {annotation.pocket_volumes[i]} DIMENSIONS {annotation.pocket_dimensions[i][0], annotation.pocket_dimensions[i][1], annotation.pocket_dimensions[i][2]}"
+        for i in annotation.pocket_volumes
+    ]
+
+    return pore_remarks + cavity_remarks + pocket_remarks
