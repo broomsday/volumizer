@@ -4,6 +4,7 @@ Entry-level functions to find pores and cavities.
 
 
 from pathlib import Path
+from typing import Optional
 
 from Bio.PDB import Structure
 
@@ -12,7 +13,9 @@ from pore.types import Annotation
 from pore.paths import PREPARED_PDB_DIR
 
 
-def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]:
+def annotate_pdb_structure(
+    structure: Structure, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
+) -> tuple[Annotation, list[str]]:
     """
     Perform analysis of a prepared structure.
     """
@@ -33,10 +36,18 @@ def annotate_pdb_structure(structure: Structure) -> tuple[Annotation, list[str]]
     pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
         buried_voxels, exposed_voxels, voxel_grid
     )
-    pores = utils.sort_voxelgroups_by_volume(pores)
-    pockets = utils.sort_voxelgroups_by_volume(pockets)
-    cavities = utils.sort_voxelgroups_by_volume(cavities)
-    occluded = utils.sort_voxelgroups_by_volume(occluded)
+    pores = utils.sort_voxelgroups_by_volume(
+        utils.filter_voxelgroups_by_volume(pores, min_voxels=min_voxels, min_volume=min_volume)
+    )
+    pockets = utils.sort_voxelgroups_by_volume(
+        utils.filter_voxelgroups_by_volume(pockets, min_voxels=min_voxels, min_volume=min_volume)
+    )
+    cavities = utils.sort_voxelgroups_by_volume(
+        utils.filter_voxelgroups_by_volume(cavities, min_voxels=min_voxels, min_volume=min_volume)
+    )
+    occluded = utils.sort_voxelgroups_by_volume(
+        utils.filter_voxelgroups_by_volume(occluded, min_voxels=min_voxels, min_volume=min_volume)
+    )
 
     annotation = Annotation(
         total_pore_volume=utils.get_volume_summary(pores, "total"),
