@@ -17,9 +17,6 @@ from pore.constants import OCCLUDED_DIMENSION_LIMIT, OCCLUDED_VOLUME_THRESHOLD, 
 from pore.types import VoxelGroup
 
 
-VOXEL_VOLUME = utils.VOXEL_SIZE ** 3
-
-
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
     """
     Produce a point-cloud from atomic coordinates.
@@ -77,14 +74,14 @@ def get_protein_and_solvent_voxels(
             indices=protein_voxel_indices,
             num_voxels=len(protein_voxel_indices),
             voxel_type="protein",
-            volume=len(protein_voxel_indices) * VOXEL_VOLUME,
+            volume=compute_voxel_group_volume(len(protein_voxel_indices)),
         ),
         VoxelGroup(
             voxels=solvent_voxels,
             indices=solvent_voxel_indices,
             num_voxels=len(solvent_voxel_indices),
             voxel_type="solvent",
-            volume=len(solvent_voxel_indices) * VOXEL_VOLUME,
+            volume=compute_voxel_group_volume(len(solvent_voxel_indices)),
         ),
     )
 
@@ -200,14 +197,14 @@ def get_exposed_and_buried_voxels(
             indices=exposed_voxel_indices,
             num_voxels=len(exposed_voxel_indices),
             voxel_type="exposed",
-            volume=len(exposed_voxel_indices) * VOXEL_VOLUME,
+            volume=compute_voxel_group_volume(len(exposed_voxel_indices)),
         ),
         VoxelGroup(
             voxels=(np.array(buried_voxels[0]), np.array(buried_voxels[1]), np.array(buried_voxels[2])),
             indices=buried_voxel_indices,
             num_voxels=len(buried_voxel_indices),
             voxel_type="buried",
-            volume=len(buried_voxel_indices) * VOXEL_VOLUME,
+            volume=compute_voxel_group_volume(len(buried_voxel_indices)),
         ),
     )
 
@@ -258,7 +255,7 @@ def compute_voxel_group_volume(num_voxels: int) -> float:
     """
     Return the volume of a number of voxels
     """
-    return num_voxels * VOXEL_VOLUME
+    return num_voxels * utils.VOXEL_VOLUME
 
 
 def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
@@ -393,7 +390,7 @@ def get_pores_pockets_cavities_occluded(
                 indices=cavity_indices,
                 num_voxels=len(cavity_indices),
                 voxel_type="cavity",
-                volume=compute_voxel_group_volume(len(cavity_indices)) * VOXEL_VOLUME,
+                volume=compute_voxel_group_volume(len(cavity_indices)),
                 center=get_voxel_group_center(cavity_indices, voxel_grid),
                 axial_lengths=get_voxel_group_axial_lengths(cavity_indices, voxel_grid),
             )
@@ -410,7 +407,7 @@ def get_pores_pockets_cavities_occluded(
                 indices=pore_indices,
                 num_voxels=len(pore_indices),
                 voxel_type="pore",
-                volume=compute_voxel_group_volume(len(pore_indices)) * VOXEL_VOLUME,
+                volume=compute_voxel_group_volume(len(pore_indices)),
                 center=get_voxel_group_center(pore_indices, voxel_grid),
                 axial_lengths=get_voxel_group_axial_lengths(pore_indices, voxel_grid),
             )
@@ -447,7 +444,7 @@ def get_pores_pockets_cavities_occluded(
                     indices=pocket_indices,
                     num_voxels=len(pocket_indices),
                     voxel_type="pocket",
-                    volume=compute_voxel_group_volume(len(pocket_indices)) * VOXEL_VOLUME,
+                    volume=compute_voxel_group_volume(len(pocket_indices)),
                     center=get_voxel_group_center(pocket_indices, voxel_grid),
                     axial_lengths=get_voxel_group_axial_lengths(pocket_indices, voxel_grid),
                 )

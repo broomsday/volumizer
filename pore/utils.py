@@ -16,6 +16,7 @@ from pore.types import Annotation, VoxelGroup
 
 
 VOXEL_SIZE = constants.VOXEL_SIZE
+VOXEL_VOLUME = VOXEL_SIZE ** 3
 KEEP_MODELS = True  # by default keep all models in case they are other biological assembly units
 KEEP_NON_PROTEIN = False  # by default only keep protein residues
 KEEP_HYDROGENS = False  # by default remove hydrogens
@@ -111,10 +112,13 @@ def ensure_protein_components_file() -> None:
 
 def set_resolution(resolution: float) -> None:
     """
-    Set the value of the VOXEL_SIZE global constant.
+    Set the value of the VOXEL_SIZE and VOXEL_VOLUME global constants.
     """
     global VOXEL_SIZE
+    global VOXEL_VOLUME
+
     VOXEL_SIZE = resolution
+    VOXEL_VOLUME = VOXEL_SIZE ** 3
 
 
 def set_non_protein(non_protein: bool) -> None:
@@ -161,38 +165,44 @@ def print_annotation(annotation: Annotation) -> None:
     print(f"Total pocket volume: {annotation.total_pocket_volume}")
     print("")
 
-    pores_df = pd.DataFrame.from_dict([
-        {
-            "index": i,
-            "volume": annotation.pore_volumes[i],
-            "x": annotation.pore_dimensions[i][0],
-            "y": annotation.pore_dimensions[i][1],
-            "z": annotation.pore_dimensions[i][2],
-        }
-        for i in annotation.pore_volumes.keys()
-    ])
+    pores_df = pd.DataFrame.from_dict(
+        [
+            {
+                "index": i,
+                "volume": annotation.pore_volumes[i],
+                "x": annotation.pore_dimensions[i][0],
+                "y": annotation.pore_dimensions[i][1],
+                "z": annotation.pore_dimensions[i][2],
+            }
+            for i in annotation.pore_volumes.keys()
+        ]
+    )
 
-    cavities_df = pd.DataFrame.from_dict([
-        {
-            "index": i,
-            "volume": annotation.cavity_volumes[i],
-            "x": annotation.cavity_dimensions[i][0],
-            "y": annotation.cavity_dimensions[i][1],
-            "z": annotation.cavity_dimensions[i][2],
-        }
-        for i in annotation.cavity_volumes.keys()
-    ])
+    cavities_df = pd.DataFrame.from_dict(
+        [
+            {
+                "index": i,
+                "volume": annotation.cavity_volumes[i],
+                "x": annotation.cavity_dimensions[i][0],
+                "y": annotation.cavity_dimensions[i][1],
+                "z": annotation.cavity_dimensions[i][2],
+            }
+            for i in annotation.cavity_volumes.keys()
+        ]
+    )
 
-    pockets_df = pd.DataFrame.from_dict([
-        {
-            "index": i,
-            "volume": annotation.pocket_volumes[i],
-            "x": annotation.pocket_dimensions[i][0],
-            "y": annotation.pocket_dimensions[i][1],
-            "z": annotation.pocket_dimensions[i][2],
-        }
-        for i in annotation.pocket_volumes.keys()
-    ])
+    pockets_df = pd.DataFrame.from_dict(
+        [
+            {
+                "index": i,
+                "volume": annotation.pocket_volumes[i],
+                "x": annotation.pocket_dimensions[i][0],
+                "y": annotation.pocket_dimensions[i][1],
+                "z": annotation.pocket_dimensions[i][2],
+            }
+            for i in annotation.pocket_volumes.keys()
+        ]
+    )
 
     print("Pores\n", pores_df)
     print("\nCavities\n", cavities_df)
