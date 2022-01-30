@@ -3,6 +3,7 @@ Command-line entry-point to find pores and cavities in PDBs.
 """
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 import pandas as pd
@@ -11,11 +12,13 @@ from pore import pore, cli, utils, pdb
 from pore.types import Annotation
 
 
-def porate_pdb_id(pdb_id: str) -> tuple[Annotation, pd.DataFrame]:
+def porate_pdb_id(pdb_id: str) -> tuple[Optional[Annotation], Optional[pd.DataFrame]]:
     """
     Download the given PDB ID and then porate it.
     """
     pdb_path = pore.download_pdb_file(pdb_id)
+    if pdb_path is None:
+        return None, None
 
     annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_path)
     annotation_df = utils.make_annotation_dataframe(annotation)

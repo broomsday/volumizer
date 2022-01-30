@@ -112,8 +112,8 @@ def download_pdb_file(pdb_id: str) -> Path:
     Unzip and save the PDB.
     """
     if not utils.is_pdb_downloaded(pdb_id):
-        rcsb.download_biological_assembly(pdb_id)
-        utils.decompress_pdb(pdb_id)
+        if rcsb.download_biological_assembly(pdb_id):
+            utils.decompress_pdb(pdb_id)
 
     return utils.get_downloaded_pdb_path(pdb_id)
 

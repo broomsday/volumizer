@@ -22,11 +22,15 @@ KEEP_NON_PROTEIN = False  # by default only keep protein residues
 KEEP_HYDROGENS = False  # by default remove hydrogens
 
 
-def get_downloaded_pdb_path(pdb_id: str) -> Path:
+def get_downloaded_pdb_path(pdb_id: str) -> Optional[Path]:
     """
     Return the path to the cleaned PDB file for this PDB ID.
     """
-    return paths.DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb"
+    path = paths.DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb"
+    if path.is_file():
+        return path
+
+    return None
 
 
 def get_prepared_pdb_path(pdb_id: str) -> Path:
@@ -47,6 +51,10 @@ def is_pdb_downloaded(pdb_id: str) -> bool:
     """
     Does the downloaded PDB archive exist.
     """
+    downloaded_path = get_downloaded_pdb_path(pdb_id)
+    if downloaded_path is None:
+        return False
+
     return get_downloaded_pdb_path(pdb_id).is_file()
 
 
@@ -157,25 +165,27 @@ def get_volume_summary(voxel_group_dict: dict[int, VoxelGroup], summary_type: st
     return 0.0
 
 
-def print_annotation(annotation: Annotation, annotation_df: pd.DataFrame) -> None:
+def print_annotation(annotation: Optional[Annotation], annotation_df: Optional[pd.DataFrame]) -> None:
     """
     Print the annotation to the terminal in a readable manner.
     """
-    print("")
-    print(f"Number of pores: {annotation.num_pores}")
-    print(f"Number of cavities: {annotation.num_cavities}")
-    print(f"Number of pockets: {annotation.num_pockets}")
-    print("")
-    print(f"Largest pore volume: {annotation.largest_pore_volume}")
-    print(f"Largest cavity volume: {annotation.largest_cavity_volume}")
-    print(f"Largest pocket volume: {annotation.largest_pocket_volume}")
-    print("")
-    print(f"Total pore volume: {annotation.total_pore_volume}")
-    print(f"Total cavity volume: {annotation.total_cavity_volume}")
-    print(f"Total pocket volume: {annotation.total_pocket_volume}")
-    print("")
+    if annotation is not None:
+        print("")
+        print(f"Number of pores: {annotation.num_pores}")
+        print(f"Number of cavities: {annotation.num_cavities}")
+        print(f"Number of pockets: {annotation.num_pockets}")
+        print("")
+        print(f"Largest pore volume: {annotation.largest_pore_volume}")
+        print(f"Largest cavity volume: {annotation.largest_cavity_volume}")
+        print(f"Largest pocket volume: {annotation.largest_pocket_volume}")
+        print("")
+        print(f"Total pore volume: {annotation.total_pore_volume}")
+        print(f"Total cavity volume: {annotation.total_cavity_volume}")
+        print(f"Total pocket volume: {annotation.total_pocket_volume}")
+        print("")
 
-    print(annotation_df)
+    if annotation_df is not None:
+        print(annotation_df)
 
 
 def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, VoxelGroup]:
