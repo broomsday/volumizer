@@ -9,7 +9,14 @@ from time import sleep
 import re
 
 from pore.paths import RCSB_CLUSTER_FILE, DOWNLOADED_PDB_DIR, RCSB_CCD_FILE
-from pore.constants import PDB_ID_LENGTH, RCSB_CLUSTER_URL, RCSB_BIOUNIT_URL, RCSB_STRUCTURE_URL, RCSB_CCD_URL
+from pore.constants import (
+    PDB_ID_LENGTH,
+    RCSB_CLUSTER_URL,
+    RCSB_BIOUNIT_URL,
+    RCSB_BUNDLE_URL,
+    RCSB_STRUCTURE_URL,
+    RCSB_CCD_URL,
+)
 from pore.types import ComponentData
 
 
@@ -38,7 +45,7 @@ def get_cluster_file() -> None:
         download_attempts += 1
 
     assert cluster_file_exists(RCSB_CLUSTER_FILE)
-        
+
 
 def parse_cluster_file(lines: list[str]) -> set[str]:
     """
@@ -58,16 +65,16 @@ def build_pdb_set(cluster_file: Path) -> set[str]:
     return pdbs
 
 
-def download_biological_assembly(pdb_id: str, retries: int=10) -> bool:
+def download_biological_assembly(pdb_id: str, retries: int = 10) -> bool:
     """
     Check to see if the biological assembly is available at the RCSB.
     If so, download it.
 
-    If not, download the standard PDB.
-
-    In both cases the file downloaded is compressed.
+    If not, check to see if the PDB-like bundle is available.
+    If not, just down the standard PDB.
     """
     biounit_url = RCSB_BIOUNIT_URL + f"{pdb_id[1:3].lower()}/{pdb_id.lower()}.pdb1.gz"
+    bundle_url = RCSB_BUNDLE_URL + f"{pdb_id[1:3].lower()}/{pdb_id.lower()}/{pdb_id.lower()}-pdb-bundle.tar.gz"
     structure_url = RCSB_STRUCTURE_URL + f"{pdb_id[1:3].lower()}/pdb{pdb_id.lower()}.ent.gz"
 
     for _ in range(retries):
@@ -76,10 +83,14 @@ def download_biological_assembly(pdb_id: str, retries: int=10) -> bool:
             return True
         except HTTPError:
             try:
-                request.urlretrieve(structure_url, DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.gz")
+                request.urlretrieve(bundle_url, DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.tar.gz")
                 return True
             except HTTPError:
-                return False
+                try:
+                    request.urlretrieve(structure_url, DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.gz")
+                    return True
+                except HTTPError:
+                    return False
         except URLError:
             sleep(1)
 
@@ -124,7 +135,7 @@ def format_component_type_line(component_type_line: str) -> str:
     """
     Pull out just the type without quotes from a CCD component type line.
     """
-    return " ".join(component_type_line.strip().split()[1:]).strip("\"")
+    return " ".join(component_type_line.strip().split()[1:]).strip('"')
 
 
 def parse_component_file(lines: list[str]) -> list[ComponentData]:
@@ -140,7 +151,10 @@ def parse_component_file(lines: list[str]) -> list[ComponentData]:
     component_ids = [format_component_id_line(id_line) for id_line in id_lines]
     component_types = [format_component_type_line(type_line) for type_line in type_lines]
 
-    return [ComponentData(component_id=component_id, component_type=component_type) for component_id, component_type in zip(component_ids, component_types)]
+    return [
+        ComponentData(component_id=component_id, component_type=component_type)
+        for component_id, component_type in zip(component_ids, component_types)
+    ]
 
 
 def is_component_protein(component: ComponentData) -> bool:

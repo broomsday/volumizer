@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import gzip
+import tarfile
 import numpy as np
 import pandas as pd
 
@@ -69,15 +70,24 @@ def decompress_pdb(pdb_id: str) -> None:
     Save as a text file.
     Delete the original compressed object.
     """
-    zipped_path = paths.DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.gz"
+    tar_gz_path = paths.DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.tar.gz"
+    gz_path = paths.DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb1.gz"
     unzipped_path = paths.DOWNLOADED_PDB_DIR / f"{pdb_id}.pdb"
 
-    with gzip.open(zipped_path, mode="rb") as fi:
-        pdb_data = fi.read()
-    with open(unzipped_path, mode="wb") as fo:
-        fo.write(pdb_data)
-
-    zipped_path.unlink()
+    if gz_path.is_file():
+        with gzip.open(gz_path, mode="rb") as fi:
+            pdb_data = fi.read()
+        with open(unzipped_path, mode="wb") as fo:
+            fo.write(pdb_data)
+        gz_path.unlink()
+    elif tar_gz_path.is_file():
+        with tarfile.open(tar_gz_path, mode="r") as fi:
+            name = [name for name in fi.getnames() if "bundle" in name][0]
+            member = fi.getmember(name)
+            pdb_data = fi.extractfile(member).readlines()
+        with open(unzipped_path, mode="wb") as fo:
+            fo.writelines(pdb_data)
+        tar_gz_path.unlink()
 
 
 def setup_dirs():

@@ -7,6 +7,7 @@ PDB_ID_LENGTH = 4
 RCSB_CLUSTER_URL = "https://cdn.rcsb.org/resources/sequence/clusters/bc-90.out"
 RCSB_CCD_URL = "https://ftp.wwpdb.org/pub/pdb/data/monomers/components.cif"
 RCSB_BIOUNIT_URL = "https://ftp.wwpdb.org/pub/pdb/data/biounit/PDB/divided/"
+RCSB_BUNDLE_URL = "https://files.rcsb.org/pub/pdb/compatible/pdb_bundle/"
 RCSB_STRUCTURE_URL = "https://ftp.wwpdb.org/pub/pdb/data/structures/divided/pdb/"
 
 VOXEL_ATOM_NAMES = frozenset(
