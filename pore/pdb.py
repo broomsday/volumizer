@@ -125,10 +125,6 @@ def make_atom_lines(
     """
     Make all atom lines for a given set of voxel indices
     """
-    if voxel_type == "POR":
-        print(voxel_indices)
-        print(surface_indices)
-
     return [
         make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index], 50.0)
         if voxel_index in surface_indices
