@@ -283,7 +283,7 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
 
 def get_agglomerated_type(
     query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...]
-) -> str:
+) -> tuple[set[int], str]:
     """
     Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Three possibilites:
 
@@ -301,9 +301,9 @@ def get_agglomerated_type(
 
     # if there are no surface contacts, this must be a cavity
     if len(direct_surface_indices) == 0:
-        return "cavity"
+        return direct_surface_indices, "cavity"
 
-    # add all voxel neighbours
+    # add all voxels that are neighbours to the direct surface voxels
     neighbor_surface_indices = set()
     for surface_index in direct_surface_indices:
         surface_voxel = get_single_voxel(buried_voxels, surface_index)
@@ -319,9 +319,9 @@ def get_agglomerated_type(
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
     single_surface_indices = breadth_first_search(buried_voxels, surface_indices)
     if len(single_surface_indices) < len(surface_indices):
-        return "pore"
+        return direct_surface_indices, "pore"
 
-    return "pocket"
+    return direct_surface_indices, "pocket"
 
 
 def get_voxel_group_center(voxel_indices: set[int], voxel_grid: VoxelGrid) -> np.ndarray:
@@ -377,7 +377,18 @@ def get_pores_pockets_cavities_occluded(
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
 
         # identify what these agglomerated voxels are
-        agglomerated_type = get_agglomerated_type(agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels)
+        direct_surface_indices, agglomerated_type = get_agglomerated_type(
+            agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
+        )
+        # get the surface voxels for use in getting their voxel-grid indices
+        surface_voxels = (
+            np.array([buried_voxels.voxels[0][index] for index in direct_surface_indices]),
+            np.array([buried_voxels.voxels[1][index] for index in direct_surface_indices]),
+            np.array([buried_voxels.voxels[2][index] for index in direct_surface_indices]),
+        )
+
+        # assign values to the VoxelGroup
+        # TODO lots of this looks like repetition, only a few elements are actually unique
         if agglomerated_type == "cavity":
             cavity_voxels = (
                 np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
@@ -388,6 +399,7 @@ def get_pores_pockets_cavities_occluded(
             cavities[cavity_id] = VoxelGroup(
                 voxels=cavity_voxels,
                 indices=cavity_indices,
+                surface_indices=compute_voxel_indices(surface_voxels, voxel_grid.x_y_z),
                 num_voxels=len(cavity_indices),
                 voxel_type="cavity",
                 volume=compute_voxel_group_volume(len(cavity_indices)),
@@ -405,6 +417,7 @@ def get_pores_pockets_cavities_occluded(
             pores[pore_id] = VoxelGroup(
                 voxels=pore_voxels,
                 indices=pore_indices,
+                surface_indices=compute_voxel_indices(surface_voxels, voxel_grid.x_y_z),
                 num_voxels=len(pore_indices),
                 voxel_type="pore",
                 volume=compute_voxel_group_volume(len(pore_indices)),
@@ -424,6 +437,7 @@ def get_pores_pockets_cavities_occluded(
                 occluded[occluded_id] = VoxelGroup(
                     voxels=occluded_voxels,
                     indices=occluded_indices,
+                    surface_indices=compute_voxel_indices(surface_voxels, voxel_grid.x_y_z),
                     num_voxels=len(occluded_indices),
                     voxel_type="occluded",
                     volume=compute_voxel_group_volume(len(occluded_indices)),
@@ -442,6 +456,7 @@ def get_pores_pockets_cavities_occluded(
                 pockets[pocket_id] = VoxelGroup(
                     voxels=pocket_voxels,
                     indices=pocket_indices,
+                    surface_indices=compute_voxel_indices(surface_voxels, voxel_grid.x_y_z),
                     num_voxels=len(pocket_indices),
                     voxel_type="pocket",
                     volume=compute_voxel_group_volume(len(pocket_indices)),

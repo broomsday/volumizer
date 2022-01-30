@@ -107,24 +107,32 @@ def make_atom_line(
     resnum: int,
     voxel_index: int,
     point: np.ndarray,
+    beta: float,
 ) -> str:
     """
     Make a single atom line for a single voxel
     """
-    return f"ATOM  {voxel_index:>5d}  {VOXEL_TYPE_ATOM_MAP[voxel_type]}   {voxel_type} {VOXEL_TYPE_CHAIN_MAP[voxel_type]}{resnum:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00  0.00           {VOXEL_TYPE_ATOM_MAP[voxel_type]}"
+    return f"ATOM  {voxel_index:>5d}  {VOXEL_TYPE_ATOM_MAP[voxel_type]}   {voxel_type} {VOXEL_TYPE_CHAIN_MAP[voxel_type]}{resnum:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00{beta:>6.2f}           {VOXEL_TYPE_ATOM_MAP[voxel_type]}"
 
 
 def make_atom_lines(
     voxel_type: str,
     resnum: int,
     voxel_indices: set[int],
+    surface_indices: set[int],
     voxel_grid_centers: np.ndarray,
 ) -> list[str]:
     """
     Make all atom lines for a given set of voxel indices
     """
+    if voxel_type == "POR":
+        print(voxel_indices)
+        print(surface_indices)
+
     return [
-        make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index])
+        make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index], 50.0)
+        if voxel_index in surface_indices
+        else make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index], 0.0)
         for voxel_index in voxel_indices
     ]
 
@@ -139,28 +147,23 @@ def points_to_pdb(
     """
     Write out voxels of our volumes as though they were atoms in a PDB file.
     """
-    pore_voxel_indices = {i: voxels.indices for i, voxels in pores.items()}
-    pocket_voxel_indices = {i: voxels.indices for i, voxels in pockets.items()}
-    cavity_voxel_indices = {i: voxels.indices for i, voxels in cavities.items()}
-    occluded_voxel_indices = {i: voxels.indices for i, voxels in occluded.items()}
-
     return list(
         itertools.chain(
             *[
-                make_atom_lines("POK", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
-                for voxel_group_index, voxel_indices in pocket_voxel_indices.items()
+                make_atom_lines("POK", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
+                for i, voxel_group in pockets.items()
             ],
             *[
-                make_atom_lines("POR", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
-                for voxel_group_index, voxel_indices in pore_voxel_indices.items()
+                make_atom_lines("POR", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
+                for i, voxel_group in pores.items()
             ],
             *[
-                make_atom_lines("CAV", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
-                for voxel_group_index, voxel_indices in cavity_voxel_indices.items()
+                make_atom_lines("CAV", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
+                for i, voxel_group in cavities.items()
             ],
             *[
-                make_atom_lines("OCC", voxel_group_index, voxel_indices, voxel_grid.voxel_centers)
-                for voxel_group_index, voxel_indices in occluded_voxel_indices.items()
+                make_atom_lines("OCC", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
+                for i, voxel_group in occluded.items()
             ],
         )
     )

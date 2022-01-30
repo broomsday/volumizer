@@ -17,6 +17,7 @@ class VoxelGroup(NamedTuple):
     voxels: tuple[np.ndarray, ...]
     indices: set[int]
     num_voxels: int
+    surface_indices: set[int] = set()
     voxel_type: Optional[str] = None
     volume: float = 0.0
     center: Optional[np.ndarray] = None
