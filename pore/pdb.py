@@ -47,7 +47,7 @@ class ProteinSelect(Select):
         return utils.KEEP_HYDROGENS
 
 
-def save_pdb(structure: Structure, pdb_file: Path, remarks: Optional[str] = None) -> None:
+def save_pdb(structure: Structure.Structure, pdb_file: Path, remarks: Optional[str] = None) -> None:
     """
     Save a biopython PDB structure to a PDB file.
     """
@@ -63,14 +63,14 @@ def save_pdb(structure: Structure, pdb_file: Path, remarks: Optional[str] = None
             out_file.write(remarks + "".join(lines))
 
 
-def load_pdb(pdb_file: Path) -> Structure:
+def load_pdb(pdb_file: Path) -> Structure.Structure:
     """
     Load a PDB file as a biopython PDB structure.
     """
     return PDB_IN.get_structure(pdb_file.stem, pdb_file)
 
 
-def clean_structure(structure: Structure, protein_components: set[str]) -> Structure:
+def clean_structure(structure: Structure.Structure, protein_components: set[str]) -> Structure.Structure:
     """
     Clean a PDB by saving it to a temporary file with the select class and then reloading.
     """
@@ -83,7 +83,7 @@ def clean_structure(structure: Structure, protein_components: set[str]) -> Struc
     return structure
 
 
-def get_structure_coords(structure: Structure, canonical_protein_atoms_only: bool = False) -> pd.DataFrame:
+def get_structure_coords(structure: Structure.Structure, canonical_protein_atoms_only: bool = False) -> pd.DataFrame:
     """
     Load the PDB file using Biopython.
 
