@@ -270,4 +270,4 @@ def save_annotation_dataframe(name: str, annotation_df: pd.DataFrame):
     """
     Save the annotation dataframe.
     """
-    annotation_df.to_json(paths.ANNOTATED_DF_DIR / f"{name}.json")
+    annotation_df.to_json(paths.ANNOTATED_DF_DIR / f"{name}.{str(VOXEL_SIZE)}.json")

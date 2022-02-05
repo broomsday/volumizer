@@ -6,8 +6,10 @@ from pathlib import Path
 import tempfile
 import itertools
 from typing import Optional
+import warnings
 
 from Bio.PDB import PDBParser, Select, Structure
+from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio.PDB.PDBIO import PDBIO
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
@@ -63,11 +65,18 @@ def save_pdb(structure: Structure.Structure, pdb_file: Path, remarks: Optional[s
             out_file.write(remarks + "".join(lines))
 
 
-def load_pdb(pdb_file: Path) -> Structure.Structure:
+def load_pdb(pdb_file: Path, show_warnings: bool = False) -> Structure.Structure:
     """
     Load a PDB file as a biopython PDB structure.
     """
-    return PDB_IN.get_structure(pdb_file.stem, pdb_file)
+    if not show_warnings:
+        warnings.filterwarnings("ignore", category=PDBConstructionWarning)
+    structure = PDB_IN.get_structure(pdb_file.stem, pdb_file)
+
+    # return the warnings back to their default state for future use
+    warnings.filterwarnings("default", category=PDBConstructionWarning)
+
+    return structure
 
 
 def clean_structure(structure: Structure.Structure, protein_components: set[str]) -> Structure.Structure:
@@ -184,7 +193,9 @@ def save_annotated_pdb(pdb_name: str, annotated_lines: list[str]) -> None:
             break
 
     # add the annotated lines and save
-    with open(ANNOTATED_PDB_DIR / f"{pdb_name}.pdb", mode="w", encoding="utf-8") as annotated_pdb_file:
+    with open(
+        ANNOTATED_PDB_DIR / f"{pdb_name}.{str(utils.VOXEL_SIZE)}.pdb", mode="w", encoding="utf-8"
+    ) as annotated_pdb_file:
         annotated_pdb_file.write("\n".join([*pdb_lines, "END", *annotated_lines]))
 
 
@@ -219,3 +230,10 @@ def generate_volume_remarks(annotation: Annotation) -> list[str]:
     ]
 
     return pore_remarks + cavity_remarks + pocket_remarks
+
+
+def generate_resolution_remarks() -> list[str]:
+    """
+    Add a REMARK line with the resolution used fo rthis annotation
+    """
+    return [f"REMARK RESOLUTION {str(utils.VOXEL_SIZE)}"]

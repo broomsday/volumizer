@@ -68,6 +68,7 @@ def annotate_pdb_structure(
     )
 
     pdb_lines = pdb.points_to_pdb(voxel_grid, pores, pockets, cavities, occluded)
+    pdb_lines.extend(pdb.generate_resolution_remarks())
     pdb_lines.extend(pdb.generate_volume_remarks(annotation))
 
     return (annotation, pdb_lines)
