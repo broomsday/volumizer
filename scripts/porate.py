@@ -3,43 +3,50 @@ Command-line entry-point to find pores and cavities in PDBs.
 """
 
 from pathlib import Path
-from typing import Optional
 
 import typer
-import pandas as pd
 
 from pore import pore, cli, utils, pdb
-from pore.types import Annotation
 
 
-def porate_pdb_id(pdb_id: str) -> tuple[Optional[Annotation], Optional[pd.DataFrame]]:
+def porate_pdb_id(pdb_id: str) -> None:
     """
     Download the given PDB ID and then porate it.
     """
-    pdb_path = pore.download_pdb_file(pdb_id)
-    if pdb_path is None:
-        return None, None
+    if utils.have_annotation(pdb_id):
+        print(f"Already completed: {pdb_id}")
+        annotation_df = utils.load_annotation_df(pdb_id)
+    else:
+        pdb_path = pore.download_pdb_file(pdb_id)
+        if pdb_path is None:
+            return None
 
-    annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_path)
-    annotation_df = utils.make_annotation_dataframe(annotation)
+        print(f"Working on: {pdb_id}")
+        annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_path)
+        annotation_df = utils.make_annotation_dataframe(annotation)
 
-    utils.save_annotation_dataframe(pdb_id, annotation_df)
-    pdb.save_annotated_pdb(pdb_id, annotated_pdb_lines)
+        utils.save_annotation_dataframe(pdb_id, annotation_df)
+        pdb.save_annotated_pdb(pdb_id, annotated_pdb_lines)
 
-    return annotation, annotation_df
+    print(annotation_df)
 
 
-def porate_pdb_file(pdb_file: Path) -> tuple[Annotation, pd.DataFrame]:
+def porate_pdb_file(pdb_file: Path) -> None:
     """
     Operate directly on the given PDB file.
     """
-    annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_file)
-    annotation_df = utils.make_annotation_dataframe(annotation)
+    if utils.have_annotation(pdb_file.stem):
+        print(f"Already completed: {pdb_file.stem}")
+        annotation_df = utils.load_annotation_df(pdb_file.stem)
+    else:
+        print(f"Working on: {pdb_file.stem}")
+        annotation, annotated_pdb_lines = pore.process_pdb_file(pdb_file)
+        annotation_df = utils.make_annotation_dataframe(annotation)
 
-    utils.save_annotation_dataframe(Path(pdb_file).stem, annotation_df)
-    pdb.save_annotated_pdb(Path(pdb_file).stem, annotated_pdb_lines)
+        utils.save_annotation_dataframe(Path(pdb_file).stem, annotation_df)
+        pdb.save_annotated_pdb(Path(pdb_file).stem, annotated_pdb_lines)
 
-    return annotation, annotation_df
+    print(annotation_df)
 
 
 def main(
@@ -58,29 +65,22 @@ def main(
 
     utils.set_resolution(resolution)
     utils.set_non_protein(non_protein)
-
     input_type = cli.guess_input_type(porate_input)
 
     if input_type == "pdb_id":
-        annotation, annotation_df = porate_pdb_id(porate_input)
-        utils.print_annotation(annotation, annotation_df)
+        porate_pdb_id(porate_input)
     elif input_type == "pdb_file":
         pdb_file = Path(porate_input)
-        annotation, annotation_df = porate_pdb_file(pdb_file)
-        utils.print_annotation(annotation, annotation_df)
+        porate_pdb_file(pdb_file)
     elif input_type == "id_file":
         with open(porate_input, mode="r", encoding="utf-8") as id_file:
-            ids = [line.strip() for line in id_file.readlines()]
-        for id in ids:
-            print(id)
-            annotation, annotation_df = porate_pdb_id(id)
-            utils.print_annotation(annotation, annotation_df)
+            pdb_ids = [line.strip() for line in id_file.readlines()]
+        for pdb_id in pdb_ids:
+            porate_pdb_id(pdb_id)
     elif input_type == "pdb_dir":
         pdb_files = Path(porate_input).glob("*.pdb")
         for pdb_file in pdb_files:
-            print(pdb_file.stem)
-            annotation, annotation_df = porate_pdb_file(pdb_file)
-            utils.print_annotation(annotation, annotation_df)
+            porate_pdb_file(pdb_file)
     else:
         raise RuntimeError("File mode not implemented")
 

@@ -165,29 +165,6 @@ def get_volume_summary(voxel_group_dict: dict[int, VoxelGroup], summary_type: st
     return 0.0
 
 
-def print_annotation(annotation: Optional[Annotation], annotation_df: Optional[pd.DataFrame]) -> None:
-    """
-    Print the annotation to the terminal in a readable manner.
-    """
-    if annotation is not None:
-        print("")
-        print(f"Number of pores: {annotation.num_pores}")
-        print(f"Number of cavities: {annotation.num_cavities}")
-        print(f"Number of pockets: {annotation.num_pockets}")
-        print("")
-        print(f"Largest pore volume: {annotation.largest_pore_volume}")
-        print(f"Largest cavity volume: {annotation.largest_cavity_volume}")
-        print(f"Largest pocket volume: {annotation.largest_pocket_volume}")
-        print("")
-        print(f"Total pore volume: {annotation.total_pore_volume}")
-        print(f"Total cavity volume: {annotation.total_cavity_volume}")
-        print(f"Total pocket volume: {annotation.total_pocket_volume}")
-        print("")
-
-    if annotation_df is not None:
-        print(annotation_df)
-
-
 def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, VoxelGroup]:
     """
     Take a dictionary with indices as the keys and VoxelGroups as the values.
@@ -271,3 +248,23 @@ def save_annotation_dataframe(name: str, annotation_df: pd.DataFrame):
     Save the annotation dataframe.
     """
     annotation_df.to_json(paths.ANNOTATED_DF_DIR / f"{name}.{str(VOXEL_SIZE)}.json")
+
+
+def have_annotation(file_stem: str) -> bool:
+    """
+    If we have already completed the annotation of this file, return True.
+    False otherwise.
+    """
+    pdb_path = paths.ANNOTATED_PDB_DIR / f"{file_stem}.{VOXEL_SIZE}.pdb"
+    df_path = paths.ANNOTATED_DF_DIR / f"{file_stem}.{VOXEL_SIZE}.json"
+    if pdb_path.is_file() and df_path.is_file():
+        return True
+
+    return False
+
+
+def load_annotation_df(file_stem: str) -> pd.DataFrame:
+    """
+    Return the annotation dataframe associated with this file-stem.
+    """
+    return pd.read_json(paths.ANNOTATED_DF_DIR / f"{file_stem}.{VOXEL_SIZE}.json")
