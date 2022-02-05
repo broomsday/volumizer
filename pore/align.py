@@ -32,9 +32,7 @@ def df_to_numpy_coords(coords: pd.DataFrame) -> np.ndarray:
     """
     Convert the coordinates from a pandas dataframe to a numpy array
     """
-    return np.array([
-        [row["x"], row["y"], row["z"]] for _, row in coords.iterrows()
-    ], float)
+    return np.array([[row["x"], row["y"], row["z"]] for _, row in coords.iterrows()], float)
 
 
 def get_principal_axis_alignment_translation_rotation(array_coords: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -54,7 +52,9 @@ def get_principal_axis_alignment_translation_rotation(array_coords: np.ndarray) 
     return rotation, translation
 
 
-def rotate_and_translate_structure(structure: Structure, rotation: np.ndarray, translation: np.ndarray) -> Structure:
+def rotate_and_translate_structure(
+    structure: Structure.Structure, rotation: np.ndarray, translation: np.ndarray
+) -> Structure.Structure:
     """
     Apply a rotation matrix and translation vector to the coordinates of the supplied structure.
     """
@@ -78,7 +78,7 @@ def rotate_and_translate_coords(coords: np.ndarray, rotation: np.ndarray, transl
     return coords
 
 
-def align_structure(structure: Structure) -> tuple[Structure, np.ndarray, np.ndarray]:
+def align_structure(structure: Structure.Structure) -> tuple[Structure.Structure, np.ndarray, np.ndarray]:
     """
     Translate the center-of-geometry of a protein to [0,0,0].
     Then align to the principal axes.

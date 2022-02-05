@@ -14,7 +14,7 @@ from pore.paths import PREPARED_PDB_DIR
 
 
 def annotate_pdb_structure(
-    structure: Structure, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
+    structure: Structure.Structure, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
 ) -> tuple[Annotation, list[str]]:
     """
     Perform analysis of a prepared structure.
@@ -74,7 +74,7 @@ def annotate_pdb_structure(
     return (annotation, pdb_lines)
 
 
-def prepare_pdb_structure(structure: Structure) -> tuple[Structure, str]:
+def prepare_pdb_structure(structure: Structure.Structure) -> tuple[Structure.Structure, str]:
     """
     Prepares a biopython Structure object for analysis by:
 
@@ -94,7 +94,7 @@ def prepare_pdb_structure(structure: Structure) -> tuple[Structure, str]:
     return structure, remarks
 
 
-def prepare_pdb_file(pdb_file: Path) -> tuple[Structure, str]:
+def prepare_pdb_file(pdb_file: Path) -> tuple[Structure.Structure, str]:
     """
     Prepares a PDB file at the given path for analysis by:
 
