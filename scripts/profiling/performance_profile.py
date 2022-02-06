@@ -3,6 +3,7 @@ import time
 import typer
 
 from pore import voxel, pdb, fib_sphere, utils, paths
+from scripts.profiling import voxel_w_c
 
 # from pore.voxel import get_single_voxel, is_neighbor_voxel, breadth_first_search
 
@@ -13,7 +14,8 @@ def main(code: str = "python"):
     """
     # load some test data from a PDB of interest
     start_load_time = time.time()
-    structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / "4JPN.pdb")
+    # structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / "4JPN.pdb")
+    structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / "pore.pdb")
     coords = pdb.get_structure_coords(structure)
     end_load_time = time.time()
 
@@ -45,7 +47,7 @@ def main(code: str = "python"):
             agglomerable_indices = voxel.breadth_first_search(buried_voxels.voxels, remaining_indices)
         elif code == "C":
             # TODO write something in C
-            agglomerable_indices = remaining_indices
+            agglomerable_indices = voxel_w_c.breadth_first_search(buried_voxels.voxels, remaining_indices)
         else:
             raise RuntimeError("Language not implemented")
 

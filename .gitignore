@@ -6,3 +6,4 @@ data/prepared_pdbs/
 .vscode/
 
 *pycache*
+*.so
