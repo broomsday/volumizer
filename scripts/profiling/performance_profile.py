@@ -8,14 +8,13 @@ from scripts.profiling import voxel_w_c
 # from pore.voxel import get_single_voxel, is_neighbor_voxel, breadth_first_search
 
 
-def main(code: str = "python"):
+def main(code: str = "python", pdb_name: str = "pore"):
     """
     Do performance profiling of pore.voxel.breadth_first_search and related functions
     """
     # load some test data from a PDB of interest
     start_load_time = time.time()
-    # structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / "4JPN.pdb")
-    structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / "pore.pdb")
+    structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / f"{pdb_name}.pdb")
     coords = pdb.get_structure_coords(structure)
     end_load_time = time.time()
 
@@ -61,7 +60,9 @@ def main(code: str = "python"):
     solvent_time = end_solvent_time - start_solvent_time
     bfs_time = end_bfs_time - start_bfs_time
 
-    print(f"Load time: {load_time}")
+    print(agglomerated_indices)
+    print(len(agglomerated_indices))
+    print(f"\nLoad time: {load_time}")
     print(f"Fibonacci time: {fib_time}")
     print(f"Preprocess time: {voxelize_time}")
     print(f"Init search time: {solvent_time}")

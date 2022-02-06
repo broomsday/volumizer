@@ -13,7 +13,7 @@ voxel_compute.get_single_voxel.restype = ctypes.c_void_p
 
 
 class VoxelIndices(ctypes.Structure):
-    _fields_ = [("a", ctypes.c_int), ("b", ctypes.c_int), ("c", ctypes.c_int)]
+    _fields_ = [("x", ctypes.c_int), ("y", ctypes.c_int), ("z", ctypes.c_int)]
 
 
 def is_neighbor_voxel(voxel_one, voxel_two, diagonal_neighbors: bool = DIAGONAL_NEIGHBORS) -> bool:
@@ -57,17 +57,33 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     queue_indices = set([start_index])
     neighbor_indices = set([start_index])
 
+    # make the voxels compatible with C
+    num_voxels = len(voxels[0])
+    voxels_x = (ctypes.c_int * num_voxels)(*voxels[0])
+    voxels_y = (ctypes.c_int * num_voxels)(*voxels[1])
+    voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
+
     while len(queue_indices) > 0:
         current_index = queue_indices.pop()
-
-        # TODO voxel_compute.get_single_voxel needs to take voxels and index as args
-        current_voxel_c = VoxelIndices.from_address(voxel_compute.get_single_voxel())
-        current_voxel = (current_voxel_c.a, current_voxel_c.b, current_voxel_c.c)
+        current_voxel_c = VoxelIndices.from_address(
+            voxel_compute.get_single_voxel(
+                ctypes.byref(voxels_x), ctypes.byref(voxels_y), ctypes.byref(voxels_z), current_index
+            )
+        )
+        current_voxel = (current_voxel_c.x, current_voxel_c.y, current_voxel_c.z)
         voxel_compute.free_voxel_indices(ctypes.byref(current_voxel_c))
-        del current_voxel_c
+        # del current_voxel_c
 
         for searched_index in searchable_indices:
-            searched_voxel = get_single_voxel(voxels, searched_index)
+            # searched_voxel = get_single_voxel(voxels, searched_index)
+            searched_voxel_c = VoxelIndices.from_address(
+                voxel_compute.get_single_voxel(
+                    ctypes.byref(voxels_x), ctypes.byref(voxels_y), ctypes.byref(voxels_z), searched_index
+                )
+            )
+            searched_voxel = (searched_voxel_c.x, searched_voxel_c.y, searched_voxel_c.z)
+            voxel_compute.free_voxel_indices(ctypes.byref(searched_voxel_c))
+            # del searched_voxel_c
             if is_neighbor_voxel(current_voxel, searched_voxel):
                 queue_indices.add(searched_index)
                 neighbor_indices.add(searched_index)
