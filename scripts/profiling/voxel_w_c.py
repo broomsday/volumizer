@@ -9,7 +9,8 @@ from pore.paths import C_CODE_DIR
 
 voxel_compute_path = C_CODE_DIR / "voxel_compute.so"
 voxel_compute = ctypes.CDLL(voxel_compute_path.absolute())
-voxel_compute.get_single_voxel.restype = ctypes.c_void_p
+# voxel_compute.get_single_voxel.restype = ctypes.c_void_p
+voxel_compute.get_single_voxel.restype = ctypes.POINTER(ctypes.c_int * 3)
 
 
 class VoxelIndices(ctypes.Structure):
@@ -63,27 +64,36 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     voxels_y = (ctypes.c_int * num_voxels)(*voxels[1])
     voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
 
+    # TODO: make the searchable indices and resulting neighbor indices compatible with C
+
+    # NOTE: below block is just test-code, have not written the C version of breadth_first_search, just working on sub-parts
+    voxel_compute.breadth_first_search.restype = ctypes.POINTER(ctypes.c_int * num_voxels)
+    initial_indices = (ctypes.c_int * num_voxels)(*([-1] * num_voxels))
+    test_indices_c = voxel_compute.breadth_first_search(ctypes.byref(initial_indices))
+    test_indices = [i for i in test_indices_c.contents]
+
+    initial_single_voxel_indices = (ctypes.c_int * 3)(*([-1] * 3))
     while len(queue_indices) > 0:
         current_index = queue_indices.pop()
-        current_voxel_c = VoxelIndices.from_address(
-            voxel_compute.get_single_voxel(
-                ctypes.byref(voxels_x), ctypes.byref(voxels_y), ctypes.byref(voxels_z), current_index
-            )
+        current_voxel_c = voxel_compute.get_single_voxel(
+            ctypes.byref(voxels_x),
+            ctypes.byref(voxels_y),
+            ctypes.byref(voxels_z),
+            current_index,
+            ctypes.byref(initial_single_voxel_indices),
         )
-        current_voxel = (current_voxel_c.x, current_voxel_c.y, current_voxel_c.z)
-        voxel_compute.free_voxel_indices(ctypes.byref(current_voxel_c))
-        # del current_voxel_c
+        current_voxel = [i for i in current_voxel_c.contents]
 
         for searched_index in searchable_indices:
-            # searched_voxel = get_single_voxel(voxels, searched_index)
-            searched_voxel_c = VoxelIndices.from_address(
-                voxel_compute.get_single_voxel(
-                    ctypes.byref(voxels_x), ctypes.byref(voxels_y), ctypes.byref(voxels_z), searched_index
-                )
+            searched_voxel_c = voxel_compute.get_single_voxel(
+                ctypes.byref(voxels_x),
+                ctypes.byref(voxels_y),
+                ctypes.byref(voxels_z),
+                searched_index,
+                ctypes.byref(initial_single_voxel_indices),
             )
-            searched_voxel = (searched_voxel_c.x, searched_voxel_c.y, searched_voxel_c.z)
-            voxel_compute.free_voxel_indices(ctypes.byref(searched_voxel_c))
-            # del searched_voxel_c
+            searched_voxel = [i for i in searched_voxel_c.contents]
+
             if is_neighbor_voxel(current_voxel, searched_voxel):
                 queue_indices.add(searched_index)
                 neighbor_indices.add(searched_index)

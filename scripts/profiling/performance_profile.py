@@ -45,7 +45,6 @@ def main(code: str = "python", pdb_name: str = "pore"):
         if code == "python":
             agglomerable_indices = voxel.breadth_first_search(buried_voxels.voxels, remaining_indices)
         elif code == "C":
-            # TODO write something in C
             agglomerable_indices = voxel_w_c.breadth_first_search(buried_voxels.voxels, remaining_indices)
         else:
             raise RuntimeError("Language not implemented")
