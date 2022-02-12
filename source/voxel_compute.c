@@ -47,6 +47,11 @@ int count_positive_ints(int values[]) {
 
 
 int *breadth_first_search(int* voxels_x, int* voxels_y, int* voxels_z, int* input_searchable_indices, int num_searchable_indices, int* neighbor_indices) {
+    // TODO while this is ~10x faster than the python code, it could be improved
+    //   in particular, the way the queue is used is poor
+    //   related to that, for-loops do not need to proceed over ALL elements
+    //   the solution is likely to not try and keep element order fixed
+    //     and use position integers for the searchable and neighbor indices ALSO
     int current_voxel_indices[3];
     int searched_voxel_indices[3];
 

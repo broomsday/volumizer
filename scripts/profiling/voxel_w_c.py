@@ -52,10 +52,7 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     Given a set of voxels and list of possible indices to add,
     add indices for all ordinal neighbors iteratively until no more such neighbors exist.
     """
-    searchable_indices = deepcopy(searchable_indices)
-    start_index = searchable_indices.pop()
-    queue_indices = set([start_index])
-    neighbor_indices = set([start_index])
+    c_searchable_indices = list(deepcopy(searchable_indices))
 
     # make the voxels compatible with C
     num_voxels = len(voxels[0])
@@ -63,39 +60,19 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     voxels_y = (ctypes.c_int * num_voxels)(*voxels[1])
     voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
 
-    # NOTE: below block is just test-code, have not written the C version of breadth_first_search, just working on sub-parts
-    voxel_compute.breadth_first_search.restype = ctypes.POINTER(ctypes.c_int * num_voxels)
+    # generate other inputs needed for C function
+    c_searchable_indices = (ctypes.c_int * len(c_searchable_indices))(*c_searchable_indices)
     initial_indices = (ctypes.c_int * num_voxels)(*([-1] * num_voxels))
-    test_indices_c = voxel_compute.breadth_first_search(ctypes.byref(initial_indices))
-    test_indices = [i for i in test_indices_c.contents]
-    print(test_indices)
-    quit()
 
-    initial_single_voxel_indices = (ctypes.c_int * 3)(*([-1] * 3))
-    while len(queue_indices) > 0:
-        current_index = queue_indices.pop()
-        current_voxel_c = voxel_compute.get_single_voxel(
-            ctypes.byref(voxels_x),
-            ctypes.byref(voxels_y),
-            ctypes.byref(voxels_z),
-            current_index,
-            ctypes.byref(initial_single_voxel_indices),
-        )
-        current_voxel = [i for i in current_voxel_c.contents]
+    # run the breadth-first search
+    voxel_compute.breadth_first_search.restype = ctypes.POINTER(ctypes.c_int * num_voxels)
+    neighbor_indices_c = voxel_compute.breadth_first_search(
+        ctypes.byref(voxels_x),
+        ctypes.byref(voxels_y),
+        ctypes.byref(voxels_z),
+        ctypes.byref(c_searchable_indices),
+        len(searchable_indices),
+        ctypes.byref(initial_indices),
+    )
 
-        for searched_index in searchable_indices:
-            searched_voxel_c = voxel_compute.get_single_voxel(
-                ctypes.byref(voxels_x),
-                ctypes.byref(voxels_y),
-                ctypes.byref(voxels_z),
-                searched_index,
-                ctypes.byref(initial_single_voxel_indices),
-            )
-            searched_voxel = [i for i in searched_voxel_c.contents]
-
-            if is_neighbor_voxel(current_voxel, searched_voxel):
-                queue_indices.add(searched_index)
-                neighbor_indices.add(searched_index)
-        searchable_indices -= neighbor_indices
-
-    return neighbor_indices
+    return set([i for i in neighbor_indices_c.contents if i != -1])
