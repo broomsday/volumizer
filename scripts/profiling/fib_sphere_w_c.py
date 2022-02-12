@@ -3,14 +3,21 @@ Functions for creating points on a sphere surface.
 """
 
 
+import ctypes
+
 import pandas as pd
 import numpy as np
 
 from pore import utils
 from pore.constants import ATOMIC_RADII, BASE_ATOMIC_RADIUS
+from pore.paths import C_CODE_DIR
 
 
 GOLDEN_RATIO = (1 + np.sqrt(5.0)) / 4
+
+
+fib_sphere_c_path = C_CODE_DIR / "fib_sphere.so"
+fib_sphere_c = ctypes.CDLL(str(fib_sphere_c_path.absolute()))
 
 
 def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) -> dict[str, list[float]]:
@@ -21,9 +28,11 @@ def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) 
     y_coords = []
     z_coords = []
 
+    # TODO convert this to a dictionary comprehension right from the start
+    # TODO we could be more performant by generating phi, theta as np matrices/vectors and then the same for x,y,z
     for i in range(samples):
         phi = np.arccos(1 - 2 * (i + 0.5) / samples)
-        theta = (np.pi * i) / GOLDEN_RATIO
+        theta = np.pi * i / GOLDEN_RATIO
 
         x_coords.append(x + (np.cos(theta) * np.sin(phi)) * radius)
         y_coords.append(y + (np.sin(theta) * np.sin(phi)) * radius)
@@ -90,11 +99,23 @@ def add_extra_points(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE)
     for element, radii in elemental_radii.items():
         for radius in radii:
             num_samples = estimate_fibonacci_sphere_samples(radius, voxel_size)
+            num_floats = num_samples * 3
+            initial_values = (ctypes.c_float * num_floats)(*([0.0] * num_floats))
+            fib_sphere_c.fibonacci_sphere.restype = ctypes.POINTER(ctypes.c_float * num_floats)
             for _, coord in coords[coords["element"] == element].iterrows():
-                extra_points = fibonacci_sphere(radius, coord.x, coord.y, coord.z, num_samples)
-                extra_x += extra_points["x"]
-                extra_y += extra_points["y"]
-                extra_z += extra_points["z"]
+                c_coords = fib_sphere_c.fibonacci_sphere(
+                    ctypes.c_float(radius),
+                    ctypes.c_float(coord.x),
+                    ctypes.c_float(coord.y),
+                    ctypes.c_float(coord.z),
+                    num_samples,
+                    ctypes.byref(initial_values),
+                )
+                computed_coords_flat = [coord for coord in c_coords.contents]
+
+                extra_x += computed_coords_flat[:num_samples]
+                extra_y += computed_coords_flat[num_samples : num_samples * 2]
+                extra_z += computed_coords_flat[num_samples * 2 :]
                 extra_element += [element] * num_samples
 
     extra_coords = pd.DataFrame.from_dict({"x": extra_x, "y": extra_y, "z": extra_z, "element": extra_element})

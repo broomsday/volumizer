@@ -3,7 +3,7 @@ import time
 import typer
 
 from pore import voxel, pdb, fib_sphere, utils, paths
-from scripts.profiling import voxel_w_c
+from scripts.profiling import voxel_w_c, fib_sphere_w_c
 
 # from pore.voxel import get_single_voxel, is_neighbor_voxel, breadth_first_search
 
@@ -19,7 +19,12 @@ def main(code: str = "python", pdb_name: str = "pore"):
     end_load_time = time.time()
 
     start_fib_time = time.time()
-    coords = fib_sphere.add_extra_points(coords, utils.VOXEL_SIZE)
+    if code == "python":
+        coords = fib_sphere.add_extra_points(coords, utils.VOXEL_SIZE)
+    elif code == "C":
+        coords = fib_sphere_w_c.add_extra_points(coords, utils.VOXEL_SIZE)
+    else:
+        raise RuntimeError("Language not implemented")
     end_fib_time = time.time()
 
     start_voxelize_time = time.time()
