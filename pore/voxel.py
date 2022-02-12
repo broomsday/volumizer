@@ -209,7 +209,9 @@ def get_exposed_and_buried_voxels(
     )
 
 
-def is_neighbor_voxel(voxel_one, voxel_two, diagonal_neighbors: bool = DIAGONAL_NEIGHBORS) -> bool:
+def is_neighbor_voxel(
+    voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...], diagonal_neighbors: bool = DIAGONAL_NEIGHBORS
+) -> bool:
     """
     Given two voxels return True if they are ordinal neighbors.
     """

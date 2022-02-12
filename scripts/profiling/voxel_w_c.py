@@ -8,8 +8,7 @@ from pore.paths import C_CODE_DIR
 
 
 voxel_compute_path = C_CODE_DIR / "voxel_compute.so"
-voxel_compute = ctypes.CDLL(voxel_compute_path.absolute())
-# voxel_compute.get_single_voxel.restype = ctypes.c_void_p
+voxel_compute = ctypes.CDLL(str(voxel_compute_path.absolute()))
 voxel_compute.get_single_voxel.restype = ctypes.POINTER(ctypes.c_int * 3)
 
 
@@ -64,13 +63,13 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     voxels_y = (ctypes.c_int * num_voxels)(*voxels[1])
     voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
 
-    # TODO: make the searchable indices and resulting neighbor indices compatible with C
-
     # NOTE: below block is just test-code, have not written the C version of breadth_first_search, just working on sub-parts
     voxel_compute.breadth_first_search.restype = ctypes.POINTER(ctypes.c_int * num_voxels)
     initial_indices = (ctypes.c_int * num_voxels)(*([-1] * num_voxels))
     test_indices_c = voxel_compute.breadth_first_search(ctypes.byref(initial_indices))
     test_indices = [i for i in test_indices_c.contents]
+    print(test_indices)
+    quit()
 
     initial_single_voxel_indices = (ctypes.c_int * 3)(*([-1] * 3))
     while len(queue_indices) > 0:
