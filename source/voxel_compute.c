@@ -47,47 +47,39 @@ int count_positive_ints(int values[]) {
 
 
 int *breadth_first_search(int* voxels_x, int* voxels_y, int* voxels_z, int* input_searchable_indices, int num_searchable_indices, int* neighbor_indices) {
-    // TODO while this is ~10x faster than the python code, it could be improved
-    //   in particular, the way the queue is used is poor
-    //   related to that, for-loops do not need to proceed over ALL elements
-    //   the solution is likely to not try and keep element order fixed
-    //     and use position integers for the searchable and neighbor indices ALSO
+    // initialize arrays to hold return values for `get_single_voxel`
     int current_voxel_indices[3];
     int searched_voxel_indices[3];
 
+    // initialize and set values for a copy of searchable indices and a queue
     int searchable_indices[num_searchable_indices];
     int queue_indices[num_searchable_indices];
-
     for (int i = 0; i < num_searchable_indices; i++) {
         searchable_indices[i] = input_searchable_indices[i];
         queue_indices[i] = -1;
     }
 
-    int queue_position = 0;
-    queue_indices[queue_position] = searchable_indices[0];
-    neighbor_indices[0] = searchable_indices[0];
-    searchable_indices[0] = -1;
+    // initialize a queue and stack
+    int queue_position = 0, indices_position = 0;
+    queue_indices[queue_position] = searchable_indices[indices_position];
+    neighbor_indices[indices_position] = searchable_indices[indices_position];
+    indices_position++;
 
     while (count_positive_ints(queue_indices) > 0) {
         int current_index = queue_indices[queue_position];
         queue_indices[queue_position] = -1;
-        queue_position -= 1;
+        queue_position--;
 
         int* current_voxel = get_single_voxel(voxels_x, voxels_y, voxels_z, current_index, current_voxel_indices);
-        for (int i = 0; i < num_searchable_indices; i++) {
-            if (searchable_indices[i] == -1) {
-                continue;
-            }
+        for (int i = indices_position; i < num_searchable_indices; i++) {
             int* searched_voxel = get_single_voxel(voxels_x, voxels_y, voxels_z, searchable_indices[i], searched_voxel_indices);
             if (is_neighbor_voxel(current_voxel, searched_voxel, 1)) {
-                queue_position += 1;
+                queue_position++;;
                 queue_indices[queue_position] = searchable_indices[i];
-                neighbor_indices[i] = searchable_indices[i];
-            }
-        }
-        for (int i = 0; i < num_searchable_indices; i++) {
-            if (neighbor_indices[i] != -1) {
-                searchable_indices[i] = -1;
+
+                neighbor_indices[indices_position] = searchable_indices[i];
+                searchable_indices[i] = searchable_indices[indices_position];
+                indices_position++;
             }
         }
     }
