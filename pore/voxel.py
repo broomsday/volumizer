@@ -4,6 +4,7 @@ Functions to manipulate and analyze voxels.
 
 
 from copy import deepcopy
+import ctypes
 
 import numpy as np
 import pandas as pd
@@ -15,6 +16,11 @@ from pyntcloud.structures.voxelgrid import VoxelGrid
 from pore import utils, align
 from pore.constants import OCCLUDED_DIMENSION_LIMIT, POCKET_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
 from pore.types import VoxelGroup
+from pore.paths import C_CODE_DIR
+
+
+VOXEL_C_PATH = C_CODE_DIR / "voxel.so"
+VOXEL_C = ctypes.CDLL(str(VOXEL_C_PATH.absolute()))
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -260,7 +266,7 @@ def compute_voxel_group_volume(num_voxels: int) -> float:
     return num_voxels * utils.VOXEL_VOLUME
 
 
-def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+def breadth_first_search_python(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
     add indices for all ordinal neighbors iteratively until no more such neighbors exist.
@@ -281,6 +287,50 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
         searchable_indices -= neighbor_indices
 
     return neighbor_indices
+
+
+def breadth_first_search_c(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+    """
+    Given a set of voxels and list of possible indices to add,
+    add indices for all ordinal neighbors iteratively until no more such neighbors exist.
+    """
+    c_searchable_indices = list(deepcopy(searchable_indices))
+
+    # make the voxels compatible with C
+    num_voxels = len(voxels[0])
+    voxels_x = (ctypes.c_int * num_voxels)(*voxels[0])
+    voxels_y = (ctypes.c_int * num_voxels)(*voxels[1])
+    voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
+
+    # generate other inputs needed for C function
+    c_searchable_indices = (ctypes.c_int * len(c_searchable_indices))(*c_searchable_indices)
+    initial_indices = (ctypes.c_int * num_voxels)(*([-1] * num_voxels))
+
+    # run the breadth-first search
+    VOXEL_C.breadth_first_search.restype = ctypes.POINTER(ctypes.c_int * num_voxels)
+    neighbor_indices_c = VOXEL_C.breadth_first_search(
+        ctypes.byref(voxels_x),
+        ctypes.byref(voxels_y),
+        ctypes.byref(voxels_z),
+        ctypes.byref(c_searchable_indices),
+        len(searchable_indices),
+        ctypes.byref(initial_indices),
+    )
+
+    return set([i for i in neighbor_indices_c.contents if i != -1])
+
+
+def breadth_first_search(
+    voxels: tuple[np.ndarray, ...], searchable_indices: set[int], performant: bool = True
+) -> set[int]:
+    """
+    Given a set of voxels and list of possible indices to add,
+    add indices for all ordinal neighbors iteratively until no more such neighbors exist.
+    """
+    if performant:
+        return breadth_first_search_c(voxels, searchable_indices)
+
+    return breadth_first_search_python(voxels, searchable_indices)
 
 
 def get_agglomerated_type(

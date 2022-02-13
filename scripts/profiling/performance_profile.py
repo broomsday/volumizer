@@ -3,9 +3,6 @@ import time
 import typer
 
 from pore import voxel, pdb, fib_sphere, utils, paths
-from scripts.profiling import voxel_w_c, fib_sphere_w_c
-
-# from pore.voxel import get_single_voxel, is_neighbor_voxel, breadth_first_search
 
 
 def main(code: str = "python", pdb_name: str = "pore"):
@@ -20,9 +17,9 @@ def main(code: str = "python", pdb_name: str = "pore"):
 
     start_fib_time = time.time()
     if code == "python":
-        coords = fib_sphere.add_extra_points(coords, utils.VOXEL_SIZE)
+        coords = fib_sphere.add_extra_points_python(coords, utils.VOXEL_SIZE)
     elif code == "C":
-        coords = fib_sphere_w_c.add_extra_points(coords, utils.VOXEL_SIZE)
+        coords = fib_sphere.add_extra_points_c(coords, utils.VOXEL_SIZE)
     else:
         raise RuntimeError("Language not implemented")
     end_fib_time = time.time()
@@ -48,9 +45,9 @@ def main(code: str = "python", pdb_name: str = "pore"):
 
         # perform BFS over the remaining indices
         if code == "python":
-            agglomerable_indices = voxel.breadth_first_search(buried_voxels.voxels, remaining_indices)
+            agglomerable_indices = voxel.breadth_first_search_python(buried_voxels.voxels, remaining_indices)
         elif code == "C":
-            agglomerable_indices = voxel_w_c.breadth_first_search(buried_voxels.voxels, remaining_indices)
+            agglomerable_indices = voxel.breadth_first_search_c(buried_voxels.voxels, remaining_indices)
         else:
             raise RuntimeError("Language not implemented")
 
