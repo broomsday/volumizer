@@ -18,6 +18,11 @@ int is_neighbor_voxel(int* voxel_one, int* voxel_two, int diagonal_neighbors) {
     int max_difference = 0;
     for (int i = 0; i < 3; i++) {
         int difference = abs(voxel_one[i] - voxel_two[i]);
+
+        if (difference > 1) {
+            return 0;
+        }
+
         sum_differences += difference;
         if (difference > max_difference) {
             max_difference = difference;

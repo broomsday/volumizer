@@ -226,6 +226,10 @@ def is_neighbor_voxel(
     max_difference = 0
     for dimension in range(3):
         difference = abs(voxel_one[dimension] - voxel_two[dimension])
+
+        if difference > 1:
+            return False
+
         sum_differences += difference
         if difference > max_difference:
             max_difference = difference
@@ -348,11 +352,6 @@ def get_agglomerated_type(
     b) all "surface" voxels can be agglomerated (BFS) into a single group -> this is a pocket
     c) the "surafce" voxels cannot be agglomerated (BFS) into just one group -> this is a pore
     """
-    # TODO nested for-loops here are 90% of compute time
-    import time
-
-    start_first_nest = time.time()
-
     direct_surface_indices = set()
     for query_index in query_indices:
         query_voxel = get_single_voxel(buried_voxels, query_index)
@@ -360,28 +359,21 @@ def get_agglomerated_type(
             exposed_voxel = get_single_voxel(exposed_voxels, exposed_voxel_index)
             if is_neighbor_voxel(query_voxel, exposed_voxel):
                 direct_surface_indices.add(query_index)
-
-    stop_first_nest = time.time()
-    print(f"First nest time: {stop_first_nest - start_first_nest}")
+                break
 
     # if there are no surface contacts, this must be a cavity
     if len(direct_surface_indices) == 0:
         return direct_surface_indices, "cavity"
 
     # add all voxels that are neighbours to the direct surface voxels
-    start_second_nest = time.time()
-
     neighbor_surface_indices = set()
-    for surface_index in direct_surface_indices:
-        surface_voxel = get_single_voxel(buried_voxels, surface_index)
-        for query_index in query_indices - direct_surface_indices:
-            query_voxel = get_single_voxel(buried_voxels, query_index)
+    for query_index in query_indices - direct_surface_indices:
+        query_voxel = get_single_voxel(buried_voxels, query_index)
+        for surface_index in direct_surface_indices:
+            surface_voxel = get_single_voxel(buried_voxels, surface_index)
             if is_neighbor_voxel(surface_voxel, query_voxel):
                 neighbor_surface_indices.add(query_index)
-
-    stop_second_nest = time.time()
-    print(f"Second nest time: {stop_second_nest - start_second_nest}")
-    quit()
+                break
 
     # we pass all surface indices and the buried voxels for BFS
     # If there is more than one distinct surface (e.g. a pore) then
@@ -447,6 +439,7 @@ def get_pores_pockets_cavities_occluded(
             agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
         )
         # for the specific case of a pocket, determine if it is so small that we'll just call it occluded
+        # TODO we should ignore ahead of time ALL overly small things, could save a lot of time
         if agglomerated_type == "pocket":
             if compute_voxel_group_volume(len(agglomerable_indices)) >= POCKET_VOLUME_THRESHOLD:
                 agglomerated_type == "pocket"
