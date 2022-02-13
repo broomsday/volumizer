@@ -24,6 +24,7 @@ def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) 
     """
     Generate `samples` points at `radius` from `x,y,z` such that points are roughly equally spaced.
     """
+    # this function could likely be made more performant by using numpy more intelligently
     x_coords = []
     y_coords = []
     z_coords = []

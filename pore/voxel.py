@@ -233,6 +233,7 @@ def is_neighbor_voxel(
     """
     Given two voxels return True if they are ordinal neighbors.
     """
+    # below approach is ~2x faster than using a list comprehension, presumably because of early exit
     sum_differences = 0
     max_difference = 0
     for dimension in range(3):
