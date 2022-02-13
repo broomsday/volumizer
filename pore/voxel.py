@@ -222,17 +222,21 @@ def is_neighbor_voxel(
     """
     Given two voxels return True if they are ordinal neighbors.
     """
-    differences = []
+    sum_differences = 0
+    max_difference = 0
     for dimension in range(3):
-        differences.append(abs(voxel_one[dimension] - voxel_two[dimension]))
+        difference = abs(voxel_one[dimension] - voxel_two[dimension])
+        sum_differences += difference
+        if difference > max_difference:
+            max_difference = difference
 
     # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is 1
-    if sum(differences) == 1:
+    if sum_differences == 1:
         return True
     # alternatively a voxel is a diagonal neighbour when the max distance on any axis is 1
     # here we only count being diagonal on a plane, not in all 3 dimensions
     #   which would be a longer distance between voxels
-    elif (diagonal_neighbors) and (sum(differences) == 2) and (max(differences) == 1):
+    elif (diagonal_neighbors) and (sum_differences == 2) and (max_difference == 1):
         return True
 
     return False
@@ -344,6 +348,11 @@ def get_agglomerated_type(
     b) all "surface" voxels can be agglomerated (BFS) into a single group -> this is a pocket
     c) the "surafce" voxels cannot be agglomerated (BFS) into just one group -> this is a pore
     """
+    # TODO nested for-loops here are 90% of compute time
+    import time
+
+    start_first_nest = time.time()
+
     direct_surface_indices = set()
     for query_index in query_indices:
         query_voxel = get_single_voxel(buried_voxels, query_index)
@@ -352,11 +361,16 @@ def get_agglomerated_type(
             if is_neighbor_voxel(query_voxel, exposed_voxel):
                 direct_surface_indices.add(query_index)
 
+    stop_first_nest = time.time()
+    print(f"First nest time: {stop_first_nest - start_first_nest}")
+
     # if there are no surface contacts, this must be a cavity
     if len(direct_surface_indices) == 0:
         return direct_surface_indices, "cavity"
 
     # add all voxels that are neighbours to the direct surface voxels
+    start_second_nest = time.time()
+
     neighbor_surface_indices = set()
     for surface_index in direct_surface_indices:
         surface_voxel = get_single_voxel(buried_voxels, surface_index)
@@ -364,6 +378,10 @@ def get_agglomerated_type(
             query_voxel = get_single_voxel(buried_voxels, query_index)
             if is_neighbor_voxel(surface_voxel, query_voxel):
                 neighbor_surface_indices.add(query_index)
+
+    stop_second_nest = time.time()
+    print(f"Second nest time: {stop_second_nest - start_second_nest}")
+    quit()
 
     # we pass all surface indices and the buried voxels for BFS
     # If there is more than one distinct surface (e.g. a pore) then
