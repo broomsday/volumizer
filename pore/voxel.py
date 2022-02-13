@@ -14,7 +14,7 @@ from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
 from pore import utils, align
-from pore.constants import OCCLUDED_DIMENSION_LIMIT, POCKET_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
+from pore.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS, DIAGONAL_NEIGHBORS
 from pore.types import VoxelGroup
 from pore.paths import C_CODE_DIR
 
@@ -434,17 +434,15 @@ def get_pores_pockets_cavities_occluded(
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
 
-        # identify what these agglomerated voxels are
-        direct_surface_indices, agglomerated_type = get_agglomerated_type(
-            agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
-        )
-        # for the specific case of a pocket, determine if it is so small that we'll just call it occluded
-        # TODO we should ignore ahead of time ALL overly small things, could save a lot of time
-        if agglomerated_type == "pocket":
-            if compute_voxel_group_volume(len(agglomerable_indices)) >= POCKET_VOLUME_THRESHOLD:
-                agglomerated_type == "pocket"
-            else:
-                agglomerated_type == "occluded"
+        # if too small, don't assign direct surface indices and assign type "occluded"
+        if len(agglomerable_indices) <= MIN_NUM_VOXELS:
+            direct_surface_indices = set()
+            agglomerated_type = "occluded"
+        else:
+            # identify what these agglomerated voxels are
+            direct_surface_indices, agglomerated_type = get_agglomerated_type(
+                agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
+            )
 
         # get the surface voxels for use in getting their voxel-grid indices
         surface_voxels = (
