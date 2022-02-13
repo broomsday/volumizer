@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from pore import pore, cli, utils, pdb
+from pore.constants import VOXEL_SIZE
 
 
 def porate_pdb_id(pdb_id: str) -> None:
@@ -53,7 +54,7 @@ def main(
     porate_input: str = typer.Argument(
         ..., help="PDB ID, PDB file, file with one PDB ID per line, or folder containing PDB files"
     ),
-    resolution: float = typer.Option(2.0, help="Edge-length of voxels used to discretize the structure."),
+    resolution: float = typer.Option(VOXEL_SIZE, help="Edge-length of voxels used to discretize the structure."),
     non_protein: bool = typer.Option(False, help="Include non-protein residues during the calculations."),
 ):
     """
