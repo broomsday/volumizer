@@ -6,7 +6,7 @@ from pore.voxel import get_single_voxel, is_neighbor_voxel, breadth_first_search
 from pore.paths import C_CODE_DIR
 
 
-voxel_compute_path = C_CODE_DIR / "voxel_compute.so"
+voxel_compute_path = C_CODE_DIR / "voxel.so"
 voxel_compute = ctypes.CDLL(str(voxel_compute_path.absolute()))
 
 
