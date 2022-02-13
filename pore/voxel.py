@@ -216,15 +216,91 @@ def get_exposed_and_buried_voxels(
     )
 
 
+def get_neighbor_voxels_python(
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray], reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return the voxels from a query group that neighbor a reference group.
+    """
+    neighbor_indices = []
+    for query_index in range(len(query_voxels[0])):
+        query_voxel = get_single_voxel(query_voxels, query_index)
+        for reference_index in range(len(reference_voxels[0])):
+            reference_voxel = get_single_voxel(reference_voxels, reference_index)
+            if is_neighbor_voxel(query_voxel, reference_voxel):
+                neighbor_indices.append(query_index)
+                break
+
+    return (
+        np.array([query_voxels[0][i] for i in neighbor_indices]),
+        np.array([query_voxels[1][i] for i in neighbor_indices]),
+        np.array([query_voxels[2][i] for i in neighbor_indices]),
+    )
+
+
+def get_neighbor_voxels_c(
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray], reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return the voxels from a query group that neighbor a reference group.
+    """
+    # make the voxels compatible with C
+    num_query = len(query_voxels[0])
+    query_x = (ctypes.c_int * num_query)(*query_voxels[0])
+    query_y = (ctypes.c_int * num_query)(*query_voxels[1])
+    query_z = (ctypes.c_int * num_query)(*query_voxels[2])
+
+    num_reference = len(reference_voxels[0])
+    reference_x = (ctypes.c_int * num_reference)(*reference_voxels[0])
+    reference_y = (ctypes.c_int * num_reference)(*reference_voxels[1])
+    reference_z = (ctypes.c_int * num_reference)(*reference_voxels[2])
+
+    # setup return and call the function
+    initial_indices = (ctypes.c_int * num_query)(*([-1] * num_query))
+    VOXEL_C.get_neighbor_voxels.restype = ctypes.POINTER(ctypes.c_int * num_query)
+    first_shell_indices_c = VOXEL_C.get_neighbor_voxels(
+        ctypes.byref(query_x),
+        ctypes.byref(query_y),
+        ctypes.byref(query_z),
+        ctypes.byref(reference_x),
+        ctypes.byref(reference_y),
+        ctypes.byref(reference_z),
+        num_query,
+        num_reference,
+        ctypes.byref(initial_indices),
+    )
+    first_shell_indices = [i for i in first_shell_indices_c.contents if i != -1]
+
+    return (
+        np.array([query_voxels[0][i] for i in first_shell_indices]),
+        np.array([query_voxels[1][i] for i in first_shell_indices]),
+        np.array([query_voxels[2][i] for i in first_shell_indices]),
+    )
+
+
 def get_first_shell_exposed_voxels(
-    exposed_voxels: VoxelGroup, buried_voxels: VoxelGroup, voxel_grid: VoxelGrid
+    exposed_voxels: VoxelGroup,
+    buried_voxels: VoxelGroup,
+    voxel_grid: VoxelGrid,
+    performant: bool = utils.using_performant(),
 ) -> VoxelGroup:
     """
-    Agglomerate buried solvent voxels into pores, pockets, cavities, and simply occluded.
+    Subset exposed voxels into only those neighboring one or more buried voxels.
     """
-    # TODO
+    if performant:
+        first_shell_voxels = get_neighbor_voxels_c(exposed_voxels.voxels, buried_voxels.voxels)
+    else:
+        first_shell_voxels = get_neighbor_voxels_python(exposed_voxels.voxels, buried_voxels.voxels)
 
-    return VoxelGroup()
+    first_shell_indices = compute_voxel_indices(first_shell_voxels, voxel_grid.x_y_z)
+
+    return VoxelGroup(
+        voxels=(np.array(first_shell_voxels[0]), np.array(first_shell_voxels[1]), np.array(first_shell_voxels[2])),
+        indices=first_shell_indices,
+        num_voxels=len(first_shell_indices),
+        voxel_type="exposed",
+        volume=compute_voxel_group_volume(len(first_shell_indices)),
+    )
 
 
 def is_neighbor_voxel(

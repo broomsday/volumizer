@@ -7,6 +7,8 @@ from pore.voxel import (
     is_neighbor_voxel,
     breadth_first_search_python,
     breadth_first_search_c,
+    get_neighbor_voxels_python,
+    get_neighbor_voxels_c,
 )
 from pore.paths import C_CODE_DIR
 
@@ -209,3 +211,65 @@ def test_breadth_first_search_python(voxels, searchable_indices, neighbor_indice
 )
 def test_breadth_first_search_c(voxels, searchable_indices, neighbor_indices):
     assert breadth_first_search_c(voxels, searchable_indices) == neighbor_indices
+
+
+@pytest.mark.parametrize(
+    "query_voxels, reference_voxels, neighbor_voxels",
+    [
+        (
+            (
+                np.array([1, 1, 1, 1, 2]),
+                np.array([0, 1, 1, 2, 2]),
+                np.array([0, 0, 1, 0, 2]),
+            ),
+            (
+                np.array([0, 2]),
+                np.array([0, 2]),
+                np.array([0, 3]),
+            ),
+            (
+                np.array([1, 1, 2]),
+                np.array([0, 1, 2]),
+                np.array([0, 0, 2]),
+            ),
+        ),
+    ],
+)
+def test_get_neighbor_voxels_python(query_voxels, reference_voxels, neighbor_voxels):
+    computed_neighbor_voxels = get_neighbor_voxels_python(query_voxels, reference_voxels)
+    assert (
+        np.allclose(computed_neighbor_voxels[0], neighbor_voxels[0])
+        and np.allclose(computed_neighbor_voxels[0], neighbor_voxels[0])
+        and np.allclose(computed_neighbor_voxels[0], neighbor_voxels[0])
+    )
+
+
+@pytest.mark.parametrize(
+    "query_voxels, reference_voxels, neighbor_voxels",
+    [
+        (
+            (
+                np.array([1, 1, 1, 1, 2]),
+                np.array([0, 1, 1, 2, 2]),
+                np.array([0, 0, 1, 0, 2]),
+            ),
+            (
+                np.array([0, 2]),
+                np.array([0, 2]),
+                np.array([0, 3]),
+            ),
+            (
+                np.array([1, 1, 2]),
+                np.array([0, 1, 2]),
+                np.array([0, 0, 2]),
+            ),
+        ),
+    ],
+)
+def test_get_neighbor_voxels_c(query_voxels, reference_voxels, neighbor_voxels):
+    computed_neighbor_voxels = get_neighbor_voxels_c(query_voxels, reference_voxels)
+    assert (
+        np.allclose(computed_neighbor_voxels[0], neighbor_voxels[0])
+        and np.allclose(computed_neighbor_voxels[0], neighbor_voxels[0])
+        and np.allclose(computed_neighbor_voxels[0], neighbor_voxels[0])
+    )

@@ -2,6 +2,7 @@
 
 
 #include <stdlib.h>
+#include <stdio.h>
 
 
 int *get_single_voxel(int* voxels_x, int* voxels_y, int* voxels_z, int index, int* voxel_indices) {
@@ -85,6 +86,26 @@ int *breadth_first_search(int* voxels_x, int* voxels_y, int* voxels_z, int* inpu
                 neighbor_indices[indices_position] = searchable_indices[i];
                 searchable_indices[i] = searchable_indices[indices_position];
                 indices_position++;
+            }
+        }
+    }
+
+    return neighbor_indices;
+}
+
+
+int *get_neighbor_voxels(int* query_voxels_x, int* query_voxels_y, int* query_voxels_z, int* reference_voxels_x, int* reference_voxels_y, int* reference_voxels_z, int num_query, int num_reference, int* neighbor_indices) {
+    // initialize arrays to hold return values for `get_single_voxel`
+    int query_voxel_indices[3];
+    int reference_voxel_indices[3];
+
+    for (int query_index = 0; query_index < num_query; query_index++) {
+        int* query_voxel = get_single_voxel(query_voxels_x, query_voxels_y, query_voxels_z, query_index, query_voxel_indices);
+        for (int reference_index = 0; reference_index < num_reference; reference_index++) {
+            int* reference_voxel = get_single_voxel(reference_voxels_x, reference_voxels_y, reference_voxels_z, reference_index, reference_voxel_indices);
+            if (is_neighbor_voxel(query_voxel, reference_voxel, 1)) {
+                neighbor_indices[query_index] = query_index;
+                break;
             }
         }
     }
