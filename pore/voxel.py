@@ -19,8 +19,9 @@ from pore.types import VoxelGroup
 from pore.paths import C_CODE_DIR
 
 
-VOXEL_C_PATH = C_CODE_DIR / "voxel.so"
-VOXEL_C = ctypes.CDLL(str(VOXEL_C_PATH.absolute()))
+if utils.using_performant():
+    VOXEL_C_PATH = C_CODE_DIR / "voxel.so"
+    VOXEL_C = ctypes.CDLL(str(VOXEL_C_PATH.absolute()))
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -321,7 +322,7 @@ def breadth_first_search_c(voxels: tuple[np.ndarray, ...], searchable_indices: s
 
 
 def breadth_first_search(
-    voxels: tuple[np.ndarray, ...], searchable_indices: set[int], performant: bool = True
+    voxels: tuple[np.ndarray, ...], searchable_indices: set[int], performant: bool = utils.using_performant()
 ) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,

@@ -15,8 +15,9 @@ from pore.paths import C_CODE_DIR
 
 GOLDEN_RATIO = (1 + np.sqrt(5.0)) / 4
 
-FIB_SPHERE_C_PATH = C_CODE_DIR / "fib_sphere.so"
-FIB_SPHERE_C = ctypes.CDLL(str(FIB_SPHERE_C_PATH.absolute()))
+if utils.using_performant():
+    FIB_SPHERE_C_PATH = C_CODE_DIR / "fib_sphere.so"
+    FIB_SPHERE_C = ctypes.CDLL(str(FIB_SPHERE_C_PATH.absolute()))
 
 
 def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) -> dict[str, list[float]]:
@@ -146,7 +147,7 @@ def add_extra_points_c(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZ
 
 
 def add_extra_points(
-    coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE, performant: bool = True
+    coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE, performant: bool = utils.using_performant()
 ) -> pd.DataFrame:
     """
     For each given point which represents the center of a heavy atom,
