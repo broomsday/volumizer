@@ -32,6 +32,9 @@ def annotate_pdb_structure(
     exposed_voxels, buried_voxels = voxel.get_exposed_and_buried_voxels(
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
+    # TODO if exposed voxels were split into those NEXT to a buried voxel and those not, it could yield big performance benefits in other places
+    first_shell_exposed_voxels = voxel.get_first_shell_exposed_voxels(exposed_voxels, buried_voxels, voxel_grid)
+    # TODO use the `first_shell_exposed_voxels` in place of `exposed_voxels` in `get_pores_pockets_cavities_occluded`
 
     pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
         buried_voxels, exposed_voxels, voxel_grid

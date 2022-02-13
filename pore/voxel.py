@@ -216,6 +216,17 @@ def get_exposed_and_buried_voxels(
     )
 
 
+def get_first_shell_exposed_voxels(
+    exposed_voxels: VoxelGroup, buried_voxels: VoxelGroup, voxel_grid: VoxelGrid
+) -> VoxelGroup:
+    """
+    Agglomerate buried solvent voxels into pores, pockets, cavities, and simply occluded.
+    """
+    # TODO
+
+    return VoxelGroup()
+
+
 def is_neighbor_voxel(
     voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...], diagonal_neighbors: bool = DIAGONAL_NEIGHBORS
 ) -> bool:
