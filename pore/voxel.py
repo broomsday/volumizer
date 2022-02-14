@@ -14,7 +14,7 @@ from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
 from pore import utils, align
-from pore.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS, DIAGONAL_NEIGHBORS
+from pore.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
 from pore.types import VoxelGroup
 from pore.paths import C_CODE_DIR
 
@@ -303,15 +303,12 @@ def get_first_shell_exposed_voxels(
     )
 
 
-def is_neighbor_voxel(
-    voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...], diagonal_neighbors: bool = DIAGONAL_NEIGHBORS
-) -> bool:
+def is_neighbor_voxel(voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...]) -> bool:
     """
     Given two voxels return True if they are ordinal neighbors.
     """
     # below approach is ~2x faster than using a list comprehension, presumably because of early exit
     sum_differences = 0
-    max_difference = 0
     for dimension in range(3):
         difference = abs(voxel_one[dimension] - voxel_two[dimension])
 
@@ -319,16 +316,9 @@ def is_neighbor_voxel(
             return False
 
         sum_differences += difference
-        if difference > max_difference:
-            max_difference = difference
 
     # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is 1
     if sum_differences == 1:
-        return True
-    # alternatively a voxel is a diagonal neighbour when the max distance on any axis is 1
-    # here we only count being diagonal on a plane, not in all 3 dimensions
-    #   which would be a longer distance between voxels
-    elif (diagonal_neighbors) and (sum_differences == 2) and (max_difference == 1):
         return True
 
     return False

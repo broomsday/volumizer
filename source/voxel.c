@@ -14,9 +14,8 @@ int *get_single_voxel(int* voxels_x, int* voxels_y, int* voxels_z, int index, in
 }
 
 
-int is_neighbor_voxel(int* voxel_one, int* voxel_two, int diagonal_neighbors) {
+int is_neighbor_voxel(int* voxel_one, int* voxel_two) {
     int sum_differences = 0;
-    int max_difference = 0;
     for (int i = 0; i < 3; i++) {
         int difference = abs(voxel_one[i] - voxel_two[i]);
 
@@ -25,17 +24,12 @@ int is_neighbor_voxel(int* voxel_one, int* voxel_two, int diagonal_neighbors) {
         }
 
         sum_differences += difference;
-        if (difference > max_difference) {
-            max_difference = difference;
-        }
     }
 
     if (sum_differences == 1) {
         return 1;
     }
-    else if ((diagonal_neighbors == 1) && (sum_differences == 2) && (max_difference == 1)) {
-        return 1;
-    }
+
     return 0;
 }
 
@@ -79,7 +73,7 @@ int *breadth_first_search(int* voxels_x, int* voxels_y, int* voxels_z, int* inpu
         int* current_voxel = get_single_voxel(voxels_x, voxels_y, voxels_z, current_index, current_voxel_indices);
         for (int i = indices_position; i < num_searchable_indices; i++) {
             int* searched_voxel = get_single_voxel(voxels_x, voxels_y, voxels_z, searchable_indices[i], searched_voxel_indices);
-            if (is_neighbor_voxel(current_voxel, searched_voxel, 1)) {
+            if (is_neighbor_voxel(current_voxel, searched_voxel)) {
                 queue_position++;;
                 queue_indices[queue_position] = searchable_indices[i];
 
@@ -103,7 +97,7 @@ int *get_neighbor_voxels(int* query_voxels_x, int* query_voxels_y, int* query_vo
         int* query_voxel = get_single_voxel(query_voxels_x, query_voxels_y, query_voxels_z, query_index, query_voxel_indices);
         for (int reference_index = 0; reference_index < num_reference; reference_index++) {
             int* reference_voxel = get_single_voxel(reference_voxels_x, reference_voxels_y, reference_voxels_z, reference_index, reference_voxel_indices);
-            if (is_neighbor_voxel(query_voxel, reference_voxel, 1)) {
+            if (is_neighbor_voxel(query_voxel, reference_voxel)) {
                 neighbor_indices[query_index] = query_index;
                 break;
             }

@@ -72,88 +72,46 @@ def test_get_single_voxel_c(voxels, index, voxel):
 
 
 @pytest.mark.parametrize(
-    "voxel_one, voxel_two, diagonal, is_neighbor",
+    "voxel_one, voxel_two, is_neighbor",
     [
         (
             (1, 7, 9),
             (2, 7, 9),
             True,
-            True,
         ),
         (
             (1, 7, 9),
             (2, 8, 9),
-            True,
-            True,
-        ),
-        (
-            (1, 7, 9),
-            (2, 8, 8),
-            True,
-            False,
-        ),
-        (
-            (1, 7, 9),
-            (2, 7, 9),
-            False,
-            True,
-        ),
-        (
-            (1, 7, 9),
-            (2, 8, 9),
-            False,
             False,
         ),
     ],
 )
-def test_is_neighbor_voxel(voxel_one, voxel_two, diagonal, is_neighbor):
-    assert is_neighbor_voxel(voxel_one, voxel_two, diagonal) == is_neighbor
+def test_is_neighbor_voxel(voxel_one, voxel_two, is_neighbor):
+    assert is_neighbor_voxel(voxel_one, voxel_two) == is_neighbor
 
 
 @pytest.mark.parametrize(
-    "voxel_one, voxel_two, diagonal, is_neighbor",
+    "voxel_one, voxel_two, is_neighbor",
     [
         (
             (1, 7, 9),
             (2, 7, 9),
             True,
-            True,
         ),
         (
             (1, 7, 9),
             (2, 8, 9),
-            True,
-            True,
-        ),
-        (
-            (1, 7, 9),
-            (2, 8, 8),
-            True,
-            False,
-        ),
-        (
-            (1, 7, 9),
-            (2, 7, 9),
-            False,
-            True,
-        ),
-        (
-            (1, 7, 9),
-            (2, 8, 9),
-            False,
             False,
         ),
     ],
 )
-def test_is_neighbor_voxel_c(voxel_one, voxel_two, diagonal, is_neighbor):
+def test_is_neighbor_voxel_c(voxel_one, voxel_two, is_neighbor):
     voxel_one = (ctypes.c_int * 3)(*voxel_one)
     voxel_two = (ctypes.c_int * 3)(*voxel_two)
-    diagonal_c = int(diagonal)
 
     is_neighbor_c = VOXEL_C.is_neighbor_voxel(
         ctypes.byref(voxel_one),
         ctypes.byref(voxel_two),
-        diagonal_c,
     )
 
     assert bool(is_neighbor_c) == is_neighbor
@@ -228,9 +186,9 @@ def test_breadth_first_search_c(voxels, searchable_indices, neighbor_indices):
                 np.array([0, 3]),
             ),
             (
-                np.array([1, 1, 2]),
-                np.array([0, 1, 2]),
-                np.array([0, 0, 2]),
+                np.array([1, 2]),
+                np.array([0, 2]),
+                np.array([0, 2]),
             ),
         ),
     ],
@@ -259,9 +217,9 @@ def test_get_neighbor_voxels_python(query_voxels, reference_voxels, neighbor_vox
                 np.array([0, 3]),
             ),
             (
-                np.array([1, 1, 2]),
-                np.array([0, 1, 2]),
-                np.array([0, 0, 2]),
+                np.array([1, 2]),
+                np.array([0, 2]),
+                np.array([0, 2]),
             ),
         ),
     ],
