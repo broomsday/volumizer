@@ -1,0 +1,9 @@
+data/annotated_dfs/
+data/annotated_pdbs/
+data/downloaded_pdbs/
+data/prepared_pdbs/
+
+.vscode/
+
+*pycache*
+*.so

@@ -4,6 +4,7 @@ Functions to manipulate and analyze voxels.
 
 
 from copy import deepcopy
+import ctypes
 
 import numpy as np
 import pandas as pd
@@ -13,8 +14,14 @@ from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
 from pore import utils, align
-from pore.constants import OCCLUDED_DIMENSION_LIMIT, POCKET_VOLUME_THRESHOLD, DIAGONAL_NEIGHBORS
+from pore.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
 from pore.types import VoxelGroup
+from pore.paths import C_CODE_DIR
+
+
+if utils.using_performant():
+    VOXEL_C_PATH = C_CODE_DIR / "voxel.so"
+    VOXEL_C = ctypes.CDLL(str(VOXEL_C_PATH.absolute()))
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -209,21 +216,109 @@ def get_exposed_and_buried_voxels(
     )
 
 
-def is_neighbor_voxel(voxel_one, voxel_two, diagonal_neighbors: bool = DIAGONAL_NEIGHBORS) -> bool:
+def get_neighbor_voxels_python(
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray], reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return the voxels from a query group that neighbor a reference group.
+    """
+    neighbor_indices = []
+    for query_index in range(len(query_voxels[0])):
+        query_voxel = get_single_voxel(query_voxels, query_index)
+        for reference_index in range(len(reference_voxels[0])):
+            reference_voxel = get_single_voxel(reference_voxels, reference_index)
+            if is_neighbor_voxel(query_voxel, reference_voxel):
+                neighbor_indices.append(query_index)
+                break
+
+    return (
+        np.array([query_voxels[0][i] for i in neighbor_indices]),
+        np.array([query_voxels[1][i] for i in neighbor_indices]),
+        np.array([query_voxels[2][i] for i in neighbor_indices]),
+    )
+
+
+def get_neighbor_voxels_c(
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray], reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return the voxels from a query group that neighbor a reference group.
+    """
+    # make the voxels compatible with C
+    num_query = len(query_voxels[0])
+    query_x = (ctypes.c_int * num_query)(*query_voxels[0])
+    query_y = (ctypes.c_int * num_query)(*query_voxels[1])
+    query_z = (ctypes.c_int * num_query)(*query_voxels[2])
+
+    num_reference = len(reference_voxels[0])
+    reference_x = (ctypes.c_int * num_reference)(*reference_voxels[0])
+    reference_y = (ctypes.c_int * num_reference)(*reference_voxels[1])
+    reference_z = (ctypes.c_int * num_reference)(*reference_voxels[2])
+
+    # setup return and call the function
+    initial_indices = (ctypes.c_int * num_query)(*([-1] * num_query))
+    VOXEL_C.get_neighbor_voxels.restype = ctypes.POINTER(ctypes.c_int * num_query)
+    first_shell_indices_c = VOXEL_C.get_neighbor_voxels(
+        ctypes.byref(query_x),
+        ctypes.byref(query_y),
+        ctypes.byref(query_z),
+        ctypes.byref(reference_x),
+        ctypes.byref(reference_y),
+        ctypes.byref(reference_z),
+        num_query,
+        num_reference,
+        ctypes.byref(initial_indices),
+    )
+    first_shell_indices = [i for i in first_shell_indices_c.contents if i != -1]
+
+    return (
+        np.array([query_voxels[0][i] for i in first_shell_indices]),
+        np.array([query_voxels[1][i] for i in first_shell_indices]),
+        np.array([query_voxels[2][i] for i in first_shell_indices]),
+    )
+
+
+def get_first_shell_exposed_voxels(
+    exposed_voxels: VoxelGroup,
+    buried_voxels: VoxelGroup,
+    voxel_grid: VoxelGrid,
+    performant: bool = utils.using_performant(),
+) -> VoxelGroup:
+    """
+    Subset exposed voxels into only those neighboring one or more buried voxels.
+    """
+    if performant:
+        first_shell_voxels = get_neighbor_voxels_c(exposed_voxels.voxels, buried_voxels.voxels)
+    else:
+        first_shell_voxels = get_neighbor_voxels_python(exposed_voxels.voxels, buried_voxels.voxels)
+
+    first_shell_indices = compute_voxel_indices(first_shell_voxels, voxel_grid.x_y_z)
+
+    return VoxelGroup(
+        voxels=(np.array(first_shell_voxels[0]), np.array(first_shell_voxels[1]), np.array(first_shell_voxels[2])),
+        indices=first_shell_indices,
+        num_voxels=len(first_shell_indices),
+        voxel_type="exposed",
+        volume=compute_voxel_group_volume(len(first_shell_indices)),
+    )
+
+
+def is_neighbor_voxel(voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...]) -> bool:
     """
     Given two voxels return True if they are ordinal neighbors.
     """
-    differences = []
+    # below approach is ~2x faster than using a list comprehension, presumably because of early exit
+    sum_differences = 0
     for dimension in range(3):
-        differences.append(abs(voxel_one[dimension] - voxel_two[dimension]))
+        difference = abs(voxel_one[dimension] - voxel_two[dimension])
+
+        if difference > 1:
+            return False
+
+        sum_differences += difference
 
     # a voxel is an ordinal neighbor when the sum of the absolute differences in axes indices is 1
-    if sum(differences) == 1:
-        return True
-    # alternatively a voxel is a diagonal neighbour when the max distance on any axis is 1
-    # here we only count being diagonal on a plane, not in all 3 dimensions
-    #   which would be a longer distance between voxels
-    elif (diagonal_neighbors) and (sum(differences) == 2) and (max(differences) == 1):
+    if sum_differences == 1:
         return True
 
     return False
@@ -258,7 +353,7 @@ def compute_voxel_group_volume(num_voxels: int) -> float:
     return num_voxels * utils.VOXEL_VOLUME
 
 
-def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+def breadth_first_search_python(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
     add indices for all ordinal neighbors iteratively until no more such neighbors exist.
@@ -281,6 +376,50 @@ def breadth_first_search(voxels: tuple[np.ndarray, ...], searchable_indices: set
     return neighbor_indices
 
 
+def breadth_first_search_c(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+    """
+    Given a set of voxels and list of possible indices to add,
+    add indices for all ordinal neighbors iteratively until no more such neighbors exist.
+    """
+    c_searchable_indices = list(deepcopy(searchable_indices))
+
+    # make the voxels compatible with C
+    num_voxels = len(voxels[0])
+    voxels_x = (ctypes.c_int * num_voxels)(*voxels[0])
+    voxels_y = (ctypes.c_int * num_voxels)(*voxels[1])
+    voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
+
+    # generate other inputs needed for C function
+    c_searchable_indices = (ctypes.c_int * len(c_searchable_indices))(*c_searchable_indices)
+    initial_indices = (ctypes.c_int * num_voxels)(*([-1] * num_voxels))
+
+    # run the breadth-first search
+    VOXEL_C.breadth_first_search.restype = ctypes.POINTER(ctypes.c_int * num_voxels)
+    neighbor_indices_c = VOXEL_C.breadth_first_search(
+        ctypes.byref(voxels_x),
+        ctypes.byref(voxels_y),
+        ctypes.byref(voxels_z),
+        ctypes.byref(c_searchable_indices),
+        len(searchable_indices),
+        ctypes.byref(initial_indices),
+    )
+
+    return set([i for i in neighbor_indices_c.contents if i != -1])
+
+
+def breadth_first_search(
+    voxels: tuple[np.ndarray, ...], searchable_indices: set[int], performant: bool = utils.using_performant()
+) -> set[int]:
+    """
+    Given a set of voxels and list of possible indices to add,
+    add indices for all ordinal neighbors iteratively until no more such neighbors exist.
+    """
+    if performant:
+        return breadth_first_search_c(voxels, searchable_indices)
+
+    return breadth_first_search_python(voxels, searchable_indices)
+
+
 def get_agglomerated_type(
     query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...]
 ) -> tuple[set[int], str]:
@@ -298,6 +437,7 @@ def get_agglomerated_type(
             exposed_voxel = get_single_voxel(exposed_voxels, exposed_voxel_index)
             if is_neighbor_voxel(query_voxel, exposed_voxel):
                 direct_surface_indices.add(query_index)
+                break
 
     # if there are no surface contacts, this must be a cavity
     if len(direct_surface_indices) == 0:
@@ -305,12 +445,13 @@ def get_agglomerated_type(
 
     # add all voxels that are neighbours to the direct surface voxels
     neighbor_surface_indices = set()
-    for surface_index in direct_surface_indices:
-        surface_voxel = get_single_voxel(buried_voxels, surface_index)
-        for query_index in query_indices - direct_surface_indices:
-            query_voxel = get_single_voxel(buried_voxels, query_index)
+    for query_index in query_indices - direct_surface_indices:
+        query_voxel = get_single_voxel(buried_voxels, query_index)
+        for surface_index in direct_surface_indices:
+            surface_voxel = get_single_voxel(buried_voxels, surface_index)
             if is_neighbor_voxel(surface_voxel, query_voxel):
                 neighbor_surface_indices.add(query_index)
+                break
 
     # we pass all surface indices and the buried voxels for BFS
     # If there is more than one distinct surface (e.g. a pore) then
@@ -371,16 +512,15 @@ def get_pores_pockets_cavities_occluded(
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
 
-        # identify what these agglomerated voxels are
-        direct_surface_indices, agglomerated_type = get_agglomerated_type(
-            agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
-        )
-        # for the specific case of a pocket, determine if it is so small that we'll just call it occluded
-        if agglomerated_type == "pocket":
-            if compute_voxel_group_volume(len(agglomerable_indices)) >= POCKET_VOLUME_THRESHOLD:
-                agglomerated_type == "pocket"
-            else:
-                agglomerated_type == "occluded"
+        # if too small, don't assign direct surface indices and assign type "occluded"
+        if len(agglomerable_indices) <= MIN_NUM_VOXELS:
+            direct_surface_indices = set()
+            agglomerated_type = "occluded"
+        else:
+            # identify what these agglomerated voxels are
+            direct_surface_indices, agglomerated_type = get_agglomerated_type(
+                agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
+            )
 
         # get the surface voxels for use in getting their voxel-grid indices
         surface_voxels = (

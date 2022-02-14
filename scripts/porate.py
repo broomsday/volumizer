@@ -5,8 +5,10 @@ Command-line entry-point to find pores and cavities in PDBs.
 from pathlib import Path
 
 import typer
+import multiprocessing
 
 from pore import pore, cli, utils, pdb
+from pore.constants import VOXEL_SIZE
 
 
 def porate_pdb_id(pdb_id: str) -> None:
@@ -53,8 +55,9 @@ def main(
     porate_input: str = typer.Argument(
         ..., help="PDB ID, PDB file, file with one PDB ID per line, or folder containing PDB files"
     ),
-    resolution: float = typer.Option(2.0, help="Edge-length of voxels used to discretize the structure."),
+    resolution: float = typer.Option(VOXEL_SIZE, help="Edge-length of voxels used to discretize the structure."),
     non_protein: bool = typer.Option(False, help="Include non-protein residues during the calculations."),
+    jobs: int = typer.Option(1, help="Number of threads to use."),
 ):
     """
     Find pores and cavities in the supplied PDB files.
@@ -75,12 +78,18 @@ def main(
     elif input_type == "id_file":
         with open(porate_input, mode="r", encoding="utf-8") as id_file:
             pdb_ids = [line.strip() for line in id_file.readlines()]
-        for pdb_id in pdb_ids:
-            porate_pdb_id(pdb_id)
+        tasks = [[pdb_id] for pdb_id in pdb_ids]
+        # for pdb_id in pdb_ids:
+        #    porate_pdb_id(pdb_id)
+        with multiprocessing.Pool(processes=jobs) as pool:
+            pool.starmap(porate_pdb_id, tasks)
     elif input_type == "pdb_dir":
         pdb_files = Path(porate_input).glob("*.pdb")
-        for pdb_file in pdb_files:
-            porate_pdb_file(pdb_file)
+        tasks = [[pdb_file] for pdb_file in pdb_files]
+        # for pdb_file in pdb_files:
+        #    porate_pdb_file(pdb_file)
+        with multiprocessing.Pool(processes=jobs) as pool:
+            pool.starmap(porate_pdb_file, tasks)
     else:
         raise RuntimeError("File mode not implemented")
 

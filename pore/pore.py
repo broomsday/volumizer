@@ -14,7 +14,7 @@ from pore.paths import PREPARED_PDB_DIR
 
 
 def annotate_pdb_structure(
-    structure: Structure, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
+    structure: Structure.Structure, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
 ) -> tuple[Annotation, list[str]]:
     """
     Perform analysis of a prepared structure.
@@ -32,9 +32,14 @@ def annotate_pdb_structure(
     exposed_voxels, buried_voxels = voxel.get_exposed_and_buried_voxels(
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
+    # get sub-selection of exposed voxels that are NEXT to a buried voxel
+    first_shell_exposed_voxels = voxel.get_first_shell_exposed_voxels(exposed_voxels, buried_voxels, voxel_grid)
 
+    # pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
+    #    buried_voxels, exposed_voxels, voxel_grid
+    # )
     pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
-        buried_voxels, exposed_voxels, voxel_grid
+        buried_voxels, first_shell_exposed_voxels, voxel_grid
     )
     pores = utils.sort_voxelgroups_by_volume(
         utils.filter_voxelgroups_by_volume(pores, min_voxels=min_voxels, min_volume=min_volume)
@@ -74,7 +79,7 @@ def annotate_pdb_structure(
     return (annotation, pdb_lines)
 
 
-def prepare_pdb_structure(structure: Structure) -> tuple[Structure, str]:
+def prepare_pdb_structure(structure: Structure.Structure) -> tuple[Structure.Structure, str]:
     """
     Prepares a biopython Structure object for analysis by:
 
@@ -94,7 +99,7 @@ def prepare_pdb_structure(structure: Structure) -> tuple[Structure, str]:
     return structure, remarks
 
 
-def prepare_pdb_file(pdb_file: Path) -> tuple[Structure, str]:
+def prepare_pdb_file(pdb_file: Path) -> tuple[Structure.Structure, str]:
     """
     Prepares a PDB file at the given path for analysis by:
 

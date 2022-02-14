@@ -13,6 +13,7 @@ import pandas as pd
 
 from pore import rcsb, constants, paths
 from pore.types import Annotation, VoxelGroup
+from pore.paths import C_CODE_DIR
 
 
 VOXEL_SIZE = constants.VOXEL_SIZE
@@ -268,3 +269,13 @@ def load_annotation_df(file_stem: str) -> pd.DataFrame:
     Return the annotation dataframe associated with this file-stem.
     """
     return pd.read_json(paths.ANNOTATED_DF_DIR / f"{file_stem}.{VOXEL_SIZE}.json")
+
+
+def using_performant() -> bool:
+    """
+    Return True if the performant .so libraries exist.
+    """
+    if (C_CODE_DIR / "voxel.so").is_file() and (C_CODE_DIR / "fib_sphere.so").is_file():
+        return True
+
+    return False
