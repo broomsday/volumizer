@@ -4,6 +4,7 @@ Module holding functions for post poration analysis of volume objects.
 
 
 from pathlib import Path
+from typing import Union
 
 import pandas as pd
 
@@ -35,37 +36,62 @@ def get_pdb_annotations(annotation_paths: list[Path]) -> dict[str, pd.DataFrame]
     return {annotation_path.stem: pd.read_json(annotation_path) for annotation_path in annotation_paths}
 
 
-def annotation_has_types(annotation: pd.DataFrame, pores: bool, pockets: bool, cavities: bool) -> bool:
+def compile_accepted_types(metrics: dict[str, Union[bool, float]]) -> set[str]:
     """
-    If the given annotation contains any of pores/pockets/cavities that are True, return True.
+    convert metrics to a list of accepted volume types.
     """
-    if annotation.empty:
-        return False
+    accepted_types = set()
+    if metrics["pores"]:
+        accepted_types.add("pore")
+    if metrics["pockets"]:
+        accepted_types.add("pocket")
+    if metrics["cavities"]:
+        accepted_types.add("cavity")
 
-    accepted_types = []
-    if pores:
-        accepted_types.append("pore")
-    if pockets:
-        accepted_types.append("pocket")
-    if cavities:
-        accepted_types.append("cavity")
+    return accepted_types
 
-    for accepted_type in accepted_types:
-        if accepted_type in list(annotation["type"]):
+
+def is_metric_in_range(annotation_row: pd.Series, metric: str, metrics: dict[str, Union[bool, float]]) -> bool:
+    """
+    If the given metric is within the range of min->max inclusive, return True.
+    """
+    metric_min = metrics[f"min_{metric}"]
+    metric_max = metrics[f"max_{metric}"]
+
+    if metric_max is None:
+        return annotation_row[metric] >= metric_min
+
+    return (annotation_row[metric] >= metric_min) and (annotation_row[metric] <= metric_max)
+
+
+def annotation_satisfies_metrics(
+    annotation: pd.DataFrame, metrics: dict[str, Union[bool, float]], accepted_types: set[str]
+) -> bool:
+    """
+    Ensure at least one volume object in annotation satisfies all metrics.
+    """
+    for _, row in annotation.iterrows():
+        if (
+            str(row["type"]) in accepted_types
+            and is_metric_in_range(row, "volume", metrics)
+            and is_metric_in_range(row, "x", metrics)
+            and is_metric_in_range(row, "y", metrics)
+            and is_metric_in_range(row, "z", metrics)
+        ):
             return True
 
     return False
 
 
-def select_annotations_by_type(
-    pdb_annotations: dict[str, pd.DataFrame], pores: bool, pockets: bool, cavities: bool
+def select_annotations_by_metrics(
+    pdb_annotations: dict[str, pd.DataFrame], metrics: dict[str, Union[bool, float]]
 ) -> dict[str, pd.DataFrame]:
     """
-    Subset the input dictionary into only those where the value annotation has at least one type
-    matching at least one of pores/pockets/cavities that are True
+    Subset the input dictionary into only those where the value annotation has metrics matching those in `metrics`.
     """
+    accepted_types = compile_accepted_types(metrics)
     return {
         pdb: annotation
         for pdb, annotation in pdb_annotations.items()
-        if annotation_has_types(annotation, pores, pockets, cavities)
+        if annotation_satisfies_metrics(annotation, metrics, accepted_types)
     }

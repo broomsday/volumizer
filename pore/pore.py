@@ -32,12 +32,10 @@ def annotate_pdb_structure(
     exposed_voxels, buried_voxels = voxel.get_exposed_and_buried_voxels(
         solvent_voxels, protein_voxels, voxel_grid.x_y_z
     )
+
     # get sub-selection of exposed voxels that are NEXT to a buried voxel
     first_shell_exposed_voxels = voxel.get_first_shell_exposed_voxels(exposed_voxels, buried_voxels, voxel_grid)
 
-    # pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
-    #    buried_voxels, exposed_voxels, voxel_grid
-    # )
     pores, pockets, cavities, occluded = voxel.get_pores_pockets_cavities_occluded(
         buried_voxels, first_shell_exposed_voxels, voxel_grid
     )

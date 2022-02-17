@@ -1,6 +1,9 @@
 """
 Scan over annotated DFs for pores, pockets, and/or cavities matching given
 metric constraints.
+
+Example:
+    python scripts/analysis/get_pdbs_by_metrics.py data/rcsb_cluster/bc-90.txt pore_analysis_rcsb_3.0.txt --find-pores --min-dimension-one=30.0 --min-dimension-two=15.0 --min-dimension-three=15.0
 """
 
 
@@ -14,7 +17,8 @@ from pore.cli import guess_analysis_input_type
 
 
 def main(
-    analysis_input: str = typer.Argument(..., help=""),
+    analysis_input: Path = typer.Argument(..., help=""),
+    analysis_output: Path = typer.Argument(..., help=""),
     find_pores: bool = typer.Option(False, help=""),
     find_pockets: bool = typer.Option(False, help=""),
     find_cavities: bool = typer.Option(False, help=""),
@@ -49,20 +53,27 @@ def main(
         raise RuntimeError("Input type not implemented")
 
     pdb_annotations = analysis.get_pdb_annotations(annotation_paths)
-    selected_pdb_annotations = analysis.select_annotations_by_type(
-        pdb_annotations, find_pores, find_pockets, find_cavities
-    )
 
     metrics = {
+        "pores": find_pores,
+        "pockets": find_pockets,
+        "cavities": find_cavities,
         "min_volume": min_volume,
         "max_volume": max_volume,
-        "min_dimension_one": min_dimension_one,
-        "max_dimension_one": max_dimension_one,
+        "min_x": min_dimension_one,
+        "max_x": max_dimension_one,
+        "min_y": min_dimension_two,
+        "max_y": max_dimension_two,
+        "min_z": min_dimension_three,
+        "max_z": max_dimension_three,
     }
-    selected_pdb_annotations = analysis.select_annotations_by_metrics(selected_pdb_annotations, metrics)
+    selected_pdb_annotations = analysis.select_annotations_by_metrics(pdb_annotations, metrics)
 
-    print(selected_pdb_annotations[list(pdb_annotations.keys())[0]])
-    print(len(selected_pdb_annotations))
+    annotation_names = [f"{name}\n" for name in selected_pdb_annotations.keys()]
+    with open(analysis_output, mode="w", encoding="utf-8") as out_file:
+        out_file.writelines(annotation_names)
+
+    print(f"Found {len(annotation_names)} matching PDBs")
 
 
 if "__main__" in __name__:
