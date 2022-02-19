@@ -51,17 +51,19 @@ def compile_accepted_types(metrics: dict[str, Union[bool, float]]) -> set[str]:
     return accepted_types
 
 
-def is_metric_in_range(annotation_row: pd.Series, metric: str, metrics: dict[str, Union[bool, float]]) -> bool:
+def is_metric_in_range(
+    metrics: Union[pd.Series, dict], metric_name: str, metric_cutoffs: dict[str, Union[bool, float]]
+) -> bool:
     """
     If the given metric is within the range of min->max inclusive, return True.
     """
-    metric_min = metrics[f"min_{metric}"]
-    metric_max = metrics[f"max_{metric}"]
+    metric_min = metric_cutoffs[f"min_{metric_name}"]
+    metric_max = metric_cutoffs[f"max_{metric_name}"]
 
     if metric_max is None:
-        return annotation_row[metric] >= metric_min
+        return metrics[metric_name] >= metric_min
 
-    return (annotation_row[metric] >= metric_min) and (annotation_row[metric] <= metric_max)
+    return (metrics[metric_name] >= metric_min) and (metrics[metric_name] <= metric_max)
 
 
 def annotation_satisfies_metrics(
@@ -79,6 +81,21 @@ def annotation_satisfies_metrics(
             and is_metric_in_range(row, "z", metrics)
         ):
             return True
+
+    return False
+
+
+def pdb_satisfies_metrics(pdb_metrics: dict[str, int], metric_cutoffs: dict[str, int]) -> bool:
+    """
+    If all metrics in `pdb_metrics` fall within ranges in `metric_cutoffs` return True.
+    False otherwise.
+    """
+    if (
+        is_metric_in_range(pdb_metrics, "atoms", metric_cutoffs)
+        and is_metric_in_range(pdb_metrics, "residues", metric_cutoffs)
+        and is_metric_in_range(pdb_metrics, "chains", metric_cutoffs)
+    ):
+        return True
 
     return False
 
