@@ -194,6 +194,8 @@ def get_pdb_size_metrics(pdb_id: str, retries: int = RCSB_CONTACT_RETRIES) -> di
     """
     Given a PDB ID from the RCSB, get PDB size metrics.
     """
+    # TODO improve how this function handles problems, currently very ugly
+    print(pdb_id)
     for _ in range(retries):
         general_info = ast.literal_eval(requests.get(RCSB_GENERAL_INFO_URL + pdb_id).text)
         assembly_info = ast.literal_eval(requests.get(RCSB_ASSEMBLY_INFO_URL + pdb_id + "/1").text)
@@ -208,17 +210,27 @@ def get_pdb_size_metrics(pdb_id: str, retries: int = RCSB_CONTACT_RETRIES) -> di
     ):
         raise requests.ConnectionError("Couldn't connect to server")
 
-    # if we couldn't get the assembly info (e.g. an NMR structure, go back to the general info)
-    if ("status" in assembly_info) and (assembly_info["status"] == 404):
+    # if we couldn't get either set of info, just return 0s
+    if (("status" in assembly_info) and (assembly_info["status"] == 404)) and (
+        ("status" in general_info) and (general_info["status"] == 404)
+    ):
         return {
-            "atoms": int(general_info["rcsb_entry_info"]["deposited_atom_count"]),
-            "residues": int(general_info["rcsb_entry_info"]["deposited_modeled_polymer_monomer_count"]),
-            "chains": int(general_info["rcsb_entry_info"]["deposited_polymer_entity_instance_count"]),
+            "atoms": 0,
+            "residues": 0,
+            "chains": 0,
+        }
+    # if we got the general info but not the assembly info (e.g. an NMR structure) use the general info
+    elif ("status" in assembly_info) and (assembly_info["status"] == 404):
+        return {
+            "atoms": int(general_info["rcsb_entry_info"].get("deposited_atom_count", 0)),
+            "residues": int(general_info["rcsb_entry_info"].get("deposited_modeled_polymer_monomer_count", 0)),
+            "chains": int(general_info["rcsb_entry_info"].get("deposited_polymer_entity_instance_count", 0)),
         }
 
+    # otherwise use the assembly info
     return {
-        "atoms": int(assembly_info["rcsb_assembly_info"]["atom_count"]),
-        "residues": int(assembly_info["rcsb_assembly_info"]["modeled_polymer_monomer_count"]),
-        "chains": int(assembly_info["rcsb_assembly_info"]["polymer_entity_instance_count"]),
+        "atoms": int(assembly_info["rcsb_assembly_info"].get("atom_count", 0)),
+        "residues": int(assembly_info["rcsb_assembly_info"].get("modeled_polymer_monomer_count", 0)),
+        "chains": int(assembly_info["rcsb_assembly_info"].get("polymer_entity_instance_count", 0)),
         # "chains": int(assembly_info["pdbx_struct_assembly"]["oligomeric_count"]),
     }
