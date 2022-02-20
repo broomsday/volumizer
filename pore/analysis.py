@@ -112,3 +112,56 @@ def select_annotations_by_metrics(
         for pdb, annotation in pdb_annotations.items()
         if annotation_satisfies_metrics(annotation, metrics, accepted_types)
     }
+
+
+def is_stoichiometry_factorable(stoichiometry: dict[int, int]) -> bool:
+    """
+    If all chains counts are factors of the largest chain count, return True.
+    False otherwise
+    """
+    chain_counts = sorted(list(stoichiometry.values()))
+    initial_chain_counts = len(chain_counts)
+    if 1 in chain_counts:
+        return False
+
+    factorable_counts = [chain_counts.pop()]
+    while len(chain_counts) > 0:
+        query_count = chain_counts.pop()
+        for factorable_count in factorable_counts:
+            if factorable_count % query_count == 0:
+                factorable_counts.append(query_count)
+                break
+
+    if initial_chain_counts == len(factorable_counts):
+        return True
+    return False
+
+
+def pdb_satisfies_stoichiometry(stoichiometry: dict[int, int], metric_cutoffs: dict[str, Union[int, bool]]) -> bool:
+    """
+    If all metrics in `pdb_metrics` fall within ranges in `metric_cutoffs` return True.
+    False otherwise.
+    """
+    unique_chains = len(stoichiometry)
+    chain_lengths = list(stoichiometry.values())
+
+    # check repeat chains
+    if min(chain_lengths) < metric_cutoffs["min_chain_repeats"]:
+        return False
+    elif (metric_cutoffs["max_chain_repeats"] is not None) and (
+        max(chain_lengths) > metric_cutoffs["max_chain_repeats"]
+    ):
+        return False
+
+    # check unique chains
+    if unique_chains < metric_cutoffs["min_unique_chains"]:
+        return False
+    elif (metric_cutoffs["max_unique_chains"] is not None) and (unique_chains > metric_cutoffs["max_unique_chains"]):
+        return False
+
+    # check factorable stoichiometry
+    if metric_cutoffs["stoichiometry_factorable"]:
+        if not is_stoichiometry_factorable(stoichiometry):
+            return False
+
+    return True

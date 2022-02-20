@@ -14,7 +14,7 @@ DOWNLOADED_PDB_DIR = DATA_DIR / "downloaded_pdbs"
 PREPARED_PDB_DIR = DATA_DIR / "prepared_pdbs"
 ANNOTATED_PDB_DIR = DATA_DIR / "annotated_pdbs"
 ANNOTATED_DF_DIR = DATA_DIR / "annotated_dfs"
-PDB_SIZE_METRIC_DIR = DATA_DIR / "pdb_size_metrics"
+PDB_FILTERING_METRIC_DIR = DATA_DIR / "pdb_filter_metrics"
 
 RCSB_CLUSTER_FILE = DATA_DIR / "rcsb_cluster" / "bc-90.out"
 RCSB_CCD_FILE = DATA_DIR / "rcsb_components" / "components.cif"

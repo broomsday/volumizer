@@ -85,3 +85,27 @@ MIN_NUM_VOXELS = 4
 
 VOXEL_TYPE_CHAIN_MAP = {"POK": "A", "POR": "B", "CAV": "C", "OCC": "D"}
 VOXEL_TYPE_ATOM_MAP = {"POK": "N", "POR": "O", "CAV": "S", "OCC": "H"}
+
+RESIDUE_LETTER_CONVERSION = {
+    "ALA": "A",
+    "CYS": "C",
+    "ASP": "D",
+    "GLU": "E",
+    "PHE": "F",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LYS": "K",
+    "LEU": "L",
+    "MET": "M",
+    "ASN": "N",
+    "PRO": "P",
+    "GLN": "Q",
+    "ARG": "R",
+    "SER": "S",
+    "THR": "T",
+    "VAL": "V",
+    "TRP": "W",
+    "TYR": "Y",
+}
+SEQUENCE_IDENTITY_CUTOFF = 0.90

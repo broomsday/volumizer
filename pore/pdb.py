@@ -11,11 +11,18 @@ import warnings
 from Bio.PDB import PDBParser, Select, Structure
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio.PDB.PDBIO import PDBIO
+from Bio import pairwise2
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
 
-from pore.constants import VOXEL_ATOM_NAMES, VOXEL_TYPE_CHAIN_MAP, VOXEL_TYPE_ATOM_MAP
+from pore.constants import (
+    VOXEL_ATOM_NAMES,
+    VOXEL_TYPE_CHAIN_MAP,
+    VOXEL_TYPE_ATOM_MAP,
+    RESIDUE_LETTER_CONVERSION,
+    SEQUENCE_IDENTITY_CUTOFF,
+)
 from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
 from pore.types import VoxelGroup, Annotation
 from pore import utils
@@ -237,3 +244,42 @@ def generate_resolution_remarks() -> list[str]:
     Add a REMARK line with the resolution used fo rthis annotation
     """
     return [f"REMARK RESOLUTION {str(utils.VOXEL_SIZE)}"]
+
+
+def get_stoichiometry(pdb: Path, match_cutoff: float = SEQUENCE_IDENTITY_CUTOFF) -> dict[int, int]:
+    """
+    Example return = {1: 10, 2: 5} for a heteromultimer with 10 of one chain and 5 of the other
+    """
+    # load cleaned structure using biopython
+    structure = load_pdb(pdb)
+
+    # get the sequence of each using biopython
+    sequences = []
+    for chain in structure.get_chains():
+        sequence = "".join([RESIDUE_LETTER_CONVERSION.get(residue.resname, "X") for residue in chain.get_residues()])
+        sequences.append(sequence)
+
+    # compute pairwise sequence identity using biopython to assign sequence clusters
+    cluster_count = 0
+    clusters = {cluster_count: [sequences.pop()]}
+    while len(sequences) > 0:
+        query_sequence = sequences.pop()
+        joined_cluster = False
+        for cluster_id, cluster_sequences in clusters.items():
+            # only check against the first sequence in the cluster
+            alignment = pairwise2.align.globalxx(query_sequence, cluster_sequences[0], one_alignment_only=True)[0]
+            string_alignment = pairwise2.format_alignment(*alignment).split("\n")
+            identity = string_alignment[1].count("|") / min(len(string_alignment[0]), len(string_alignment[2]))
+            # if this is a match, add it to this cluster
+            if identity >= match_cutoff:
+                clusters[cluster_id].append(query_sequence)
+                joined_cluster = True
+                break
+
+        # if we don't find any matches, start a new cluster
+        if not joined_cluster:
+            cluster_count += 1
+            clusters[cluster_count] = [query_sequence]
+
+    # compute the stoichiometry
+    return {cluster_id: len(cluster_sequences) for cluster_id, cluster_sequences in clusters.items()}
