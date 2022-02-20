@@ -41,9 +41,10 @@ def main(
 
     # get the list of PDBs we need to check
     with open(input_list, mode="r", encoding="utf-8") as in_file:
-        pdb_ids = [line.rstrip() for line in in_file.readlines()]
+        # NOTE: split around '.' to ignore any resolution suffixes
+        pdb_ids = [line.rstrip().split(".")[0] for line in in_file.readlines()]
 
-    # check the remaining PDBs
+    # check the PDBs
     satisfied_pdb_ids = []
     for pdb_id in tqdm(pdb_ids):
         if utils.have_pdb_size_metrics_on_file(pdb_id):
