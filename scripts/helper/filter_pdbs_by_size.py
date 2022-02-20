@@ -51,7 +51,7 @@ def main(
         else:
             pdb_size_metrics = rcsb.get_pdb_size_metrics(pdb_id)
             utils.save_pdb_size_metrics(pdb_id, pdb_size_metrics)
-            sleep(0.5)
+            sleep(0.25)
 
         if pdb_size_metrics is None:
             warnings.warn(f"No PDB size metrics for: {pdb_id}")
