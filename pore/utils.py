@@ -312,14 +312,14 @@ def load_pdb_size_metrics(pdb_id: str) -> Optional[dict[str, int]]:
 
 def have_stoichiometry_on_file(pdb_id: str) -> bool:
     """
-    Check to see if the PDB size metrics have been recorded previously.
+    Check to see if the stoichiometry of the PDB assembly has been recorded previously.
     """
     return (paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_stoichiometry.json").is_file()
 
 
 def save_stoichiometry(pdb_id: str, metrics: dict[int, int]) -> None:
     """
-    Save the number of atoms, residues, and chains in a PDB assembly.
+    Save the stoichiometry of the PDB assembly.
     """
     with open(paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_stoichiometry.json", mode="w", encoding="utf-8") as out_file:
         json.dump(metrics, out_file)
@@ -327,9 +327,38 @@ def save_stoichiometry(pdb_id: str, metrics: dict[int, int]) -> None:
 
 def load_stoichiometry(pdb_id: str) -> Optional[dict[int, int]]:
     """
-    Load the number of atoms, residues, and chains for a PDB
+    Load the stoichiometry of the PDB assembly.
     """
     pdb_size_metric_path = paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_stoichiometry.json"
+    if not pdb_size_metric_path.is_file():
+        return None
+
+    with open(pdb_size_metric_path, mode="r", encoding="utf-8") as in_file:
+        return json.load(in_file)
+
+
+def have_secondary_structure_on_file(pdb_id: str) -> bool:
+    """
+    Check to see if the secondary structure has been recorded previously.
+    """
+    return (paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_secondary_structure.json").is_file()
+
+
+def save_secondary_structure(pdb_id: str, metrics: dict[int, int]) -> None:
+    """
+    Save the secondary structure fractions.
+    """
+    with open(
+        paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_secondary_structure.json", mode="w", encoding="utf-8"
+    ) as out_file:
+        json.dump(metrics, out_file)
+
+
+def load_secondary_structure(pdb_id: str) -> Optional[dict[int, int]]:
+    """
+    Load the secondary structure fractions.
+    """
+    pdb_size_metric_path = paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_secondary_structure.json"
     if not pdb_size_metric_path.is_file():
         return None
 

@@ -139,7 +139,7 @@ def is_stoichiometry_factorable(stoichiometry: dict[int, int]) -> bool:
 
 def pdb_satisfies_stoichiometry(stoichiometry: dict[int, int], metric_cutoffs: dict[str, Union[int, bool]]) -> bool:
     """
-    If all metrics in `pdb_metrics` fall within ranges in `metric_cutoffs` return True.
+    If stoichiometry values fall within ranges in `metric_cutoffs` return True.
     False otherwise.
     """
     unique_chains = len(stoichiometry)
@@ -163,5 +163,15 @@ def pdb_satisfies_stoichiometry(stoichiometry: dict[int, int], metric_cutoffs: d
     if metric_cutoffs["stoichiometry_factorable"]:
         if not is_stoichiometry_factorable(stoichiometry):
             return False
+
+    return True
+
+
+def pdb_satisfies_secondary_structure(secondary_structure: dict[str, float], metric_cutoffs: dict[str, float]) -> bool:
+    """
+    If secondary structure fractions fall within ranges in `metric_cutoffs` return True.
+    False otherwise.
+    """
+    # TODO simple comparisons, should be able to reuse general comparison function
 
     return True

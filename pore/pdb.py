@@ -283,3 +283,19 @@ def get_stoichiometry(pdb: Path, match_cutoff: float = SEQUENCE_IDENTITY_CUTOFF)
 
     # compute the stoichiometry
     return {cluster_id: len(cluster_sequences) for cluster_id, cluster_sequences in clusters.items()}
+
+
+def get_secondary_structure(pdb: Path) -> dict[str, float]:
+    """
+    Compute the fraction of basic secondary structures, helix, strand, loop
+    """
+    # load cleaned structure using biopython
+    structure = load_pdb(pdb)
+
+    # TODO compute the secondary structure using biopython DSSP module
+    print(structure)
+
+    # TODO summarize secondary structure
+    quit()
+
+    return {"helix": 0.0, "strand": 0.0, "loop": 0.0}
