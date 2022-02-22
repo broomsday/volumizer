@@ -7,8 +7,9 @@ import tempfile
 import itertools
 from typing import Optional
 import warnings
+import subprocess
 
-from Bio.PDB import PDBParser, Select, Structure
+from Bio.PDB import PDBParser, Select, Structure, DSSP
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 from Bio.PDB.PDBIO import PDBIO
 from Bio import pairwise2
@@ -22,6 +23,7 @@ from pore.constants import (
     VOXEL_TYPE_ATOM_MAP,
     RESIDUE_LETTER_CONVERSION,
     SEQUENCE_IDENTITY_CUTOFF,
+    STRIDE_CODES,
 )
 from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
 from pore.types import VoxelGroup, Annotation
@@ -285,17 +287,39 @@ def get_stoichiometry(pdb: Path, match_cutoff: float = SEQUENCE_IDENTITY_CUTOFF)
     return {cluster_id: len(cluster_sequences) for cluster_id, cluster_sequences in clusters.items()}
 
 
+def clean_stride(stride_line: str) -> str:
+    """
+    Cleans extra info from a STRIDE summary line
+    """
+    return stride_line[10:60].strip()
+
+
 def get_secondary_structure(pdb: Path) -> dict[str, float]:
     """
     Compute the fraction of basic secondary structures, helix, strand, loop
+    using the stride program.
+    NOTE: requires local installation of STRIDE
+    See http://webclu.bio.wzw.tum.de/stride/
     """
-    # load cleaned structure using biopython
-    structure = load_pdb(pdb)
+    process = subprocess.run(["stride", "-o", f"{pdb}"], capture_output=True)
+    output = process.stdout.decode("UTF-8")
 
-    # TODO compute the secondary structure using biopython DSSP module
-    print(structure)
+    primary_structure = "".join([clean_stride(line) for line in output.split("\n") if line[:3] == "SEQ"])
+    secondary_structure = "".join([clean_stride(line) for line in output.split("\n") if line[:3] == "STR"])
 
-    # TODO summarize secondary structure
-    quit()
+    helix_count = sum([secondary_structure.count(code) for code in STRIDE_CODES["helix"]])
+    strand_count = sum([secondary_structure.count(code) for code in STRIDE_CODES["strand"]])
+    total_count = len(primary_structure)
 
-    return {"helix": 0.0, "strand": 0.0, "loop": 0.0}
+    if total_count == 0:
+        return {
+            "helix": 0.0,
+            "strand": 0.0,
+            "coil": 1.0,
+        }
+
+    return {
+        "helix": helix_count / total_count,
+        "strand": strand_count / total_count,
+        "coil": (total_count - helix_count - strand_count) / total_count,
+    }

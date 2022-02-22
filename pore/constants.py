@@ -110,6 +110,7 @@ RESIDUE_LETTER_CONVERSION = {
 }
 SEQUENCE_IDENTITY_CUTOFF = 0.90
 
-HELIX_SECONDARY_STRUCTURES = frozenset([])
-STRAND_SECONDARY_STRUCTURES = frozenset([])
-LOOP_SECONDARY_STRUCTURES = frozenset([])
+STRIDE_CODES = {
+    "helix": frozenset(["H", "G", "I"]),
+    "strand": frozenset(["E", "B"]),
+}

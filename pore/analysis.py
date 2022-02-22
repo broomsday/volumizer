@@ -172,6 +172,11 @@ def pdb_satisfies_secondary_structure(secondary_structure: dict[str, float], met
     If secondary structure fractions fall within ranges in `metric_cutoffs` return True.
     False otherwise.
     """
-    # TODO simple comparisons, should be able to reuse general comparison function
+    if (
+        is_metric_in_range(secondary_structure, "helix", metric_cutoffs)
+        and is_metric_in_range(secondary_structure, "strand", metric_cutoffs)
+        and is_metric_in_range(secondary_structure, "coil", metric_cutoffs)
+    ):
+        return True
 
-    return True
+    return False
