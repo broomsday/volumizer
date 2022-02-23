@@ -71,15 +71,11 @@ def main(
         with open(porate_input, mode="r", encoding="utf-8") as id_file:
             pdb_ids = [line.strip() for line in id_file.readlines()]
         tasks = [[pdb_id] for pdb_id in pdb_ids]
-        # for pdb_id in pdb_ids:
-        #    porate_pdb_id(pdb_id)
         with multiprocessing.Pool(processes=jobs) as pool:
             pool.starmap(porate_pdb_id, tasks)
     elif input_type == "pdb_dir":
         pdb_files = Path(porate_input).glob("*.pdb")
         tasks = [[pdb_file] for pdb_file in pdb_files]
-        # for pdb_file in pdb_files:
-        #    porate_pdb_file(pdb_file)
         with multiprocessing.Pool(processes=jobs) as pool:
             pool.starmap(porate_pdb_file, tasks)
     else:
