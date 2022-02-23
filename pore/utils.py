@@ -287,14 +287,14 @@ def have_pdb_size_metrics_on_file(pdb_id: str) -> bool:
     """
     Check to see if the PDB size metrics have been recorded previously.
     """
-    return (paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}.json").is_file()
+    return (paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_size.json").is_file()
 
 
 def save_pdb_size_metrics(pdb_id: str, metrics: dict[str, int]) -> None:
     """
     Save the number of atoms, residues, and chains in a PDB assembly.
     """
-    with open(paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}.json", mode="w", encoding="utf-8") as out_file:
+    with open(paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_size.json", mode="w", encoding="utf-8") as out_file:
         json.dump(metrics, out_file)
 
 
@@ -302,7 +302,7 @@ def load_pdb_size_metrics(pdb_id: str) -> Optional[dict[str, int]]:
     """
     Load the number of atoms, residues, and chains for a PDB
     """
-    pdb_size_metric_path = paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}.json"
+    pdb_size_metric_path = paths.PDB_FILTERING_METRIC_DIR / f"{pdb_id}_size.json"
     if not pdb_size_metric_path.is_file():
         return None
 
