@@ -195,7 +195,6 @@ def get_pdb_size_metrics(pdb_id: str, retries: int = RCSB_CONTACT_RETRIES) -> di
     Given a PDB ID from the RCSB, get PDB size metrics.
     """
     # TODO improve how this function handles problems, currently very ugly
-    print(pdb_id)
     for _ in range(retries):
         general_info = ast.literal_eval(requests.get(RCSB_GENERAL_INFO_URL + pdb_id).text)
         assembly_info = ast.literal_eval(requests.get(RCSB_ASSEMBLY_INFO_URL + pdb_id + "/1").text)
