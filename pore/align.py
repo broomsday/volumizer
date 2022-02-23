@@ -51,8 +51,7 @@ def get_principal_axis_alignment_translation_rotation(array_coords: np.ndarray) 
     warnings.filterwarnings("error")
     try:
         rotation = Rotation.align_vectors(np.identity(3), eigen_vectors)[0].as_matrix()
-    except UserWarning:
-        print("using identity for rotation")
+    except (UserWarning, np.ComplexWarning) as alignment_error:
         rotation = np.identity(3)
     warnings.filterwarnings("default")
 
