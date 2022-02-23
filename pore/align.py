@@ -2,6 +2,7 @@
 Module containing functions for alignment of coordinates, e.g. along principal axes.
 """
 
+import warnings
 
 import pandas as pd
 import numpy as np
@@ -22,6 +23,7 @@ def compute_principal_axis_matrix(array_coords: np.ndarray) -> np.ndarray:
     """
     Compute the eigen values and eigen vectors of the points making up the system
     """
+    # TODO: this function may not work well, generates garbage vectors in some cases
     inertia = np.dot(array_coords.transpose(), array_coords)
     _, eigen_vectors = np.linalg.eig(inertia)
 
@@ -46,8 +48,13 @@ def get_principal_axis_alignment_translation_rotation(array_coords: np.ndarray) 
 
     # get rotation matrix for alignment to principal axes
     eigen_vectors = compute_principal_axis_matrix(coords)
-    identity = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    rotation = Rotation.align_vectors(identity, eigen_vectors)[0].as_matrix()
+    warnings.filterwarnings("error")
+    try:
+        rotation = Rotation.align_vectors(np.identity(3), eigen_vectors)[0].as_matrix()
+    except UserWarning:
+        print("using identity for rotation")
+        rotation = np.identity(3)
+    warnings.filterwarnings("default")
 
     return rotation, translation
 
@@ -58,11 +65,19 @@ def rotate_and_translate_structure(
     """
     Apply a rotation matrix and translation vector to the coordinates of the supplied structure.
     """
+    # first translate
     for model in structure:
         for chain in model:
             for residue in chain:
                 for atom in residue:
-                    atom.transform(rotation, translation)
+                    atom.transform(np.identity(3), translation)
+
+    # next rotate
+    for model in structure:
+        for chain in model:
+            for residue in chain:
+                for atom in residue:
+                    atom.transform(rotation, [0.0, 0.0, 0.0])
 
     return structure
 
