@@ -1,1 +1,1 @@
-Searches through the RCSB for biological assemblies that have large solvated pores which could act as scaffolds for de novo enzyme design.
+Analyze a PDB file to find: pores, pockets, and cavities
