@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Union
 
 import pandas as pd
+from tqdm import tqdm
 
 from pore.paths import ANNOTATED_DF_DIR
 from pore.utils import VOXEL_SIZE
@@ -21,7 +22,7 @@ def get_annotations_by_id(pdb_ids: list[str]) -> tuple[list[Path], int]:
         (ANNOTATED_DF_DIR / f"{pdb_id}.{VOXEL_SIZE}.json")
         if (ANNOTATED_DF_DIR / f"{pdb_id}.{VOXEL_SIZE}.json").is_file()
         else None
-        for pdb_id in pdb_ids
+        for pdb_id in tqdm(pdb_ids, desc="Getting dataframe locations")
     ]
     missing_annotations = annotation_paths.count(None)
     annotation_paths = [annotation_path for annotation_path in annotation_paths if annotation_path is not None]
@@ -33,7 +34,7 @@ def get_pdb_annotations(annotation_paths: list[Path]) -> dict[str, pd.DataFrame]
     """
     Create a dictionary of annotation dataframes keyed by the PDB ID and resolution.
     """
-    return {annotation_path.stem: pd.read_json(annotation_path) for annotation_path in annotation_paths}
+    return {annotation_path.stem: pd.read_json(annotation_path) for annotation_path in tqdm(annotation_paths, desc="Compiling dataframes")}
 
 
 def compile_accepted_types(metrics: dict[str, Union[bool, float]]) -> set[str]:
@@ -109,7 +110,7 @@ def select_annotations_by_metrics(
     accepted_types = compile_accepted_types(metrics)
     return {
         pdb: annotation
-        for pdb, annotation in pdb_annotations.items()
+        for pdb, annotation in tqdm(pdb_annotations.items(), desc="Filtering PDBs")
         if annotation_satisfies_metrics(annotation, metrics, accepted_types)
     }
 
