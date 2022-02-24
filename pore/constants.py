@@ -9,6 +9,9 @@ RCSB_CCD_URL = "https://ftp.wwpdb.org/pub/pdb/data/monomers/components.cif"
 RCSB_BIOUNIT_URL = "https://ftp.wwpdb.org/pub/pdb/data/biounit/PDB/divided/"
 RCSB_BUNDLE_URL = "https://files.rcsb.org/pub/pdb/compatible/pdb_bundle/"
 RCSB_STRUCTURE_URL = "https://ftp.wwpdb.org/pub/pdb/data/structures/divided/pdb/"
+RCSB_GENERAL_INFO_URL = "https://data.rcsb.org/rest/v1/core/entry/"
+RCSB_ASSEMBLY_INFO_URL = "https://data.rcsb.org/rest/v1/core/assembly/"
+RCSB_CONTACT_RETRIES = 10
 
 VOXEL_ATOM_NAMES = frozenset(
     [
@@ -82,3 +85,32 @@ MIN_NUM_VOXELS = 4
 
 VOXEL_TYPE_CHAIN_MAP = {"POK": "A", "POR": "B", "CAV": "C", "OCC": "D"}
 VOXEL_TYPE_ATOM_MAP = {"POK": "N", "POR": "O", "CAV": "S", "OCC": "H"}
+
+RESIDUE_LETTER_CONVERSION = {
+    "ALA": "A",
+    "CYS": "C",
+    "ASP": "D",
+    "GLU": "E",
+    "PHE": "F",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LYS": "K",
+    "LEU": "L",
+    "MET": "M",
+    "ASN": "N",
+    "PRO": "P",
+    "GLN": "Q",
+    "ARG": "R",
+    "SER": "S",
+    "THR": "T",
+    "VAL": "V",
+    "TRP": "W",
+    "TYR": "Y",
+}
+SEQUENCE_IDENTITY_CUTOFF = 0.90
+
+STRIDE_CODES = {
+    "helix": frozenset(["H", "G", "I"]),
+    "strand": frozenset(["E", "B"]),
+}

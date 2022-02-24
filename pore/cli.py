@@ -28,3 +28,19 @@ def guess_input_type(input: str) -> Optional[str]:
         return "pdb_id"
     else:
         return None
+
+
+def guess_analysis_input_type(input: str) -> Optional[str]:
+    """
+    Based on the input string, guess if this input is:
+
+    1. a text containing PDB IDs
+    2. a directory containing Dataframes
+    """
+
+    if Path(input).is_file():
+        return "file"
+    elif Path(input).is_dir():
+        return "dir"
+    else:
+        return None

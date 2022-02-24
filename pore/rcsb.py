@@ -5,8 +5,10 @@ Functions for using the RCSB.
 from pathlib import Path
 from urllib import request
 from urllib.error import HTTPError, URLError
+import requests
 from time import sleep
 import re
+import ast
 
 from pore.paths import RCSB_CLUSTER_FILE, DOWNLOADED_PDB_DIR, RCSB_CCD_FILE
 from pore.constants import (
@@ -16,6 +18,9 @@ from pore.constants import (
     RCSB_BUNDLE_URL,
     RCSB_STRUCTURE_URL,
     RCSB_CCD_URL,
+    RCSB_GENERAL_INFO_URL,
+    RCSB_ASSEMBLY_INFO_URL,
+    RCSB_CONTACT_RETRIES,
 )
 from pore.types import ComponentData
 
@@ -65,7 +70,7 @@ def build_pdb_set(cluster_file: Path) -> set[str]:
     return pdbs
 
 
-def download_biological_assembly(pdb_id: str, retries: int = 10) -> bool:
+def download_biological_assembly(pdb_id: str, retries: int = RCSB_CONTACT_RETRIES) -> bool:
     """
     Check to see if the biological assembly is available at the RCSB.
     If so, download it.
@@ -183,3 +188,48 @@ def get_components() -> list[ComponentData]:
         component_data = parse_component_file(fi.readlines())
 
     return component_data
+
+
+def get_pdb_size_metrics(pdb_id: str, retries: int = RCSB_CONTACT_RETRIES) -> dict[str, int]:
+    """
+    Given a PDB ID from the RCSB, get PDB size metrics.
+    """
+    # TODO improve how this function handles problems, currently very ugly
+    for _ in range(retries):
+        general_info = ast.literal_eval(requests.get(RCSB_GENERAL_INFO_URL + pdb_id).text)
+        assembly_info = ast.literal_eval(requests.get(RCSB_ASSEMBLY_INFO_URL + pdb_id + "/1").text)
+
+        if ("status" in assembly_info) and (assembly_info["status"] == 500):
+            continue
+        else:
+            break
+
+    if (("status" in assembly_info) and (assembly_info["status"] == 500)) or (
+        ("status" in general_info) and (general_info["status"] == 500)
+    ):
+        raise requests.ConnectionError("Couldn't connect to server")
+
+    # if we couldn't get either set of info, just return 0s
+    if (("status" in assembly_info) and (assembly_info["status"] == 404)) and (
+        ("status" in general_info) and (general_info["status"] == 404)
+    ):
+        return {
+            "atoms": 0,
+            "residues": 0,
+            "chains": 0,
+        }
+    # if we got the general info but not the assembly info (e.g. an NMR structure) use the general info
+    elif ("status" in assembly_info) and (assembly_info["status"] == 404):
+        return {
+            "atoms": int(general_info["rcsb_entry_info"].get("deposited_atom_count", 0)),
+            "residues": int(general_info["rcsb_entry_info"].get("deposited_modeled_polymer_monomer_count", 0)),
+            "chains": int(general_info["rcsb_entry_info"].get("deposited_polymer_entity_instance_count", 0)),
+        }
+
+    # otherwise use the assembly info
+    return {
+        "atoms": int(assembly_info["rcsb_assembly_info"].get("atom_count", 0)),
+        "residues": int(assembly_info["rcsb_assembly_info"].get("modeled_polymer_monomer_count", 0)),
+        "chains": int(assembly_info["rcsb_assembly_info"].get("polymer_entity_instance_count", 0)),
+        # "chains": int(assembly_info["pdbx_struct_assembly"]["oligomeric_count"]),
+    }
