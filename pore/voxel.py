@@ -460,6 +460,8 @@ def get_agglomerated_type(
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
     single_surface_indices = breadth_first_search(buried_voxels, surface_indices)
     if len(single_surface_indices) < len(surface_indices):
+        # TODO: want to run teh agglomeration one more time, if the above condition STILL passes, this is a "hub" rather than a pore
+        # TODO: need to make a test case of this using ThreeFoil
         return direct_surface_indices, "pore"
 
     return direct_surface_indices, "pocket"
