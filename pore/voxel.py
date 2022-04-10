@@ -424,11 +424,12 @@ def get_agglomerated_type(
     query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...]
 ) -> tuple[set[int], str]:
     """
-    Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Three possibilites:
+    Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Four possibilites:
 
     a) there are no "surface" voxels -> this is a cavity
     b) all "surface" voxels can be agglomerated (BFS) into a single group -> this is a pocket
-    c) the "surafce" voxels cannot be agglomerated (BFS) into just one group -> this is a pore
+    c) the "surface" voxels can be agglomerated (BFS) into exactly two groups -> this is a pore
+    d) the "surface" voxels cannot be agglomerated (BFS) into less than 3 groups -> this is a hub
     """
     direct_surface_indices = set()
     for query_index in query_indices:
@@ -457,14 +458,24 @@ def get_agglomerated_type(
     # If there is more than one distinct surface (e.g. a pore) then
     #   BFS will terminate after agglomerating just one of the surfaces
     #   and `single_surface_indices` will be less than `surface_indices`
+    # NOTE: we have to union the direct and neighbor surfaces, otherwise small discritization
+    #   on the surface would look like a distinct surface
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
     single_surface_indices = breadth_first_search(buried_voxels, surface_indices)
     if len(single_surface_indices) < len(surface_indices):
-        # TODO: want to run teh agglomeration one more time, if the above condition STILL passes, this is a "hub" rather than a pore
-        # TODO: need to make a test case of this using ThreeFoil
-        return direct_surface_indices, "pore"
+        # run the agglomeration one more time on what's left
+        remaining_surface_indices = surface_indices - single_surface_indices
+        single_surface_indices = breadth_first_search(buried_voxels, remaining_surface_indices)
 
-    return direct_surface_indices, "pocket"
+        # if there are stil indices left, there were more than 2 surfaces, hence a hub
+        if len(single_surface_indices) < len(remaining_surface_indices):
+            return direct_surface_indices.union(neighbor_surface_indices), "hub"
+
+        # othewise, exactly 2 and a pore
+        return direct_surface_indices.union(neighbor_surface_indices), "pore"
+
+    # if the first BFS went to completion and consumed all surfaces, there was only a single surface, hence pocket
+    return direct_surface_indices.union(neighbor_surface_indices), "pocket"
 
 
 def get_voxel_group_center(voxel_indices: set[int], voxel_grid: VoxelGrid) -> np.ndarray:
@@ -496,15 +507,17 @@ def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid
 
 def get_pores_pockets_cavities_occluded(
     buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid: VoxelGrid
-) -> tuple[dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]]:
+) -> tuple[
+    dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]
+]:
     """
-    Agglomerate buried solvent voxels into pores, pockets, cavities, and simply occluded.
+    Agglomerate buried solvent voxels into hubs, pores, pockets, cavities, and simply occluded.
     """
     buried_indices = set(range(buried_voxels.voxels[0].size))
     agglomerated_indices = set()
 
-    pores, pockets, cavities, occluded = {}, {}, {}, {}
-    pore_id, pocket_id, cavity_id, occluded_id = 0, 0, 0, 0
+    hubs, pores, pockets, cavities, occluded = {}, {}, {}, {}, {}
+    hub_id, pore_id, pocket_id, cavity_id, occluded_id = 0, 0, 0, 0, 0
 
     while len(agglomerated_indices) < len(buried_indices):
         remaining_indices = buried_indices - agglomerated_indices
@@ -552,17 +565,20 @@ def get_pores_pockets_cavities_occluded(
         )
 
         # add the voxelgroup depending on type and increment the type counter
-        if agglomerated_type == "cavity":
-            cavities[cavity_id] = voxel_group
-            cavity_id += 1
+        if agglomerated_type == "hub":
+            hubs[hub_id] = voxel_group
+            hub_id += 1
         elif agglomerated_type == "pore":
             pores[pore_id] = voxel_group
             pore_id += 1
         elif agglomerated_type == "pocket":
             pockets[pocket_id] = voxel_group
             pocket_id += 1
+        elif agglomerated_type == "cavity":
+            cavities[cavity_id] = voxel_group
+            cavity_id += 1
         elif agglomerated_type == "occluded":
             occluded[occluded_id] = voxel_group
             occluded_id += 1
 
-    return pores, pockets, cavities, occluded
+    return hubs, pores, pockets, cavities, occluded

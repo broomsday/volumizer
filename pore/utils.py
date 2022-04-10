@@ -201,6 +201,20 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
     """
     Return a dataframe of the annotation values for each volume type.
     """
+    hubs_df = pd.DataFrame.from_dict(
+        [
+            {
+                "id": i,
+                "type": "hub",
+                "volume": annotation.hub_volumes[i],
+                "x": annotation.hub_dimensions[i][0],
+                "y": annotation.hub_dimensions[i][1],
+                "z": annotation.hub_dimensions[i][2],
+            }
+            for i in annotation.hub_volumes.keys()
+        ]
+    )
+
     pores_df = pd.DataFrame.from_dict(
         [
             {
@@ -243,7 +257,7 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
         ]
     )
 
-    return pd.concat([pores_df, cavities_df, pockets_df], ignore_index=True)
+    return pd.concat([hubs_df, pores_df, cavities_df, pockets_df], ignore_index=True)
 
 
 def save_annotation_dataframe(name: str, annotation_df: pd.DataFrame):

@@ -83,8 +83,8 @@ VOXEL_SIZE = 3.0
 OCCLUDED_DIMENSION_LIMIT = 4
 MIN_NUM_VOXELS = 4
 
-VOXEL_TYPE_CHAIN_MAP = {"POK": "A", "POR": "B", "CAV": "C", "OCC": "D"}
-VOXEL_TYPE_ATOM_MAP = {"POK": "N", "POR": "O", "CAV": "S", "OCC": "H"}
+VOXEL_TYPE_CHAIN_MAP = {"HUB": "A", "POR": "B", "POK": "C", "CAV": "D", "OCC": "E"}
+VOXEL_TYPE_ATOM_MAP = {"HUB": "F", "POR": "O", "POK": "N", "CAV": "S", "OCC": "H"}
 
 RESIDUE_LETTER_CONVERSION = {
     "ALA": "A",

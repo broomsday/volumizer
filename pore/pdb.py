@@ -153,6 +153,7 @@ def make_atom_lines(
 
 def points_to_pdb(
     voxel_grid: VoxelGrid,
+    hubs: dict[int, VoxelGroup],
     pores: dict[int, VoxelGroup],
     pockets: dict[int, VoxelGroup],
     cavities: dict[int, VoxelGroup],
@@ -164,12 +165,16 @@ def points_to_pdb(
     return list(
         itertools.chain(
             *[
-                make_atom_lines("POK", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
-                for i, voxel_group in pockets.items()
+                make_atom_lines("HUB", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
+                for i, voxel_group in hubs.items()
             ],
             *[
                 make_atom_lines("POR", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
                 for i, voxel_group in pores.items()
+            ],
+            *[
+                make_atom_lines("POK", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
+                for i, voxel_group in pockets.items()
             ],
             *[
                 make_atom_lines("CAV", i, voxel_group.indices, voxel_group.surface_indices, voxel_grid.voxel_centers)
@@ -223,6 +228,11 @@ def generate_volume_remarks(annotation: Annotation) -> list[str]:
     """
     Return REMARKS for a PDB file to hold all volume information from an annotation object.
     """
+    hub_remarks = [
+        f"REMARK HUB VOLUME {annotation.hub_volumes[i]} DIMENSIONS {annotation.hub_dimensions[i][0], annotation.hub_dimensions[i][1], annotation.hub_dimensions[i][2]}"
+        for i in annotation.hub_volumes
+    ]
+
     pore_remarks = [
         f"REMARK PORE VOLUME {annotation.pore_volumes[i]} DIMENSIONS {annotation.pore_dimensions[i][0], annotation.pore_dimensions[i][1], annotation.pore_dimensions[i][2]}"
         for i in annotation.pore_volumes
@@ -238,7 +248,7 @@ def generate_volume_remarks(annotation: Annotation) -> list[str]:
         for i in annotation.pocket_volumes
     ]
 
-    return pore_remarks + cavity_remarks + pocket_remarks
+    return hub_remarks + pore_remarks + cavity_remarks + pocket_remarks
 
 
 def generate_resolution_remarks() -> list[str]:

@@ -25,18 +25,23 @@ class VoxelGroup(NamedTuple):
 
 
 class Annotation(NamedTuple):
+    total_hub_volume: float
     total_pore_volume: float
     total_cavity_volume: float
     total_pocket_volume: float
+    largest_hub_volume: float
     largest_pore_volume: float
     largest_cavity_volume: float
     largest_pocket_volume: float
+    num_hubs: int
     num_pores: int
     num_cavities: int
     num_pockets: int
+    hub_volumes: dict[int, Optional[float]]
     pore_volumes: dict[int, Optional[float]]
     cavity_volumes: dict[int, Optional[float]]
     pocket_volumes: dict[int, Optional[float]]
+    hub_dimensions: dict[int, list[float]]
     pore_dimensions: dict[int, list[float]]
     cavity_dimensions: dict[int, list[float]]
     pocket_dimensions: dict[int, list[float]]
