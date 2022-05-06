@@ -9,6 +9,7 @@ import requests
 from time import sleep
 import re
 import ast
+import progressbar
 
 from pore.paths import RCSB_CLUSTER_FILE, DOWNLOADED_PDB_DIR, RCSB_CCD_FILE
 from pore.constants import (
@@ -23,6 +24,22 @@ from pore.constants import (
     RCSB_CONTACT_RETRIES,
 )
 from pore.types import ComponentData
+
+
+class DownloadProgressBar():
+    def __init__(self):
+        self.pbar = None
+
+    def __call__(self, block_num, block_size, total_size):
+        if not self.pbar:
+            self.pbar=progressbar.ProgressBar(maxval=total_size)
+            self.pbar.start()
+
+        downloaded = block_num * block_size
+        if downloaded < total_size:
+            self.pbar.update(downloaded)
+        else:
+            self.pbar.finish()
 
 
 def cluster_file_exists(cluster_file: Path) -> bool:
@@ -113,16 +130,18 @@ def download_component_file() -> None:
     """
     Download the Chemical Component Dictionary file.
     """
-    request.urlretrieve(RCSB_CCD_URL, RCSB_CCD_FILE)
+    request.urlretrieve(RCSB_CCD_URL, RCSB_CCD_FILE, DownloadProgressBar())
 
 
 def get_component_file() -> None:
     """
     Download the Chemical Component Dictionary file if it doesn't exist locally.
     """
+    print("Downloading RCSB component file, this may take some time...")
     RCSB_CCD_FILE.parent.mkdir(exist_ok=True, parents=True)
     download_attempts = 0
     while (not component_file_exists()) and (download_attempts < 10):
+        print(f"\tDownload attempt: {download_attempts + 1}")
         download_component_file()
         download_attempts += 1
 

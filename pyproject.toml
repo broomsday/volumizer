@@ -12,6 +12,7 @@ tqdm = "^4.62.3"
 biopython = "^1.79"
 pyntcloud = "^0.1.5"
 requests = "^2.27.1"
+progressbar = "^2.5"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
