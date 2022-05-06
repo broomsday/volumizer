@@ -106,7 +106,7 @@ def add_extra_points_python(coords: pd.DataFrame, voxel_size: float = utils.VOXE
                 extra_element += [element] * num_samples
 
     extra_coords = pd.DataFrame.from_dict({"x": extra_x, "y": extra_y, "z": extra_z, "element": extra_element})
-    coords = coords.append(extra_coords, ignore_index=True)
+    coords = pd.concat([coords, extra_coords], ignore_index=True)
 
     return coords
 
