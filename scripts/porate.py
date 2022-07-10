@@ -9,6 +9,7 @@ import multiprocessing
 
 from pore import pore, cli, utils, pdb
 from pore.constants import VOXEL_SIZE
+from pore.paths import ANNOTATED_DF_DIR, ANNOTATED_PDB_DIR
 
 
 def porate_pdb_id(pdb_id: str) -> None:
@@ -25,7 +26,10 @@ def porate_pdb_id(pdb_id: str) -> None:
         annotation_df = utils.make_annotation_dataframe(annotation)
 
         utils.save_annotation_dataframe(pdb_id, annotation_df)
+        print(f"Annotation saved to dataframe as: {(ANNOTATED_DF_DIR / pdb_path.stem).with_suffix('.json')}")
         pdb.save_annotated_pdb(pdb_id, annotated_pdb_lines)
+        print(f"Annotation saved to PDB as: {(ANNOTATED_PDB_DIR / pdb_path.stem).with_suffix('.pdb')}")
+        print(f"Quick annotation output:")
         print(annotation_df)
 
 
@@ -39,7 +43,10 @@ def porate_pdb_file(pdb_file: Path) -> None:
         annotation_df = utils.make_annotation_dataframe(annotation)
 
         utils.save_annotation_dataframe(Path(pdb_file).stem, annotation_df)
+        print(f"Annotation saved to dataframe as: {(ANNOTATED_DF_DIR / pdb_file.stem).with_suffix('.json')}")
         pdb.save_annotated_pdb(Path(pdb_file).stem, annotated_pdb_lines)
+        print(f"Annotation saved to PDB as: {(ANNOTATED_PDB_DIR / pdb_file.stem).with_suffix('.pdb')}")
+        print(f"Quick annotation output:")
         print(annotation_df)
 
 
