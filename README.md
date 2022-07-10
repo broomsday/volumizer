@@ -26,7 +26,6 @@ poetry install
 If you wish to install outside of a poetry managed virtual environment, the 3rd party python packages that need to be installed are:
 
 - typer
-- tqdm
 - biopython
 - pyntcloud
 - requests

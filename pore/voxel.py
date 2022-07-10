@@ -9,7 +9,6 @@ import ctypes
 import numpy as np
 import pandas as pd
 
-from tqdm import tqdm
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
@@ -176,7 +175,7 @@ def get_exposed_and_buried_voxels(
 
     z_array, y_array, x_array = build_planar_voxel_coordinate_arrays(protein_voxels.voxels, voxel_grid_dimensions)
 
-    for i in tqdm(range(solvent_voxels.voxels[0].size), desc="Searching voxels"):
+    for i in range(solvent_voxels.voxels[0].size):
         query_voxel = (solvent_voxels.voxels[0][i], solvent_voxels.voxels[1][i], solvent_voxels.voxels[2][i])
 
         occluded_dimensions = get_occluded_dimensions(
