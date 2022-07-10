@@ -1,25 +1,43 @@
-`Porate` discovers and annotates hydrated volumes in proteins.  These include: cavities, pockets, pores, and hubs.
+`Porate` discovers and annotates occluded volumes in proteins including:
+- Cavities: Volumes within a protein that do not make any contacts with bulk solvent. Useful for e.g. carrying cargo.
+- Pockets: Volumes on the protein surface that make a single contact with bulk solvent.  Useful for e.g. ligand binding or catalysis.
+- Pores: Volumes connecting two bulk solvent surfaces.  Useful for e.g. filtering solutes.
+- Hubs: Volumes connecting more than two bulk solvent surfaces.  Maybe useful for slow release of cargo...
+
+# Example
+
+Here is shown an example pore identified and annotated (red) in PDB 4JPN (green).
+![image](images/pore_annotation.png)
+
+The same pore volume annotated (red) shown as a slice through the protein (grey).
+![image](images/pore_slice.png)
 
 # Installation
 `Porate` was written to use python 3.9.
 
-## Install Using Poetry
+## Python Package Installation Using Poetry
 `Porate` can be installed and run from a virtual environment using `poetry`, a widely used python virtual environment manager.
 
 ```bash
 poetry install
 ```
 
-## Manually install packages
+## Manually Python Package Installation
 If you wish to install outside of a poetry managed virtual environment, the 3rd party python packages that need to be installed are:
 
-typer
-tqdm
-biopython
-pyntcloud
-requests
-progressbar
+- typer
+- tqdm
+- biopython
+- pyntcloud
+- requests
+- progressbar
 
+## Compiling C Source
+Several under-the-hood functions are implemented in both python and C.  If the C versions are not compiled performance will be reduced.
+To compile them:
+```bash
+./source/compile_c_libs.sh
+```
 
 # Usage
 `Porate` can be invoked from the command-line or imported and used within your own python scripts.
@@ -30,10 +48,22 @@ RCSB database, which is used to optionally clean structures of extraneous atoms 
 
 The CLI can be used with 4 different inputs.
 
-1. A single PDB ID can be supplied, e.g. `python porate 4JPN`
-2. A batch of PDB IDs can be supplied in a text file, one per line, e.g. `python porate <path-to-my-text-file>`
-3. A local PDB file can be supplied, e.g. `python porate <path-to-my-file>`
-4. A batch of PDB files from a directory can be supplied, e.g. `python porate <path-to-my-dir-of-PDBs>`
+1. A single PDB ID can be supplied.
+```bash
+python porate 4JPN
+```
+2. A batch of PDB IDs can be supplied in a text file, one per line.
+```bash
+python porate <path-to-my-text-file>
+```
+3. A local PDB file can be supplied.
+```bash
+python porate <path-to-my-file>
+```
+4. A batch of PDB files from a directory can be supplied.
+```bash
+python porate <path-to-my-dir-of-PDBs>
+```
 
 ### Flags
 `resolution` the length of the sides of the voxels constructed.  3 Angstroms is the default.  Smaller values
@@ -46,7 +76,7 @@ cleaned of explicit waters, salts, ligands, etc.. leaving only protein atoms (bo
 case they are trivially paralellized across threads.
 
 ## Python Package Usage
-PENDING
+PENDING DOCUMENTATION
 
 
 # How It Works
