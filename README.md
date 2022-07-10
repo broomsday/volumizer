@@ -4,7 +4,7 @@
 - Pores: Volumes connecting two bulk solvent surfaces.  Useful for e.g. filtering solutes.
 - Hubs: Volumes connecting more than two bulk solvent surfaces.  Maybe useful for slow release of cargo...
 
-# Example
+# Example Identified Volume
 
 Here is shown an example pore identified and annotated (red) in PDB 4JPN (green).
 ![image](images/pore_annotation.png)
