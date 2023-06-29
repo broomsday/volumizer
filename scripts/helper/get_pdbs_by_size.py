@@ -11,7 +11,7 @@ import warnings
 import typer
 from tqdm import tqdm
 
-from pore import analysis, rcsb, utils
+from volumizer import analysis, rcsb, utils
 
 
 def main(

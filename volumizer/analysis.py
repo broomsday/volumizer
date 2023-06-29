@@ -9,8 +9,8 @@ from typing import Union
 import pandas as pd
 from tqdm import tqdm
 
-from pore.paths import ANNOTATED_DF_DIR
-from pore.utils import VOXEL_SIZE
+from volumizer.paths import ANNOTATED_DF_DIR
+from volumizer.utils import VOXEL_SIZE
 
 
 def get_annotations_by_id(pdb_ids: list[str]) -> tuple[list[Path], int]:

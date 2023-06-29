@@ -12,10 +12,10 @@ import pandas as pd
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from pore import utils, align
-from pore.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
-from pore.types import VoxelGroup
-from pore.paths import C_CODE_DIR
+from volumizer import utils, align
+from volumizer.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
+from volumizer.types import VoxelGroup
+from volumizer.paths import C_CODE_DIR
 
 
 if utils.using_performant():
@@ -490,11 +490,11 @@ def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid
     Align the voxel group to it's principal axes, then compute the maximum length along each axis.
     """
     voxel_coords = np.array([voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices])
+    if len(voxel_coords) < 3:
+        return [0, 0, 0]
 
-    rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
-
-    # apply the rotation and translation
-    voxel_coords = align.rotate_and_translate_coords(voxel_coords, rotation, translation)
+    #rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
+    voxel_coords, rotation, translation = align.align_structure(voxel_coords)
 
     # compute the maximum length across each axis
     xs = [voxel_coord[0] for voxel_coord in voxel_coords]

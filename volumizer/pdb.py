@@ -3,21 +3,18 @@ Functions for parsing, cleaning, and modifying PDBs.
 """
 
 from pathlib import Path
-import tempfile
 import itertools
 from typing import Optional
-import warnings
 import subprocess
 
-from Bio.PDB import PDBParser, Select, Structure, DSSP
-from Bio.PDB.PDBExceptions import PDBConstructionWarning
-from Bio.PDB.PDBIO import PDBIO
 from Bio import pairwise2
+import biotite.structure as bts
+from biotite.structure.io import load_structure, save_structure
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
 
-from pore.constants import (
+from volumizer.constants import (
     VOXEL_ATOM_NAMES,
     VOXEL_TYPE_CHAIN_MAP,
     VOXEL_TYPE_ATOM_MAP,
@@ -25,45 +22,16 @@ from pore.constants import (
     SEQUENCE_IDENTITY_CUTOFF,
     STRIDE_CODES,
 )
-from pore.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
-from pore.types import VoxelGroup, Annotation
-from pore import utils
+from volumizer.paths import PREPARED_PDB_DIR, ANNOTATED_PDB_DIR
+from volumizer.types import VoxelGroup, Annotation
+from volumizer import utils
 
 
-PDB_IN = PDBParser()
-PDB_OUT = PDBIO()
-
-
-class ProteinSelect(Select):
-    def __init__(self, components):
-        Select.__init__(self)
-        self.components = components
-
-    def accept_model(self, model):
-        if (model.serial_num == 0) or (model.serial_num == 1):
-            return True
-        return utils.KEEP_MODELS
-
-    def accept_residue(self, residue):
-        if residue.resname in self.components:
-            return True
-        return utils.KEEP_NON_PROTEIN
-
-    def accept_atom(self, atom):
-        if (not atom.is_disordered()) or (atom.get_altloc() == "A"):
-            atom.set_altloc(" ")
-
-        if atom.element != "H":
-            return True
-        return utils.KEEP_HYDROGENS
-
-
-def save_pdb(structure: Structure.Structure, pdb_file: Path, remarks: Optional[str] = None) -> None:
+def save_pdb(structure: bts.AtomArray, pdb_file: Path, remarks: Optional[str] = None) -> None:
     """
     Save a biopython PDB structure to a PDB file.
     """
-    PDB_OUT.set_structure(structure)
-    PDB_OUT.save(str(pdb_file))
+    save_structure(pdb_file, structure)
 
     # if we are adding remarks, read in the just written file, add the remarks and overwrite
     if remarks is not None:
@@ -74,45 +42,41 @@ def save_pdb(structure: Structure.Structure, pdb_file: Path, remarks: Optional[s
             out_file.write(remarks + "".join(lines))
 
 
-def load_pdb(pdb_file: Path, show_warnings: bool = False) -> Structure.Structure:
+def load_pdb(pdb_file: Path) -> bts.AtomArray:
     """
-    Load a PDB file as a biopython PDB structure.
+    Load a PDB file as a biotite AtomArray.
     """
-    if not show_warnings:
-        warnings.filterwarnings("ignore", category=PDBConstructionWarning)
-    structure = PDB_IN.get_structure(pdb_file.stem, pdb_file)
+    return load_structure(pdb_file)
 
-    # return the warnings back to their default state for future use
-    warnings.filterwarnings("default", category=PDBConstructionWarning)
+
+def clean_structure(structure: bts.AtomArray, protein_components: set[str]) -> bts.AtomArray:
+    """
+    Clean the AtomArray of a PDB based on selected preferences.
+    """
+    if not utils.KEEP_MODELS:
+        structure = structure[0]    # TODO: confirm this works
+
+    if not utils.KEEP_NON_PROTEIN:
+        structure = structure[np.isin(structure.res_name, list(protein_components))]
+
+    if not utils.KEEP_HYDROGENS:
+        structure = structure[~np.isin(structure.element, ["H"])]
 
     return structure
 
 
-def clean_structure(structure: Structure.Structure, protein_components: set[str]) -> Structure.Structure:
+def get_structure_coords(structure: bts.AtomArray, canonical_protein_atoms_only: bool = False) -> pd.DataFrame:
     """
-    Clean a PDB by saving it to a temporary file with the select class and then reloading.
-    """
-    PDB_OUT.set_structure(structure)
-    with tempfile.SpooledTemporaryFile(mode="w+") as pdb_file:
-        PDB_OUT.save(pdb_file, select=ProteinSelect(protein_components))
-        pdb_file.seek(0)
-        structure = PDB_IN.get_structure(structure.id, pdb_file)
+    Return the coordinates of an atom array as a dataframe.
 
-    return structure
-
-
-def get_structure_coords(structure: Structure.Structure, canonical_protein_atoms_only: bool = False) -> pd.DataFrame:
-    """
-    Load the PDB file using Biopython.
-
-    Return the coordinates of backbone heavy atoms and CB atoms as a dataframe.
+    # TODO: shouldn't we just keep the coords as an np array?  why are we converting to a less performant format?
+    # TODO: in fact, we could just keep the whole structure and thereby keep the elements along with it
     """
     if canonical_protein_atoms_only:
-        coordinates = [atom.coord for atom in structure.get_atoms() if atom.name in VOXEL_ATOM_NAMES]
-        elements = [atom.element for atom in structure.get_atoms() if atom.name in VOXEL_ATOM_NAMES]
-    else:
-        coordinates = [atom.coord for atom in structure.get_atoms()]
-        elements = [atom.element for atom in structure.get_atoms()]
+        structure = structure[np.isin(structure.atom_name, VOXEL_ATOM_NAMES)]
+
+    coordinates = structure.coord
+    elements = structure.element
 
     coordinates = pd.DataFrame(coordinates, columns=["x", "y", "z"])
     coordinates["element"] = elements
@@ -262,13 +226,12 @@ def get_stoichiometry(pdb: Path, match_cutoff: float = SEQUENCE_IDENTITY_CUTOFF)
     """
     Example return = {1: 10, 2: 5} for a heteromultimer with 10 of one chain and 5 of the other
     """
-    # load cleaned structure using biopython
+    # TODO: this function and some below don't need to be in main volumizer package, are only used in helper scripts
     structure = load_pdb(pdb)
 
-    # get the sequence of each using biopython
     sequences = []
-    for chain in structure.get_chains():
-        sequence = "".join([RESIDUE_LETTER_CONVERSION.get(residue.resname, "X") for residue in chain.get_residues()])
+    for chain in bts.chain_iter(structure):
+        sequence = "".join([RESIDUE_LETTER_CONVERSION.get(residue.res_name[0], "X") for residue in bts.residue_iter(chain)])
         sequences.append(sequence)
 
     # compute pairwise sequence identity using biopython to assign sequence clusters
@@ -279,6 +242,7 @@ def get_stoichiometry(pdb: Path, match_cutoff: float = SEQUENCE_IDENTITY_CUTOFF)
         joined_cluster = False
         for cluster_id, cluster_sequences in clusters.items():
             # only check against the first sequence in the cluster
+            # TODO: replace these functions with biotite?
             alignment = pairwise2.align.globalxx(query_sequence, cluster_sequences[0], one_alignment_only=True)[0]
             string_alignment = pairwise2.format_alignment(*alignment).split("\n")
             identity = string_alignment[1].count("|") / min(len(string_alignment[0]), len(string_alignment[2]))
@@ -310,6 +274,7 @@ def get_secondary_structure(pdb: Path) -> dict[str, float]:
     using the stride program.
     NOTE: requires local installation of STRIDE
     See http://webclu.bio.wzw.tum.de/stride/
+    # TODO: replace this with biotite?
     """
     process = subprocess.run(["stride", "-o", f"{pdb}"], capture_output=True)
     output = process.stdout.decode("UTF-8")

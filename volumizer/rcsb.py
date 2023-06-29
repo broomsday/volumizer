@@ -11,8 +11,8 @@ import re
 import ast
 import progressbar
 
-from pore.paths import RCSB_CLUSTER_FILE, DOWNLOADED_PDB_DIR, RCSB_CCD_FILE
-from pore.constants import (
+from volumizer.paths import RCSB_CLUSTER_FILE, DOWNLOADED_PDB_DIR, RCSB_CCD_FILE
+from volumizer.constants import (
     PDB_ID_LENGTH,
     RCSB_CLUSTER_URL,
     RCSB_BIOUNIT_URL,
@@ -23,7 +23,7 @@ from pore.constants import (
     RCSB_ASSEMBLY_INFO_URL,
     RCSB_CONTACT_RETRIES,
 )
-from pore.types import ComponentData
+from volumizer.types import ComponentData
 
 
 class DownloadProgressBar():

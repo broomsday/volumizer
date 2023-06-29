@@ -2,7 +2,7 @@ import time
 
 import typer
 
-from pore import voxel, pdb, fib_sphere, utils, paths
+from volumizer import voxel, pdb, fib_sphere, utils, paths
 
 
 def main(code: str = "python", pdb_name: str = "pore"):

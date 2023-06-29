@@ -10,7 +10,7 @@ import warnings
 import typer
 from tqdm import tqdm
 
-from pore import utils, pdb, paths, analysis
+from volumizer import utils, pdb, paths, analysis
 
 
 def main(

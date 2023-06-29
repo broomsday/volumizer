@@ -12,8 +12,8 @@ import warnings
 
 import typer
 
-from pore import analysis
-from pore.cli import guess_analysis_input_type
+from volumizer import analysis
+from volumizer.cli import guess_analysis_input_type
 
 
 def main(

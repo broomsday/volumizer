@@ -2,8 +2,8 @@ import pytest
 import numpy as np
 import ctypes
 
-from pore.fib_sphere import fibonacci_sphere, estimate_fibonacci_sphere_samples
-from pore.paths import C_CODE_DIR
+from volumizer.fib_sphere import fibonacci_sphere, estimate_fibonacci_sphere_samples
+from volumizer.paths import C_CODE_DIR
 
 
 fib_sphere_c_path = C_CODE_DIR / "fib_sphere.so"

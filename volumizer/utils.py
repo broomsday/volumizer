@@ -12,9 +12,9 @@ import numpy as np
 import pandas as pd
 import json
 
-from pore import rcsb, constants, paths
-from pore.types import Annotation, VoxelGroup
-from pore.paths import C_CODE_DIR
+from volumizer import rcsb, constants, paths
+from volumizer.types import Annotation, VoxelGroup
+from volumizer.paths import C_CODE_DIR
 
 
 VOXEL_SIZE = constants.VOXEL_SIZE

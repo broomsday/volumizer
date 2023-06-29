@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 import ctypes
 
-from pore.voxel import (
+from volumizer.voxel import (
     get_single_voxel,
     is_neighbor_voxel,
     breadth_first_search_python,
@@ -10,7 +10,7 @@ from pore.voxel import (
     get_neighbor_voxels_python,
     get_neighbor_voxels_c,
 )
-from pore.paths import C_CODE_DIR
+from volumizer.paths import C_CODE_DIR
 
 
 VOXEL_C_PATH = C_CODE_DIR / "voxel.so"

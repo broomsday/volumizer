@@ -8,9 +8,9 @@ import ctypes
 import pandas as pd
 import numpy as np
 
-from pore import utils
-from pore.constants import ATOMIC_RADII, BASE_ATOMIC_RADIUS
-from pore.paths import C_CODE_DIR
+from volumizer import utils
+from volumizer.constants import ATOMIC_RADII, BASE_ATOMIC_RADIUS
+from volumizer.paths import C_CODE_DIR
 
 
 GOLDEN_RATIO = (1 + np.sqrt(5.0)) / 4

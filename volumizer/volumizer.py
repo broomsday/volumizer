@@ -6,15 +6,15 @@ Entry-level functions to find pores and cavities.
 from pathlib import Path
 from typing import Optional
 
-from Bio.PDB import Structure
+import biotite.structure as bts
 
-from pore import rcsb, utils, pdb, voxel, fib_sphere, align
-from pore.types import Annotation
-from pore.paths import PREPARED_PDB_DIR
+from volumizer import rcsb, utils, pdb, voxel, fib_sphere, align
+from volumizer.types import Annotation
+from volumizer.paths import PREPARED_PDB_DIR
 
 
 def annotate_pdb_structure(
-    structure: Structure.Structure, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
+    structure: bts.AtomArray, min_voxels: Optional[int] = 2, min_volume: Optional[float] = None
 ) -> tuple[Annotation, list[str]]:
     """
     Perform analysis of a prepared structure.
@@ -85,17 +85,16 @@ def annotate_pdb_structure(
     return (annotation, pdb_lines)
 
 
-def prepare_pdb_structure(structure: Structure.Structure) -> tuple[Structure.Structure, str]:
+def prepare_pdb_structure(structure: bts.AtomArray) -> tuple[bts.AtomArray, str]:
     """
-    Prepares a biopython Structure object for analysis by:
+    Prepares a biotite AtomArray object for analysis by:
 
     1. Cleaning extraneous atoms
-    2. Adding hydrogens
-    3. Aligning along the principal axis
+    2. Aligning along the principal axis
 
-    Returns a biopython Structure object.
+    Returns a biotite AtomArray
     """
-    protein_components = utils.load_protein_components()
+    protein_components = utils.load_protein_components()    # TODO: make this a single datafile or in constants.
 
     structure = pdb.clean_structure(structure, protein_components)
 
@@ -105,7 +104,7 @@ def prepare_pdb_structure(structure: Structure.Structure) -> tuple[Structure.Str
     return structure, remarks
 
 
-def prepare_pdb_file(pdb_file: Path) -> tuple[Structure.Structure, str]:
+def prepare_pdb_file(pdb_file: Path) -> tuple[bts.AtomArray, str]:
     """
     Prepares a PDB file at the given path for analysis by:
 
@@ -134,6 +133,7 @@ def process_pdb_file(pdb_file: Path) -> tuple[Annotation, list[str]]:
     """
     Perform end-to-end pipeline on a single PDB file.
     """
+    # TODO: add optional parameter for output PDB path
     prepared_structure, remarks = prepare_pdb_file(pdb_file)
     pdb.save_pdb(prepared_structure, PREPARED_PDB_DIR / pdb_file.name, remarks=remarks)
 
