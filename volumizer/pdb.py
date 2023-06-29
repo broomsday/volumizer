@@ -53,8 +53,14 @@ def clean_structure(structure: bts.AtomArray, protein_components: set[str]) -> b
     """
     Clean the AtomArray of a PDB based on selected preferences.
     """
-    if not utils.KEEP_MODELS:
-        structure = structure[0]    # TODO: confirm this works
+    if isinstance(structure, bts.AtomArrayStack):
+        if not utils.KEEP_MODELS:
+            structure = structure[0]
+        elif structure.stack_depth() > 1:
+            new_structure = structure[0]
+            for model in structure[1:]:
+                new_structure += model
+            structure = new_structure
 
     if not utils.KEEP_NON_PROTEIN:
         structure = structure[np.isin(structure.res_name, list(protein_components))]

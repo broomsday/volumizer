@@ -419,8 +419,23 @@ def breadth_first_search(
     return breadth_first_search_python(voxels, searchable_indices)
 
 
+def is_edge_voxel(voxel: np.ndarray, voxel_grid_dimensions: np.ndarray) -> bool:
+    """
+    Is this voxel at the edge of our grid on any dimension?
+    """
+    if 0 in voxel:
+        return True
+    elif voxel[0] == voxel_grid_dimensions[0]:
+        return True
+    elif voxel[1] == voxel_grid_dimensions[1]:
+        return True
+    elif voxel[2] == voxel_grid_dimensions[2]:
+        return True
+
+    return False
+
 def get_agglomerated_type(
-    query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...]
+    query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...], voxel_grid_dimensions: np.ndarray,
 ) -> tuple[set[int], str]:
     """
     Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Four possibilites:
@@ -433,6 +448,9 @@ def get_agglomerated_type(
     direct_surface_indices = set()
     for query_index in query_indices:
         query_voxel = get_single_voxel(buried_voxels, query_index)
+        if is_edge_voxel(query_voxel, voxel_grid_dimensions):
+            direct_surface_indices.add(query_index)
+            continue
         for exposed_voxel_index in range(len(exposed_voxels[0])):
             exposed_voxel = get_single_voxel(exposed_voxels, exposed_voxel_index)
             if is_neighbor_voxel(query_voxel, exposed_voxel):
@@ -533,7 +551,7 @@ def get_pores_pockets_cavities_occluded(
         else:
             # identify what these agglomerated voxels are
             direct_surface_indices, agglomerated_type = get_agglomerated_type(
-                agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels
+                agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels, voxel_grid.x_y_z
             )
 
         # get the surface voxels for use in getting their voxel-grid indices
