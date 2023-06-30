@@ -13,7 +13,7 @@ RCSB_GENERAL_INFO_URL = "https://data.rcsb.org/rest/v1/core/entry/"
 RCSB_ASSEMBLY_INFO_URL = "https://data.rcsb.org/rest/v1/core/assembly/"
 RCSB_CONTACT_RETRIES = 10
 
-# TODO: why is this used?  we should be just using everything that isn't cleaned
+# TODO: this is only used in some optional downstream coordinate cleaning, but I suspect we should just ditch it
 VOXEL_ATOM_NAMES = frozenset(
     [
         "N",

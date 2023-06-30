@@ -101,10 +101,10 @@ def prepare_pdb_structure(structure: bts.AtomArray) -> tuple[bts.AtomArray, str]
     structure, rotation, translation = align.align_structure(structure)
     remarks = pdb.generate_rotation_translation_remarks(rotation, translation)
 
-    return structure, remarks
+    return (structure, remarks)
 
 
-def prepare_pdb_file(pdb_file: Path) -> tuple[bts.AtomArray, str]:
+def prepare_pdb_file(pdb_file: Path) -> tuple[bts.AtomArray, str]:  # TODO: potentially remove this functon, serves no purpose other than to confuse
     """
     Prepares a PDB file at the given path for analysis by:
 
@@ -117,7 +117,7 @@ def prepare_pdb_file(pdb_file: Path) -> tuple[bts.AtomArray, str]:
     return prepare_pdb_structure(pdb.load_pdb(pdb_file))
 
 
-def download_pdb_file(pdb_id: str) -> Path:
+def download_pdb_file(pdb_id: str) -> Path: # TODO: move into sep repo, not part of volumizer package
     """
     Download the biological assembly from the RCSB.
     Unzip and save the PDB.
@@ -129,12 +129,17 @@ def download_pdb_file(pdb_id: str) -> Path:
     return utils.get_downloaded_pdb_path(pdb_id)
 
 
-def process_pdb_file(pdb_file: Path) -> tuple[Annotation, list[str]]:
+def process_pdb_file(pdb_file: Path | str, out_dir: Path = PREPARED_PDB_DIR) -> tuple[Annotation, list[str]]:
     """
     Perform end-to-end pipeline on a single PDB file.
     """
-    # TODO: add optional parameter for output PDB path
-    prepared_structure, remarks = prepare_pdb_file(pdb_file)
-    pdb.save_pdb(prepared_structure, PREPARED_PDB_DIR / pdb_file.name, remarks=remarks)
+    if isinstance(pdb_file, str):
+        pdb_file = Path(pdb_file)
+
+    structure = pdb.load_pdb(pdb_file)
+    prepared_structure, remarks = prepare_pdb_structure(structure)
+
+    if out_dir.is_dir():
+        pdb.save_pdb(prepared_structure, out_dir / pdb_file.name, remarks=remarks)
 
     return annotate_pdb_structure(prepared_structure)

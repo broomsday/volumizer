@@ -27,10 +27,19 @@ from volumizer.types import VoxelGroup, Annotation
 from volumizer import utils
 
 
+def save_pdb_lines(pdb_lines: list[str], output: Path) -> None:
+    """
+    Save individual pdb lines to a file.
+    """
+    with open(output, mode="w", encoding="utf-8") as out_file:
+        out_file.writelines("%s\n" % line for line in pdb_lines)
+
+
 def save_pdb(structure: bts.AtomArray, pdb_file: Path, remarks: Optional[str] = None) -> None:
     """
-    Save a biopython PDB structure to a PDB file.
+    Save a biotite structure to a PDB file.
     """
+    # TODO: simplify or even remove this function, should just use `save_pdb_lines` or biotite's `save_structure`
     save_structure(pdb_file, structure)
 
     # if we are adding remarks, read in the just written file, add the remarks and overwrite
@@ -42,7 +51,7 @@ def save_pdb(structure: bts.AtomArray, pdb_file: Path, remarks: Optional[str] = 
             out_file.write(remarks + "".join(lines))
 
 
-def load_pdb(pdb_file: Path) -> bts.AtomArray:
+def load_pdb(pdb_file: Path) -> bts.AtomArray:  # TODO: can probably just delete this and import `load_structure` directly from `pdb` in other functions
     """
     Load a PDB file as a biotite AtomArray.
     """
@@ -90,20 +99,46 @@ def get_structure_coords(structure: bts.AtomArray, canonical_protein_atoms_only:
     return coordinates
 
 
+def structure_to_lines(structure: bts.AtomArray) -> list[str]:
+    """
+    Convert an AtomArray into individual PDB lines
+    """
+    try:
+        return [make_atom_line(atom.atom_name, atom.res_name, atom.res_id, atom.chain_id, idx, atom.coord, atom.element, beta=atom.b_factor) for idx, atom in enumerate(structure)]
+    except AttributeError:
+        return [make_atom_line(atom.atom_name, atom.res_name, atom.res_id, atom.chain_id, idx, atom.coord, atom.element) for idx, atom in enumerate(structure)]
+
+
+def format_atom_name(atom_name: str) -> str:
+    """
+    Format an atom-name to occupy 4 characters the weird way PDBs do it.
+    """
+    if len(atom_name) == 1:
+        return f" {atom_name}  "
+    elif len(atom_name) == 2:
+        return f" {atom_name} "
+    elif len(atom_name) == 3:
+        return f" {atom_name}"
+    return atom_name[:4]
+
+
 def make_atom_line(
-    voxel_type: str,
-    resnum: int,
-    voxel_index: int,
-    point: np.ndarray,
-    beta: float,
+    atom_name: str,
+    res_name: str,
+    res_num: int,
+    chain_id: str,
+    atom_index: int,
+    coord: np.ndarray,
+    element: str,
+    beta: float = 0.0,
 ) -> str:
     """
     Make a single atom line for a single voxel
     """
-    return f"ATOM  {voxel_index:>5d}  {VOXEL_TYPE_ATOM_MAP[voxel_type]}   {voxel_type} {VOXEL_TYPE_CHAIN_MAP[voxel_type]}{resnum:>4d}    {point[0]:>8.3f}{point[1]:>8.3f}{point[2]:>8.3f}  1.00{beta:>6.2f}           {VOXEL_TYPE_ATOM_MAP[voxel_type]}"
+    return f"ATOM  {atom_index:>5d}  {format_atom_name(atom_name)}{res_name} {chain_id}{res_num:>4d}    {coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}  1.00{beta:>6.2f}           {element}"
+ 
 
-
-def make_atom_lines(
+def make_atom_lines(    # TODO: rename this to indicate it's specifically for voxels
     voxel_type: str,
     resnum: int,
     voxel_indices: set[int],
@@ -114,9 +149,9 @@ def make_atom_lines(
     Make all atom lines for a given set of voxel indices
     """
     return [
-        make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index], 50.0)
+        make_atom_line(VOXEL_TYPE_ATOM_MAP[voxel_type], voxel_type, resnum, VOXEL_TYPE_CHAIN_MAP[voxel_type], voxel_index, voxel_grid_centers[voxel_index], VOXEL_TYPE_ATOM_MAP[voxel_type], 50.0)
         if voxel_index in surface_indices
-        else make_atom_line(voxel_type, resnum, voxel_index, voxel_grid_centers[voxel_index], 0.0)
+        else make_atom_line(VOXEL_TYPE_ATOM_MAP[voxel_type], voxel_type, resnum, VOXEL_TYPE_CHAIN_MAP[voxel_type], voxel_index, voxel_grid_centers[voxel_index], VOXEL_TYPE_ATOM_MAP[voxel_type], 0.0)
         for voxel_index in voxel_indices
     ]
 
@@ -158,40 +193,42 @@ def points_to_pdb(
     )
 
 
-def save_annotated_pdb(pdb_name: str, annotated_lines: list[str]) -> None:
+def save_annotated_pdb(prepared_pdb_lines: list[str], annotation_lines: list[str], output_file: Path) -> None:
     """
-    Save a PDB formatted coordinate file of the voxels.
+    Save a PDB formatted coordinate file of the voxels plus the prepared input pdb lines.
     Individual atoms/voxels are labelled according to type
     """
-    # get the original PDB lines so that our annotation can be appended
-    with open(PREPARED_PDB_DIR / f"{pdb_name}.pdb", mode="r", encoding="utf-8") as input_pdb_file:
-        pdb_lines = input_pdb_file.readlines()
-    pdb_lines = [line.rstrip("\n") for line in pdb_lines]
+    # TODO: possibly get rid of this in favour of several smaller functions (merge_pdb_lines and save_pdb_lines)
+    prepared_pdb_lines = [line.rstrip("\n") for line in prepared_pdb_lines]
 
-    # remove the terminal END line (NOTE: also removes terminal ENDMDL line)
-    for line in pdb_lines[::-1]:
+    # remove the terminal END line from the pdb.
+    for line in prepared_pdb_lines[::-1]:
         if line.strip() == "":
-            pdb_lines.pop()
+            prepared_pdb_lines.pop()
         if ("ENDMDL" not in line) and ("END" in line):
-            pdb_lines.pop()
+            prepared_pdb_lines.pop()
             break
 
+    full_lines = "\n".join([*prepared_pdb_lines, "END", *annotation_lines])
+    with open(output_file, mode="w", encoding="utf-8") as annotated_pdb_file:
+        annotated_pdb_file.write(full_lines)
+
     # add the annotated lines and save
-    with open(
-        ANNOTATED_PDB_DIR / f"{pdb_name}.{str(utils.VOXEL_SIZE)}.pdb", mode="w", encoding="utf-8"
-    ) as annotated_pdb_file:
-        annotated_pdb_file.write("\n".join([*pdb_lines, "END", *annotated_lines]))
+    #with open(
+    #    ANNOTATED_PDB_DIR / f"{pdb_name}.{str(utils.VOXEL_SIZE)}.pdb", mode="w", encoding="utf-8"
+    #) as annotated_pdb_file:
+    #    annotated_pdb_file.write("\n".join([*pdb_lines, "END", *annotation_lines]))
 
 
-def generate_rotation_translation_remarks(rotation: np.ndarray, translation: np.ndarray) -> str:
+def generate_rotation_translation_remarks(rotation: np.ndarray, translation: np.ndarray) -> list[str]:
     """
     Given a rotation matrix and translation vector, generate a string allowing them to be
     written as REMARKS to a PDB file.
     """
-    return (
-        f"REMARK TRANSLATION {str(translation)}\n"
-        f"REMARK ROTATION [{str(rotation[0])}, {str(rotation[1])}, {str(rotation[2])}]\n"
-    )
+    return [
+        f"REMARK TRANSLATION {str(translation)}",
+        f"REMARK ROTATION [{str(rotation[0])}, {str(rotation[1])}, {str(rotation[2])}]",
+    ]
 
 
 def generate_volume_remarks(annotation: Annotation) -> list[str]:
@@ -226,6 +263,17 @@ def generate_resolution_remarks() -> list[str]:
     Add a REMARK line with the resolution used fo rthis annotation
     """
     return [f"REMARK RESOLUTION {str(utils.VOXEL_SIZE)}"]
+
+
+def merge_pdb_lines(preparation_remarks: list[str], prepared_pdb: list[str], annotation_lines: list[str]) -> list[str]:
+    """
+    Merge together the various PDB-line elements into the final output file.
+    """
+    final_lines = preparation_remarks
+    final_lines.extend(prepared_pdb)
+    final_lines.extend(annotation_lines)
+
+    return final_lines
 
 
 def get_stoichiometry(pdb: Path, match_cutoff: float = SEQUENCE_IDENTITY_CUTOFF) -> dict[int, int]:
