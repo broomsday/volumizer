@@ -3,14 +3,12 @@ Entry-level functions to find pores and cavities.
 """
 
 
-from pathlib import Path
 from typing import Optional
 
 import biotite.structure as bts
 
-from volumizer import rcsb, utils, pdb, voxel, fib_sphere, align
+from volumizer import utils, pdb, voxel, fib_sphere, align
 from volumizer.types import Annotation
-from volumizer.paths import PREPARED_PDB_DIR
 
 
 def annotate_pdb_structure(
@@ -94,52 +92,9 @@ def prepare_pdb_structure(structure: bts.AtomArray) -> tuple[bts.AtomArray, str]
 
     Returns a biotite AtomArray
     """
-    protein_components = utils.load_protein_components()    # TODO: make this a single datafile or in constants.
-
-    structure = pdb.clean_structure(structure, protein_components)
+    structure = pdb.clean_structure(structure)
 
     structure, rotation, translation = align.align_structure(structure)
     remarks = pdb.generate_rotation_translation_remarks(rotation, translation)
 
     return (structure, remarks)
-
-
-def prepare_pdb_file(pdb_file: Path) -> tuple[bts.AtomArray, str]:  # TODO: potentially remove this functon, serves no purpose other than to confuse
-    """
-    Prepares a PDB file at the given path for analysis by:
-
-    1. Cleaning extraneous atoms
-    2. Adding hydrogens
-    3. Aligning along the principal axis
-
-    Returns a biopython Structure object.
-    """
-    return prepare_pdb_structure(pdb.load_pdb(pdb_file))
-
-
-def download_pdb_file(pdb_id: str) -> Path: # TODO: move into sep repo, not part of volumizer package
-    """
-    Download the biological assembly from the RCSB.
-    Unzip and save the PDB.
-    """
-    if not utils.is_pdb_downloaded(pdb_id):
-        if rcsb.download_biological_assembly(pdb_id):
-            utils.decompress_pdb(pdb_id)
-
-    return utils.get_downloaded_pdb_path(pdb_id)
-
-
-def process_pdb_file(pdb_file: Path | str, out_dir: Path = PREPARED_PDB_DIR) -> tuple[Annotation, list[str]]:
-    """
-    Perform end-to-end pipeline on a single PDB file.
-    """
-    if isinstance(pdb_file, str):
-        pdb_file = Path(pdb_file)
-
-    structure = pdb.load_pdb(pdb_file)
-    prepared_structure, remarks = prepare_pdb_structure(structure)
-
-    if out_dir.is_dir():
-        pdb.save_pdb(prepared_structure, out_dir / pdb_file.name, remarks=remarks)
-
-    return annotate_pdb_structure(prepared_structure)

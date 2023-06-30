@@ -7,9 +7,9 @@ from pathlib import Path
 import typer
 import multiprocessing
 
-from volumizer import cli, utils, pdb, volumizer
+from volumizer import cli, utils, pdb, volumizer, rcsb
 from volumizer.constants import VOXEL_SIZE
-from volumizer.paths import ANNOTATED_DF_DIR, ANNOTATED_PDB_DIR
+from volumizer.paths import PREPARED_PDB_DIR, ANNOTATED_DF_DIR, ANNOTATED_PDB_DIR
 
 
 def volumize_pdb_id(pdb_id: str) -> None:
@@ -17,18 +17,26 @@ def volumize_pdb_id(pdb_id: str) -> None:
     Download the given PDB ID and then volumize it.
     """
     if not utils.have_annotation(pdb_id):
-        pdb_path = volumizer.download_pdb_file(pdb_id)
-        if pdb_path is None:
+        pdb_file = rcsb.download_pdb_file(pdb_id)
+        if pdb_file is None:
             return None
 
         print(f"Working on: {pdb_id}")
-        annotation, annotated_pdb_lines = volumizer.process_pdb_file(pdb_path)
+
+        pdb_structure = pdb.load_structure(pdb_file)
+        prepared_structure, preparation_remarks = volumizer.prepare_pdb_structure(pdb_structure)
+        prepared_pdb = pdb.structure_to_lines(prepared_structure)
+        prepared_lines = pdb.merge_pdb_lines([preparation_remarks, prepared_pdb])
+        pdb.save_pdb_lines(prepared_lines, (PREPARED_PDB_DIR / pdb_file.stem).with_suffix('.pdb'))
+
+        annotation, annotated_lines = volumizer.annotate_pdb_structure(prepared_structure)
+        final_pdb_lines = pdb.merge_pdb_lines([prepared_lines, ["END"], annotated_lines])
         annotation_df = utils.make_annotation_dataframe(annotation)
 
-        utils.save_annotation_dataframe(pdb_id, annotation_df)
-        print(f"Annotation saved to dataframe as: {(ANNOTATED_DF_DIR / pdb_path.stem).with_suffix('.json')}")
-        pdb.save_annotated_pdb(pdb_id, annotated_pdb_lines)
-        print(f"Annotation saved to PDB as: {(ANNOTATED_PDB_DIR / pdb_path.stem).with_suffix('.pdb')}")
+        utils.save_annotation_dataframe(annotation_df, (ANNOTATED_DF_DIR / pdb_file.stem).with_suffix('.json'))
+        print(f"Annotation saved to dataframe as: {(ANNOTATED_DF_DIR / pdb_file.stem).with_suffix('.json')}")
+        pdb.save_pdb_lines(final_pdb_lines, (ANNOTATED_PDB_DIR / pdb_file.stem).with_suffix('.pdb'))
+        print(f"Annotation saved to PDB as: {(ANNOTATED_PDB_DIR / pdb_file.stem).with_suffix('.pdb')}")
         print(f"Quick annotation output:")
         print(annotation_df)
 
@@ -39,12 +47,20 @@ def volumize_pdb_file(pdb_file: Path) -> None:
     """
     if not utils.have_annotation(pdb_file.stem):
         print(f"Working on: {pdb_file.stem}")
-        annotation, annotated_pdb_lines = volumizer.process_pdb_file(pdb_file)
+
+        pdb_structure = pdb.load_structure(pdb_file)
+        prepared_structure, preparation_remarks = volumizer.prepare_pdb_structure(pdb_structure)
+        prepared_pdb = pdb.structure_to_lines(prepared_structure)
+        prepared_lines = pdb.merge_pdb_lines([preparation_remarks, prepared_pdb])
+        pdb.save_pdb_lines(prepared_lines, (PREPARED_PDB_DIR / pdb_file.stem).with_suffix('.pdb'))
+
+        annotation, annotated_lines = volumizer.annotate_pdb_structure(prepared_structure)
+        final_pdb_lines = pdb.merge_pdb_lines([prepared_lines, ["END"], annotated_lines])
         annotation_df = utils.make_annotation_dataframe(annotation)
 
-        utils.save_annotation_dataframe(Path(pdb_file).stem, annotation_df)
+        utils.save_annotation_dataframe(annotation_df, (ANNOTATED_DF_DIR / pdb_file.stem).with_suffix('.json'))
         print(f"Annotation saved to dataframe as: {(ANNOTATED_DF_DIR / pdb_file.stem).with_suffix('.json')}")
-        pdb.save_annotated_pdb(Path(pdb_file).stem, annotated_pdb_lines)
+        pdb.save_pdb_lines(final_pdb_lines, (ANNOTATED_PDB_DIR / pdb_file.stem).with_suffix('.pdb'))
         print(f"Annotation saved to PDB as: {(ANNOTATED_PDB_DIR / pdb_file.stem).with_suffix('.pdb')}")
         print(f"Quick annotation output:")
         print(annotation_df)
@@ -61,12 +77,10 @@ def main(
     """
     Find pores and cavities in the supplied PDB files.
     """
-
     utils.setup_dirs()
-    utils.ensure_protein_components_file()
-
     utils.set_resolution(resolution)
     utils.set_non_protein(non_protein)
+    utils.add_protein_components(rcsb.load_components())
     input_type = cli.guess_input_type(volumize_input)
 
     if input_type == "pdb_id":

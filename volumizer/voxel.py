@@ -425,11 +425,11 @@ def is_edge_voxel(voxel: np.ndarray, voxel_grid_dimensions: np.ndarray) -> bool:
     """
     if 0 in voxel:
         return True
-    elif voxel[0] == voxel_grid_dimensions[0]:
+    elif voxel[0] == voxel_grid_dimensions[0] - 1:
         return True
-    elif voxel[1] == voxel_grid_dimensions[1]:
+    elif voxel[1] == voxel_grid_dimensions[1] - 1:
         return True
-    elif voxel[2] == voxel_grid_dimensions[2]:
+    elif voxel[2] == voxel_grid_dimensions[2] - 1:
         return True
 
     return False
@@ -512,7 +512,7 @@ def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid
         return [0, 0, 0]
 
     #rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
-    voxel_coords, rotation, translation = align.align_structure(voxel_coords)
+    voxel_coords, _, _ = align.align_structure(voxel_coords)
 
     # compute the maximum length across each axis
     xs = [voxel_coord[0] for voxel_coord in voxel_coords]

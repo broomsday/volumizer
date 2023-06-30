@@ -50,7 +50,8 @@ def main(
             secondary_structure = utils.load_secondary_structure(pdb_id)
         else:
             prepared_pdb = paths.PREPARED_PDB_DIR / f"{pdb_id}.pdb"
-            secondary_structure = pdb.get_secondary_structure(prepared_pdb)
+            prepared_structure = pdb.load_structure(prepared_pdb)
+            secondary_structure = pdb.get_secondary_structure(prepared_structure)
             utils.save_secondary_structure(pdb_id, secondary_structure)
 
         if secondary_structure is None:

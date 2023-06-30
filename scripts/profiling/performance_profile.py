@@ -11,7 +11,7 @@ def main(code: str = "python", pdb_name: str = "pore"):
     """
     # load some test data from a PDB of interest
     start_load_time = time.time()
-    structure = pdb.load_pdb(paths.PREPARED_PDB_DIR / f"{pdb_name}.pdb")
+    structure = pdb.load_structure(paths.DATA_DIR / "test_data" / f"{pdb_name}.pdb")
     coords = pdb.get_structure_coords(structure)
     end_load_time = time.time()
 

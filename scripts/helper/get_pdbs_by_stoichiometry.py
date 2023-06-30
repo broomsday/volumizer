@@ -51,7 +51,8 @@ def main(
             stoichiometry = utils.load_stoichiometry(pdb_id)
         else:
             prepared_pdb = paths.PREPARED_PDB_DIR / f"{pdb_id}.pdb"
-            stoichiometry = pdb.get_stoichiometry(prepared_pdb)
+            prepared_structure = pdb.load_structure(prepared_pdb)
+            stoichiometry = pdb.get_stoichiometry(prepared_structure)
             utils.save_stoichiometry(pdb_id, stoichiometry)
 
         if stoichiometry is None:
