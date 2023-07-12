@@ -150,9 +150,18 @@ def build_planar_voxel_coordinate_arrays(
     For each two-dimension pair, construct a list of coordinates in the 3rd dimension that match the first two dimensions.
     """
     # TODO collapse down the final lists to min() and max() only as two different entries and use that for comparison in the downstream function
-    z_array = [[list() for y in range(voxel_grid_dimensions[1])] for x in range(voxel_grid_dimensions[0])]
-    y_array = [[list() for z in range(voxel_grid_dimensions[2])] for x in range(voxel_grid_dimensions[0])]
-    x_array = [[list() for z in range(voxel_grid_dimensions[2])] for y in range(voxel_grid_dimensions[1])]
+    z_array = [
+        [list() for y in range(voxel_grid_dimensions[1])]
+        for x in range(voxel_grid_dimensions[0])
+    ]
+    y_array = [
+        [list() for z in range(voxel_grid_dimensions[2])]
+        for x in range(voxel_grid_dimensions[0])
+    ]
+    x_array = [
+        [list() for z in range(voxel_grid_dimensions[2])]
+        for y in range(voxel_grid_dimensions[1])
+    ]
 
     for i in range(voxels[0].size):
         z_array[voxels[0][i]][voxels[1][i]].append(voxels[2][i])
@@ -173,10 +182,16 @@ def get_exposed_and_buried_voxels(
     buried_voxels = ([], [], [])
     exposed_voxels = ([], [], [])
 
-    z_array, y_array, x_array = build_planar_voxel_coordinate_arrays(protein_voxels.voxels, voxel_grid_dimensions)
+    z_array, y_array, x_array = build_planar_voxel_coordinate_arrays(
+        protein_voxels.voxels, voxel_grid_dimensions
+    )
 
     for i in range(solvent_voxels.voxels[0].size):
-        query_voxel = (solvent_voxels.voxels[0][i], solvent_voxels.voxels[1][i], solvent_voxels.voxels[2][i])
+        query_voxel = (
+            solvent_voxels.voxels[0][i],
+            solvent_voxels.voxels[1][i],
+            solvent_voxels.voxels[2][i],
+        )
 
         occluded_dimensions = get_occluded_dimensions(
             query_voxel,
@@ -199,14 +214,22 @@ def get_exposed_and_buried_voxels(
 
     return (
         VoxelGroup(
-            voxels=(np.array(exposed_voxels[0]), np.array(exposed_voxels[1]), np.array(exposed_voxels[2])),
+            voxels=(
+                np.array(exposed_voxels[0]),
+                np.array(exposed_voxels[1]),
+                np.array(exposed_voxels[2]),
+            ),
             indices=exposed_voxel_indices,
             num_voxels=len(exposed_voxel_indices),
             voxel_type="exposed",
             volume=compute_voxel_group_volume(len(exposed_voxel_indices)),
         ),
         VoxelGroup(
-            voxels=(np.array(buried_voxels[0]), np.array(buried_voxels[1]), np.array(buried_voxels[2])),
+            voxels=(
+                np.array(buried_voxels[0]),
+                np.array(buried_voxels[1]),
+                np.array(buried_voxels[2]),
+            ),
             indices=buried_voxel_indices,
             num_voxels=len(buried_voxel_indices),
             voxel_type="buried",
@@ -216,7 +239,8 @@ def get_exposed_and_buried_voxels(
 
 
 def get_neighbor_voxels_python(
-    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray], reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
+    reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Return the voxels from a query group that neighbor a reference group.
@@ -238,7 +262,8 @@ def get_neighbor_voxels_python(
 
 
 def get_neighbor_voxels_c(
-    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray], reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray]
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
+    reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Return the voxels from a query group that neighbor a reference group.
@@ -287,14 +312,22 @@ def get_first_shell_exposed_voxels(
     Subset exposed voxels into only those neighboring one or more buried voxels.
     """
     if performant:
-        first_shell_voxels = get_neighbor_voxels_c(exposed_voxels.voxels, buried_voxels.voxels)
+        first_shell_voxels = get_neighbor_voxels_c(
+            exposed_voxels.voxels, buried_voxels.voxels
+        )
     else:
-        first_shell_voxels = get_neighbor_voxels_python(exposed_voxels.voxels, buried_voxels.voxels)
+        first_shell_voxels = get_neighbor_voxels_python(
+            exposed_voxels.voxels, buried_voxels.voxels
+        )
 
     first_shell_indices = compute_voxel_indices(first_shell_voxels, voxel_grid.x_y_z)
 
     return VoxelGroup(
-        voxels=(np.array(first_shell_voxels[0]), np.array(first_shell_voxels[1]), np.array(first_shell_voxels[2])),
+        voxels=(
+            np.array(first_shell_voxels[0]),
+            np.array(first_shell_voxels[1]),
+            np.array(first_shell_voxels[2]),
+        ),
         indices=first_shell_indices,
         num_voxels=len(first_shell_indices),
         voxel_type="exposed",
@@ -302,7 +335,9 @@ def get_first_shell_exposed_voxels(
     )
 
 
-def is_neighbor_voxel(voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...]) -> bool:
+def is_neighbor_voxel(
+    voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64, ...]
+) -> bool:
     """
     Given two voxels return True if they are ordinal neighbors.
     """
@@ -323,7 +358,9 @@ def is_neighbor_voxel(voxel_one: tuple[np.int64, ...], voxel_two: tuple[np.int64
     return False
 
 
-def get_single_voxel(voxels: tuple[np.ndarray, ...], index: int) -> tuple[np.int64, ...]:
+def get_single_voxel(
+    voxels: tuple[np.ndarray, ...], index: int
+) -> tuple[np.int64, ...]:
     """
     Given a set of voxels return just one voxel at index.
     """
@@ -334,13 +371,19 @@ def get_single_voxel(voxels: tuple[np.ndarray, ...], index: int) -> tuple[np.int
     )
 
 
-def compute_voxel_indices(voxels: tuple[np.ndarray, ...], grid_dimensions: np.ndarray) -> set[int]:
+def compute_voxel_indices(
+    voxels: tuple[np.ndarray, ...], grid_dimensions: np.ndarray
+) -> set[int]:
     """
     Given a 3D array of voxels, compute the 1D set of their indices.
     """
     # TODO: is this built-in easier and correct?: x, y, z = np.unravel_index(voxel, self.x_y_z)
     return {
-        (voxels[0][i] * grid_dimensions[1] * grid_dimensions[2] + voxels[1][i] * grid_dimensions[2] + voxels[2][i])
+        (
+            voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
+            + voxels[1][i] * grid_dimensions[2]
+            + voxels[2][i]
+        )
         for i in range(len(voxels[0]))
     }
 
@@ -352,7 +395,9 @@ def compute_voxel_group_volume(num_voxels: int) -> float:
     return num_voxels * utils.VOXEL_VOLUME
 
 
-def breadth_first_search_python(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+def breadth_first_search_python(
+    voxels: tuple[np.ndarray, ...], searchable_indices: set[int]
+) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
     add indices for all ordinal neighbors iteratively until no more such neighbors exist.
@@ -375,7 +420,9 @@ def breadth_first_search_python(voxels: tuple[np.ndarray, ...], searchable_indic
     return neighbor_indices
 
 
-def breadth_first_search_c(voxels: tuple[np.ndarray, ...], searchable_indices: set[int]) -> set[int]:
+def breadth_first_search_c(
+    voxels: tuple[np.ndarray, ...], searchable_indices: set[int]
+) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
     add indices for all ordinal neighbors iteratively until no more such neighbors exist.
@@ -389,7 +436,9 @@ def breadth_first_search_c(voxels: tuple[np.ndarray, ...], searchable_indices: s
     voxels_z = (ctypes.c_int * num_voxels)(*voxels[2])
 
     # generate other inputs needed for C function
-    c_searchable_indices = (ctypes.c_int * len(c_searchable_indices))(*c_searchable_indices)
+    c_searchable_indices = (ctypes.c_int * len(c_searchable_indices))(
+        *c_searchable_indices
+    )
     initial_indices = (ctypes.c_int * num_voxels)(*([-1] * num_voxels))
 
     # run the breadth-first search
@@ -407,7 +456,9 @@ def breadth_first_search_c(voxels: tuple[np.ndarray, ...], searchable_indices: s
 
 
 def breadth_first_search(
-    voxels: tuple[np.ndarray, ...], searchable_indices: set[int], performant: bool = utils.using_performant()
+    voxels: tuple[np.ndarray, ...],
+    searchable_indices: set[int],
+    performant: bool = utils.using_performant(),
 ) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
@@ -434,8 +485,12 @@ def is_edge_voxel(voxel: np.ndarray, voxel_grid_dimensions: np.ndarray) -> bool:
 
     return False
 
+
 def get_agglomerated_type(
-    query_indices: set[int], buried_voxels: tuple[np.ndarray, ...], exposed_voxels: tuple[np.ndarray, ...], voxel_grid_dimensions: np.ndarray,
+    query_indices: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+    exposed_voxels: tuple[np.ndarray, ...],
+    voxel_grid_dimensions: np.ndarray,
 ) -> tuple[set[int], str]:
     """
     Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Four possibilites:
@@ -482,7 +537,9 @@ def get_agglomerated_type(
     if len(single_surface_indices) < len(surface_indices):
         # run the agglomeration one more time on what's left
         remaining_surface_indices = surface_indices - single_surface_indices
-        single_surface_indices = breadth_first_search(buried_voxels, remaining_surface_indices)
+        single_surface_indices = breadth_first_search(
+            buried_voxels, remaining_surface_indices
+        )
 
         # if there are stil indices left, there were more than 2 surfaces, hence a hub
         if len(single_surface_indices) < len(remaining_surface_indices):
@@ -495,37 +552,56 @@ def get_agglomerated_type(
     return direct_surface_indices.union(neighbor_surface_indices), "pocket"
 
 
-def get_voxel_group_center(voxel_indices: set[int], voxel_grid: VoxelGrid) -> np.ndarray:
+def get_voxel_group_center(
+    voxel_indices: set[int], voxel_grid: VoxelGrid
+) -> np.ndarray:
     """
     Compute the center of geometry for the voxel group.
     """
-    voxel_coords = np.array([voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices])
+    voxel_coords = np.array(
+        [voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices]
+    )
     return np.mean(voxel_coords, axis=0)
 
 
-def get_voxel_group_axial_lengths(voxel_indices: set[int], voxel_grid: VoxelGrid) -> list[float]:
+def get_voxel_group_axial_lengths(
+    voxel_indices: set[int], voxel_grid: VoxelGrid
+) -> list[float]:
     """
     Align the voxel group to it's principal axes, then compute the maximum length along each axis.
     """
-    voxel_coords = np.array([voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices])
+    voxel_coords = np.array(
+        [voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices]
+    )
     if len(voxel_coords) < 3:
         return [0, 0, 0]
 
-    #rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
-    voxel_coords, _, _ = align.align_structure(voxel_coords)
+    # rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
+    voxel_coords = align.align_structure(voxel_coords)
 
     # compute the maximum length across each axis
     xs = [voxel_coord[0] for voxel_coord in voxel_coords]
     ys = [voxel_coord[1] for voxel_coord in voxel_coords]
     zs = [voxel_coord[2] for voxel_coord in voxel_coords]
 
-    return sorted([max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)], reverse=True)
+    return sorted(
+        [
+            round(max(xs) - min(xs), 3),
+            round(max(ys) - min(ys), 3),
+            round(max(zs) - min(zs), 3),
+        ],
+        reverse=True,
+    )
 
 
 def get_pores_pockets_cavities_occluded(
     buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid: VoxelGrid
 ) -> tuple[
-    dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup], dict[int, VoxelGroup]
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
 ]:
     """
     Agglomerate buried solvent voxels into hubs, pores, pockets, cavities, and simply occluded.
@@ -540,7 +616,9 @@ def get_pores_pockets_cavities_occluded(
         remaining_indices = buried_indices - agglomerated_indices
 
         # perform BFS over the remaining indices
-        agglomerable_indices = breadth_first_search(buried_voxels.voxels, remaining_indices)
+        agglomerable_indices = breadth_first_search(
+            buried_voxels.voxels, remaining_indices
+        )
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
 
@@ -551,21 +629,36 @@ def get_pores_pockets_cavities_occluded(
         else:
             # identify what these agglomerated voxels are
             direct_surface_indices, agglomerated_type = get_agglomerated_type(
-                agglomerable_indices, buried_voxels.voxels, exposed_voxels.voxels, voxel_grid.x_y_z
+                agglomerable_indices,
+                buried_voxels.voxels,
+                exposed_voxels.voxels,
+                voxel_grid.x_y_z,
             )
 
         # get the surface voxels for use in getting their voxel-grid indices
         surface_voxels = (
-            np.array([buried_voxels.voxels[0][index] for index in direct_surface_indices]),
-            np.array([buried_voxels.voxels[1][index] for index in direct_surface_indices]),
-            np.array([buried_voxels.voxels[2][index] for index in direct_surface_indices]),
+            np.array(
+                [buried_voxels.voxels[0][index] for index in direct_surface_indices]
+            ),
+            np.array(
+                [buried_voxels.voxels[1][index] for index in direct_surface_indices]
+            ),
+            np.array(
+                [buried_voxels.voxels[2][index] for index in direct_surface_indices]
+            ),
         )
 
         # get the voxels
         volume_voxels = (
-            np.array([buried_voxels.voxels[0][index] for index in agglomerable_indices]),
-            np.array([buried_voxels.voxels[1][index] for index in agglomerable_indices]),
-            np.array([buried_voxels.voxels[2][index] for index in agglomerable_indices]),
+            np.array(
+                [buried_voxels.voxels[0][index] for index in agglomerable_indices]
+            ),
+            np.array(
+                [buried_voxels.voxels[1][index] for index in agglomerable_indices]
+            ),
+            np.array(
+                [buried_voxels.voxels[2][index] for index in agglomerable_indices]
+            ),
         )
         # get the voxel indices
         volume_indices = compute_voxel_indices(volume_voxels, voxel_grid.x_y_z)

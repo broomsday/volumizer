@@ -36,3 +36,4 @@ MIN_NUM_VOXELS = 4
 
 VOXEL_TYPE_CHAIN_MAP = {"HUB": "A", "POR": "B", "POK": "C", "CAV": "D", "OCC": "E"}
 VOXEL_TYPE_ATOM_MAP = {"HUB": "F", "POR": "O", "POK": "N", "CAV": "S", "OCC": "H"}
+VOXEL_TYPE_ELEMENT_MAP = {"HUB": "F", "POR": "O", "POK": "N", "CAV": "S", "OCC": "H"}
