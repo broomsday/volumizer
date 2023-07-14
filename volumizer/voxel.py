@@ -94,29 +94,38 @@ def get_protein_and_solvent_voxels(
 
 def get_occluded_dimensions(
     query_voxel: tuple[int, int, int],
-    possible_occluding_x: list[int],
-    possible_occluding_y: list[int],
-    possible_occluding_z: list[int],
+    occluding_x: list[int],
+    occluding_y: list[int],
+    occluding_z: list[int],
 ) -> list[int]:
     """
     Determine how many ordinal axes are occluded.
+
+    We simply compare our query voxel with the coordinates of the `occluding` voxels,
+    which are e.g. protein voxels.
+
+    For performance reasons rather than looking across ALL occluding voxels, we look at planar arrays
+    of coordinates.
     """
     occluded_dimensions = [0, 0, 0, 0, 0, 0]
 
-    if len(possible_occluding_z) != 0:
-        if min(possible_occluding_z) < query_voxel[2]:
+    # here we assume that e.g. occluding_z[0] is the min value and occluding_z[-1] is the max
+    #   if this becomes untrue we would need to explicitly take the min/max
+    #   this is less performant for large structures
+    if len(occluding_z) != 0:
+        if occluding_z[0] < query_voxel[2]:
             occluded_dimensions[4] = 1
-        if max(possible_occluding_z) > query_voxel[2]:
+        if occluding_z[-1] > query_voxel[2]:
             occluded_dimensions[5] = 1
-    if len(possible_occluding_y) != 0:
-        if min(possible_occluding_y) < query_voxel[1]:
+    if len(occluding_y) != 0:
+        if occluding_y[0] < query_voxel[1]:
             occluded_dimensions[2] = 1
-        if max(possible_occluding_y) > query_voxel[1]:
+        if occluding_y[-1] > query_voxel[1]:
             occluded_dimensions[3] = 1
-    if len(possible_occluding_x) != 0:
-        if min(possible_occluding_x) < query_voxel[0]:
+    if len(occluding_x) != 0:
+        if occluding_x[0] < query_voxel[0]:
             occluded_dimensions[0] = 1
-        if max(possible_occluding_x) > query_voxel[0]:
+        if occluding_x[-1] > query_voxel[0]:
             occluded_dimensions[1] = 1
 
     return occluded_dimensions
@@ -145,21 +154,20 @@ def is_buried(occluded_dimensions: list[int]) -> bool:
 
 def build_planar_voxel_coordinate_arrays(
     voxels: tuple[np.ndarray, ...], voxel_grid_dimensions: np.ndarray
-) -> tuple[list[list[list[int]]], list[list[list[int]]], list[list[list[int]]]]:
+) -> tuple[list[list[list[int]]], list[list[list[int]]], list[list[list[int]]],]:
     """
-    For each two-dimension pair, construct a list of coordinates in the 3rd dimension that match the first two dimensions.
+    For each two-dimension pair, construct a tuple of the min/max coordinates in the 3rd dimension.
     """
-    # TODO collapse down the final lists to min() and max() only as two different entries and use that for comparison in the downstream function
     z_array = [
-        [list() for y in range(voxel_grid_dimensions[1])]
+        [[] for y in range(voxel_grid_dimensions[1])]
         for x in range(voxel_grid_dimensions[0])
     ]
     y_array = [
-        [list() for z in range(voxel_grid_dimensions[2])]
+        [[] for z in range(voxel_grid_dimensions[2])]
         for x in range(voxel_grid_dimensions[0])
     ]
     x_array = [
-        [list() for z in range(voxel_grid_dimensions[2])]
+        [[] for z in range(voxel_grid_dimensions[2])]
         for y in range(voxel_grid_dimensions[1])
     ]
 
@@ -377,10 +385,11 @@ def compute_voxel_indices(
     """
     Given a 3D array of voxels, compute the 1D set of their indices.
     """
-    # TODO: is this built-in easier and correct?: x, y, z = np.unravel_index(voxel, self.x_y_z)
+    grid_dimension_1_2 = grid_dimensions[1] * grid_dimensions[2]
+
     return {
         (
-            voxels[0][i] * grid_dimensions[1] * grid_dimensions[2]
+            voxels[0][i] * grid_dimension_1_2
             + voxels[1][i] * grid_dimensions[2]
             + voxels[2][i]
         )
