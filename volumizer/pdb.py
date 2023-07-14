@@ -232,3 +232,26 @@ def make_volumized_pdb_lines(
         pdb_lines.append(deliminator)
 
     return pdb_lines
+
+
+def coordinates_to_structure(
+    coords: np.ndarray, res_num: int = 0, chain_id: str = "A", element: str = "C"
+) -> bts.AtomArray:
+    """
+    Convert a set of 3D coordinates into a biotite structure.
+
+    By default these are carbon atoms.
+    """
+    # TODO: this needs testing alone and with pipeline
+    #   left here for future improvement/use
+    coordinate_structure = bts.AtomArray(len(coords))
+    for i, coord in enumerate(coords):
+        coordinate_structure[i] = bts.Atom(coord, atom_id=i, b_factor=0.0)
+
+    coordinate_structure.atom_name = [element] * len(coords)
+    coordinate_structure.res_name = ["CRD"] * len(coords)
+    coordinate_structure.res_num = [res_num] * len(coords)
+    coordinate_structure.chain_id = [chain_id] * len(coords)
+    coordinate_structure.element = [element] * len(coords)
+
+    return coordinate_structure
