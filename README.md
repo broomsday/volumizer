@@ -1,8 +1,8 @@
-`Porate` discovers and annotates occluded volumes in proteins including:
-- Cavities: Volumes within a protein that do not make any contacts with bulk solvent. Useful for e.g. carrying cargo.
-- Pockets: Volumes on the protein surface that make a single contact with bulk solvent.  Useful for e.g. ligand binding or catalysis.
-- Pores: Volumes connecting two bulk solvent surfaces.  Useful for e.g. filtering solutes.
-- Hubs: Volumes connecting more than two bulk solvent surfaces.  Maybe useful for slow release of cargo...
+`volumizer` discovers and annotates occluded volumes in proteins including:
+- `cavities`: Volumes within a protein that do not make any contacts with bulk solvent. Useful for e.g. carrying cargo.
+- `pockets`: Volumes on the protein surface that make a single contact with bulk solvent.  Useful for e.g. ligand binding or catalysis.
+- `pores`: Volumes connecting two bulk solvent surfaces.  Useful for e.g. filtering solutes.
+- `hubs`: Volumes connecting more than two bulk solvent surfaces.  Useful for e.g. containing a small reaction volume.
 
 # Example Identified Volume
 
@@ -12,76 +12,92 @@ Here is shown an example pore identified and annotated (red) in PDB 4JPN (green)
 The same pore volume annotated (red) shown as a slice through the protein (grey).
 ![image](images/pore_slice.png)
 
+The dataframe output shows volume/dimensinos of each occluded volume in the structure
+|    | id |  type  |  volume  |    x    |    y    |    z    |
+|----|----|--------|----------|---------|---------|---------|
+| 0  | 0  |   pore | 38286.0  | 108.221 |  38.574 |  36.310 |
+| 1  | 0  | pocket |   189.0  |   8.214 |   5.628 |   0.000 |
+| 2  | 1  | pocket |   162.0  |   6.635 |   3.843 |   2.840 |
+| 3  | 2  | pocket |   162.0  |   7.298 |   4.002 |   2.557 |
+| 4  | 3  | pocket |   162.0  |  10.757 |   2.701 |   0.000 |
+| 5  | 4  | pocket |   135.0  |   6.000 |   6.000 |   0.000 |
+
 # Installation
-`Porate` was written to use python 3.9.
+The package is published on PyPi, `pip install volumizer`.
 
-## Python Package Installation Using Poetry
-`Porate` can be installed and run from a virtual environment using `poetry`, a widely used python virtual environment manager.
-
-```bash
-poetry install
-```
-
-## Manually Python Package Installation
-If you wish to install outside of a poetry managed virtual environment, the 3rd party python packages that need to be installed are:
-
-- typer
-- biopython
-- pyntcloud
-- requests
-- progressbar
-
-## Compiling C Source
-Several under-the-hood functions are implemented in both python and C.  If the C versions are not compiled performance will be reduced.
-To compile them:
-```bash
-./source/compile_c_libs.sh
-```
+## Developing the Volumizer Package
+If you want to develop the package, `poetry install` within the repository.
+Test with `pytest` within the repository base directory
 
 # Usage
-`Porate` can be invoked from the command-line or imported and used within your own python scripts.
+Using the test file `tests/pdbs/4jpn.pdb` try out the following:
 
-## CLI Usage
-Note that when first run `porate` will need to download the RCSB components datafile from the public
-RCSB database, which is used to optionally clean structures of extraneous atoms (see Flags below).
+## Volumize a PDB and Save the Volumized PDB and DataFrame
+Performing end-to-end loading, cleaning, volumizing, and saving is done with a single convenience function:
 
-The CLI can be used with 4 different inputs.
+```
+from volumizer import volumizer
 
-1. A single PDB ID can be supplied.
-```bash
-python porate 4JPN
-```
-2. A batch of PDB IDs can be supplied in a text file, one per line.
-```bash
-python porate <path-to-my-text-file>
-```
-3. A local PDB file can be supplied.
-```bash
-python porate <path-to-my-file>
-```
-4. A batch of PDB files from a directory can be supplied.
-```bash
-python porate <path-to-my-dir-of-PDBs>
+volumizer.volumize_pdb_and_save("my_input.pdb", "volumized_pdb.pdb", "volumized_df.json")
 ```
 
-### Flags
-`resolution` the length of the sides of the voxels constructed.  3 Angstroms is the default.  Smaller values
-will result in higher resolution structures but will take longer to annotate.
+## Load a PDB as a Biotite Structure, Clean, Volumize, and Save Output
+If you want access to the individual end-products: volume dataframe, the input structure after cleaning, and the structure of the volumes:
 
-`non-protein` should non-protein atoms be kept as part of the structure?  False by default which means the structure is
-cleaned of explicit waters, salts, ligands, etc.. leaving only protein atoms (both natural and non-natural).
+```
+from volumizer import volumizer, pdb
 
-`jobs` how many threads to use for computation.  This only applies when multiple PDBs are being annotated in which
-case they are trivially paralellized across threads.
+pdb_structure = pdb.load_structure("my_input.pdb")
+volumes_df, cleaned_structure, volumes_structure = volumizer.volumize_structure(pdb_structure)
 
-## Python Package Usage
-PENDING DOCUMENTATION
+# take the cleaned input and annotated volumes and convert them to a PDB format string and then save
+#  modify the `deliminator` to suit your visualization preference
+#  e.g. the default "END" allows Pymol to load the resulting PDB file as two separate objects, one for the cleaned input, and one for the volumes
+pdb_lines = pdb.make_volumized_pdb_lines([cleaned_structure, volumes_structure], deliminator="END")
+pdb.save_pdb_lines(pdb_lines, "volumized_pdb.pdb")
 
+volumes_df.to_json("volumized_df.json")
+```
+
+## Changing Resolution, Modifying PDB Cleaning, and Beyond
+If you are interested in additional control over the volumizing method, the resolution of the voxels can be changed,
+you can skip cleaning, or modify which residues are kept/removed by the cleaning process
+
+Note: the default voxel resolution is 3.0 Angstroms, which gives sensible results in the majority of cases.
+Higher resolutions especially < 2.0 Angstroms will often find small paths through a protein structure, making e.g. cavities look like pores, etc.
+Lower resolutions are faster to compute, but may begin to under-estimate the true volume of solvent occluded elements.
+
+Note: by default all residues that make L- or D- peptide bonds are retained through cleaning (e.g. Non-canonicals are kept, even if they are heteroatoms in PDB structure).
+By constrast all non-covalently attached residues are removed.  Currently glycan residues are also removed as they make non-peptide bonds, below is shown an example of how would would retain glycans.
+
+```
+from volumizer import volumizer, pdb, utils
+
+# specify whichever residues you are interested in keeping during cleaning, or having additionally removed
+KEEP_RESIDUE_NAMES = {"GAL", "NAG", "MAN", "GLC"}  # some example sugar residues to keep when cleaning
+REMOVE_RESIDUE_NAMES = {"SME"}  # some example NCAAs to remove when cleaning
+
+utils.set_resolution(2.0)
+utils.add_protein_components(KEEP_RESIDUE_NAMES)
+utils.remove_protein_components(REMOVE_RESIDUE_NAMES)
+
+pdb_structure = pdb.load_structure("my_input.pdb")
+cleaned_structure = volumizer.prepare_pdb_structure(pdb_structure)  # skip this if you want to keep the exact input structure
+volumes_df, volumes_structure = volumizer.annotate_structure_volumes(cleaned_structure)
+
+# take the cleaned input and annotated volumes and convert them to a PDB format string and then save
+#  modify the `deliminator` to suit your visualization preference
+#  e.g. the default "END" allows Pymol to load the resulting PDB file as two separate objects, one for the cleaned input, and one for the volumes
+pdb_lines = pdb.make_volumized_pdb_lines([cleaned_structure, volumes_structure], deliminator="END")
+pdb.save_pdb_lines(pdb_lines, "volumized_pdb.pdb")
+
+volumes_df.to_json("volumized_df.json")
+```
 
 # How It Works
-`Porate` identifies hydrated volumes in a protein structure that are not fully solvent exposed, e.g. a binding pocket.
-It then computes the volume and dimensions of these volumes and outputs that information along with an annotated 
-version of the input PDB showing where the volumes are (which can be visualized in e.g. Pymol).
+`volumizer` identifies hydrated volumes in a protein structure that are not fully solvent exposed, e.g. a binding pocket.
+It then computes the volume and dimensions of these and outputs that information along with an annotated 
+version of the input PDB showing where these volumes are (which can be visualized in e.g. Pymol, Chimerax, etc.).
 
 ## Identifying hydrated volumes
 1. A large voxel-grid is built around the atoms of the protein or other structure supplied.
@@ -94,10 +110,10 @@ version of the input PDB showing where the volumes are (which can be visualized 
 4. All `occluded volume` voxels are then grouped into a number of continuous volumes
 5. For each continous volume the number of distinct surfaces that contact `bulk solvent` voxels is computed and used
    to indicate the volume type:
-   0 surfaces interacting with solvent: cavity
-   1 surface interacting with solvent: pocket
-   2 surfaces interacting with solvent: pore
-   3+ surfaces interacting with solvent: hub
+   0 surfaces interacting with solvent: `cavity`
+   1 surface interacting with solvent: `pocket`
+   2 surfaces interacting with solvent: `pore`
+   3+ surfaces interacting with solvent: `hub`
 
 ## Annotations
 
@@ -110,17 +126,13 @@ The input PDB file will be annotated by adding `atoms` to represent the hydrated
 contain several points of information about the volume from which they come:
 
 Type of volume: the residue name encodes the type of volume in 3-letter code
-OCC for occluded
-CAV for cavity
-POK for pocket
-POR for pore
-HUB for hub
+`OCC` for `occluded`
+`CAV` for `cavity`
+`POK` for `pocket`
+`POR` for `pore`
+`HUB` for `hub`
 
 Surface of the hydrated volume that interacts with bulk solvent: this is indicated by a B-factor of 50.0, whereas
 the remainder of the volume (that does not interact with the bulk solvent) has a value of 0.0.
 
 All `atoms` of a particular volume are grouped under the same residue number.
-
-Finally, several remarks are added:
-At the beginning of the file the rotation and translation matrices used to transform the input before voxelization are given.
-At the end of the file including the resolution used for the analysis, as well as the total volume and dimensions of significant volumes.
