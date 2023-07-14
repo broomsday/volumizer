@@ -58,8 +58,7 @@ def get_structure_coords(structure: bts.AtomArray) -> pd.DataFrame:
     """
     Return the coordinates of an atom array as a dataframe.
 
-    # TODO: shouldn't we just keep the coords as an np array?  why are we converting to a less performant format?
-    # TODO: in fact, we could just keep the whole structure and thereby keep the elements along with it
+    This is done because the PyntCloud package takes a dataframe as input to generate the cloud.
     """
     coordinates = structure.coord
     elements = structure.element
