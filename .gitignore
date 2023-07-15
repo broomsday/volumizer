@@ -7,3 +7,5 @@ data/prepared_pdbs/
 
 *pycache*
 *.so
+
+dist/
