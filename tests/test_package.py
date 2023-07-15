@@ -49,7 +49,7 @@ def test_volume_annotations(
 
     pdb_structure = pdb.load_structure(pdb_file)
     prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
-    annotation_df, _ = volumizer.annotate_pdb_structure(prepared_structure)
+    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
 
     assert (annotation_df.iloc[0].type == largest_type) and (
         annotation_df.iloc[0].volume == largest_volume
@@ -80,7 +80,7 @@ def test_component_removal(
 
     pdb_structure = pdb.load_structure(pdb_file)
     prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
-    annotation_df, _ = volumizer.annotate_pdb_structure(prepared_structure)
+    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
 
     assert (annotation_df.iloc[0].type == largest_type) and (
         annotation_df.iloc[0].volume == largest_volume

@@ -13,7 +13,7 @@ from volumizer import utils, pdb, voxel, fib_sphere, align
 from volumizer.types import Annotation
 
 
-def annotate_pdb_structure(
+def annotate_structure_volumes(
     structure: bts.AtomArray,
     min_voxels: Optional[int] = 2,
     min_volume: Optional[float] = None,
@@ -132,7 +132,7 @@ def volumize_structure(
     """
     prepared_structure = prepare_pdb_structure(structure)
 
-    annotation_df, annotation_structure = annotate_pdb_structure(prepared_structure)
+    annotation_df, annotation_structure = annotate_structure_volumes(prepared_structure)
 
     return annotation_df, prepared_structure, annotation_structure
 

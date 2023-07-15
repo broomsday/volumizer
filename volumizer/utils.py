@@ -14,8 +14,10 @@ from volumizer.paths import C_CODE_DIR
 
 
 VOXEL_SIZE = constants.VOXEL_SIZE
-VOXEL_VOLUME = VOXEL_SIZE ** 3
-KEEP_MODELS = True  # by default keep all models in case they are other biological assembly units
+VOXEL_VOLUME = VOXEL_SIZE**3
+KEEP_MODELS = (
+    True  # by default keep all models in case they are other biological assembly units
+)
 KEEP_NON_PROTEIN = False  # by default only keep protein residues
 KEEP_HYDROGENS = False  # by default remove hydrogens
 UTILS_PROTEIN_COMPONENTS = protein_components.PROTEIN_COMPONENTS
@@ -36,13 +38,16 @@ def reset_protein_components():
 
     UTILS_PROTEIN_COMPONENTS = protein_components.PROTEIN_COMPONENTS
 
+
 def add_protein_components(additional_components: set[str]) -> None:
     """
     Extend the protein components definition currently in use with additional components
     """
     global UTILS_PROTEIN_COMPONENTS
-    
-    UTILS_PROTEIN_COMPONENTS = UTILS_PROTEIN_COMPONENTS.union(additional_components)
+
+    UTILS_PROTEIN_COMPONENTS = UTILS_PROTEIN_COMPONENTS.union(
+        set(additional_components)
+    )
 
 
 def remove_protein_components(disallowed_components: set[str]) -> None:
@@ -50,8 +55,8 @@ def remove_protein_components(disallowed_components: set[str]) -> None:
     Reduce the protein components definition currently in use with blacklisted components.
     """
     global UTILS_PROTEIN_COMPONENTS
-    
-    UTILS_PROTEIN_COMPONENTS = UTILS_PROTEIN_COMPONENTS - disallowed_components
+
+    UTILS_PROTEIN_COMPONENTS = UTILS_PROTEIN_COMPONENTS - set(disallowed_components)
 
 
 def set_resolution(resolution: float) -> None:
@@ -62,7 +67,7 @@ def set_resolution(resolution: float) -> None:
     global VOXEL_VOLUME
 
     VOXEL_SIZE = resolution
-    VOXEL_VOLUME = VOXEL_SIZE ** 3
+    VOXEL_VOLUME = VOXEL_SIZE**3
 
 
 def set_non_protein(non_protein: bool) -> None:
@@ -73,11 +78,17 @@ def set_non_protein(non_protein: bool) -> None:
     KEEP_NON_PROTEIN = non_protein
 
 
-def get_volume_summary(voxel_group_dict: dict[int, VoxelGroup], summary_type: str = "total") -> float:
+def get_volume_summary(
+    voxel_group_dict: dict[int, VoxelGroup], summary_type: str = "total"
+) -> float:
     """
     Compute a summary value for the volume
     """
-    volumes = [voxel_group.volume for voxel_group in voxel_group_dict.values() if voxel_group.volume is not None]
+    volumes = [
+        voxel_group.volume
+        for voxel_group in voxel_group_dict.values()
+        if voxel_group.volume is not None
+    ]
     if volumes:
         if summary_type == "total":
             return sum(volumes)
@@ -91,30 +102,40 @@ def get_volume_summary(voxel_group_dict: dict[int, VoxelGroup], summary_type: st
     return 0.0
 
 
-def sort_voxelgroups_by_volume(voxelgroups: dict[int, VoxelGroup]) -> dict[int, VoxelGroup]:
+def sort_voxelgroups_by_volume(
+    voxelgroups: dict[int, VoxelGroup]
+) -> dict[int, VoxelGroup]:
     """
     Take a dictionary with indices as the keys and VoxelGroups as the values.
     Reassign the keys such that the VoxelGroups are sorted by volume.
     """
     return {
         i: voxelgroup
-        for i, voxelgroup in enumerate(sorted(voxelgroups.values(), key=lambda group: group.volume, reverse=True))
+        for i, voxelgroup in enumerate(
+            sorted(voxelgroups.values(), key=lambda group: group.volume, reverse=True)
+        )
     }
 
 
 def filter_voxelgroups_by_volume(
-    voxelgroups: dict[int, VoxelGroup], min_volume: Optional[float] = None, min_voxels: Optional[int] = None
+    voxelgroups: dict[int, VoxelGroup],
+    min_volume: Optional[float] = None,
+    min_voxels: Optional[int] = None,
 ) -> dict[int, VoxelGroup]:
     """
     Remove voxel groups based on min volumem and min number of voxels cutoff
     """
     if min_volume is not None:
         voxelgroups = {
-            i: voxelgroup for i, voxelgroup in enumerate(voxelgroups.values()) if voxelgroup.volume >= min_volume
+            i: voxelgroup
+            for i, voxelgroup in enumerate(voxelgroups.values())
+            if voxelgroup.volume >= min_volume
         }
     if min_voxels is not None:
         voxelgroups = {
-            i: voxelgroup for i, voxelgroup in enumerate(voxelgroups.values()) if voxelgroup.num_voxels >= min_voxels
+            i: voxelgroup
+            for i, voxelgroup in enumerate(voxelgroups.values())
+            if voxelgroup.num_voxels >= min_voxels
         }
 
     return voxelgroups
