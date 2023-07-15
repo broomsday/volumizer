@@ -19,11 +19,11 @@ from volumizer.types import VoxelGroup
 from volumizer import utils
 
 
-def save_pdb_lines(pdb_lines: list[str], output: Path) -> None:
+def save_pdb_lines(pdb_lines: list[str], output: Path | str) -> None:
     """
     Save individual pdb lines to a file.
     """
-    if isinstance(output, Path):
+    if isinstance(output, (Path, str)):
         with open(output, mode="w", encoding="utf-8") as out_file:
             out_file.writelines("%s\n" % line for line in pdb_lines)
     else:
@@ -154,7 +154,7 @@ def volume_to_structure(
 
     volume_structure.atom_name = [VOXEL_TYPE_ATOM_MAP[voxel_type]] * len(voxel_indices)
     volume_structure.res_name = [voxel_type] * len(voxel_indices)
-    volume_structure.res_num = [voxel_group_index] * len(voxel_indices)
+    volume_structure.res_id = [voxel_group_index] * len(voxel_indices)
     volume_structure.chain_id = [VOXEL_TYPE_CHAIN_MAP[voxel_type]] * len(voxel_indices)
     volume_structure.element = [VOXEL_TYPE_ELEMENT_MAP[voxel_type]] * len(voxel_indices)
 
@@ -192,7 +192,7 @@ def volumes_to_structure(
         )
     for i, voxel_group in pockets.items():
         volume_structure += volume_to_structure(
-            "POR",
+            "POK",
             i,
             voxel_group.indices,
             voxel_group.surface_indices,
