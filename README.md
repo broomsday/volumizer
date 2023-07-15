@@ -126,11 +126,11 @@ The input PDB file will be annotated by adding `atoms` to represent the hydrated
 contain several points of information about the volume from which they come:
 
 Type of volume: the residue name encodes the type of volume in 3-letter code
-`OCC` for `occluded`
-`CAV` for `cavity`
-`POK` for `pocket`
-`POR` for `pore`
-`HUB` for `hub`
+- `OCC` for `occluded`
+- `CAV` for `cavity`
+- `POK` for `pocket`
+- `POR` for `pore`
+- `HUB` for `hub`
 
 Surface of the hydrated volume that interacts with bulk solvent: this is indicated by a B-factor of 50.0, whereas
 the remainder of the volume (that does not interact with the bulk solvent) has a value of 0.0.
