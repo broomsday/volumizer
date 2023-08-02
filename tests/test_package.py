@@ -45,38 +45,6 @@ def test_volume_annotations(
     largest_volume: float,
 ):
     utils.set_resolution(2.0)
-    utils.reset_protein_components()
-
-    pdb_structure = pdb.load_structure(pdb_file)
-    prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
-    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
-
-    assert (annotation_df.iloc[0].type == largest_type) and (
-        annotation_df.iloc[0].volume == largest_volume
-    )
-
-
-@pytest.mark.parametrize(
-    "pdb_file, removed_components, largest_type, largest_volume",
-    [
-        (GENERAL_TEST_PDB, set(), "pore", 38286.0),
-        (
-            GENERAL_TEST_PDB,
-            {"GLY", "ALA", "LEU", "GLU", "ASP", "LYS", "ILE"},
-            "hub",
-            35964.0,
-        ),
-    ],
-)
-def test_component_removal(
-    pdb_file: Path,
-    removed_components: set[str],
-    largest_type: str,
-    largest_volume: float,
-):
-    utils.set_resolution(3.0)
-    utils.reset_protein_components()
-    utils.remove_protein_components(removed_components)
 
     pdb_structure = pdb.load_structure(pdb_file)
     prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
@@ -107,7 +75,6 @@ def test_component_removal(
 )
 def test_volumize_pdb(pdb_file: Path, expected_annotation_df: pd.DataFrame):
     utils.set_resolution(3.0)
-    utils.reset_protein_components()
 
     annotation_df, _, _ = volumizer.volumize_pdb(pdb_file)
     assert annotation_df.iloc[0].to_dict() == expected_annotation_df.iloc[0].to_dict()

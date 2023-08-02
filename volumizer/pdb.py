@@ -44,9 +44,7 @@ def clean_structure(structure: bts.AtomArray) -> bts.AtomArray:
             structure = new_structure
 
     if not utils.KEEP_NON_PROTEIN:
-        structure = structure[
-            np.isin(structure.res_name, list(utils.get_protein_components()))
-        ]
+        structure = structure[bts.filter_amino_acids(structure)]
 
     if not utils.KEEP_HYDROGENS:
         structure = structure[~np.isin(structure.element, ["H"])]

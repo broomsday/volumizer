@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from volumizer import constants, protein_components
+from volumizer import constants
 from volumizer.types import Annotation, VoxelGroup
 from volumizer.paths import C_CODE_DIR
 
@@ -20,43 +20,6 @@ KEEP_MODELS = (
 )
 KEEP_NON_PROTEIN = False  # by default only keep protein residues
 KEEP_HYDROGENS = False  # by default remove hydrogens
-UTILS_PROTEIN_COMPONENTS = protein_components.PROTEIN_COMPONENTS
-
-
-def get_protein_components() -> set[str]:
-    """
-    Return the protein components definition currently in use.
-    """
-    return UTILS_PROTEIN_COMPONENTS
-
-
-def reset_protein_components():
-    """
-    Reset the protein components definition to the default.
-    """
-    global UTILS_PROTEIN_COMPONENTS
-
-    UTILS_PROTEIN_COMPONENTS = protein_components.PROTEIN_COMPONENTS
-
-
-def add_protein_components(additional_components: set[str]) -> None:
-    """
-    Extend the protein components definition currently in use with additional components
-    """
-    global UTILS_PROTEIN_COMPONENTS
-
-    UTILS_PROTEIN_COMPONENTS = UTILS_PROTEIN_COMPONENTS.union(
-        set(additional_components)
-    )
-
-
-def remove_protein_components(disallowed_components: set[str]) -> None:
-    """
-    Reduce the protein components definition currently in use with blacklisted components.
-    """
-    global UTILS_PROTEIN_COMPONENTS
-
-    UTILS_PROTEIN_COMPONENTS = UTILS_PROTEIN_COMPONENTS - set(disallowed_components)
 
 
 def set_resolution(resolution: float) -> None:
