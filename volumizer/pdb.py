@@ -5,7 +5,9 @@ Functions for parsing, cleaning, and modifying PDBs.
 from pathlib import Path
 
 import biotite.structure as bts
-from biotite.structure.io import load_structure  # in use by modules importing pdb.py
+from biotite.structure.io import load_structure as biotite_load_structure
+from biotite.structure.io import mmtf, pdbx, pdb
+from biotite import InvalidFileError
 from pyntcloud.structures.voxelgrid import VoxelGrid
 import pandas as pd
 import numpy as np
@@ -17,6 +19,27 @@ from volumizer.constants import (
 )
 from volumizer.types import VoxelGroup
 from volumizer import utils
+
+
+def load_structure(file_path: Path) -> bts.AtomArray:
+    """
+    Load various structure formats.
+    """
+    try:
+        if file_path.suffix == ".pdb":
+            file = pdb.PDBFile.read(file_path)
+            assembly = pdb.get_assembly(file, model=1)
+        elif file_path.suffix == ".cif":
+            file = pdbx.PDBxFile.read(file_path)
+            assembly = pdbx.get_assembly(file, model=1)
+        elif file_path.suffix == ".mmtf":
+            file = mmtf.MMTFFile.read(file_path)
+            assembly = mmtf.get_assembly(file, model=1)
+        else:
+            return biotite_load_structure(file_path)
+        return assembly
+    except InvalidFileError:
+        return biotite_load_structure(file_path)
 
 
 def save_pdb_lines(pdb_lines: list[str], output: Path | str) -> None:

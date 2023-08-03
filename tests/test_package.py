@@ -11,7 +11,10 @@ TEST_PDB_DIR = TEST_DIR / "pdbs"
 TEST_DF_DIR = TEST_DIR / "dfs"
 
 GENERAL_TEST_PDB = TEST_PDB_DIR / "4jpn.pdb"
+GENERAL_TEST_CIF = TEST_PDB_DIR / "4jpn.cif"
+GENERAL_TEST_MMTF = TEST_PDB_DIR / "4jpn.mmtf"
 GENERAL_TEST_DF = TEST_DF_DIR / "4jpn.json"
+ASSEMBLY_TEST_CIF = TEST_PDB_DIR / "4jpp.cif"
 
 
 @pytest.mark.parametrize(
@@ -36,6 +39,11 @@ GENERAL_TEST_DF = TEST_DF_DIR / "4jpn.json"
             TEST_PDB_DIR / "hub.pdb",
             "hub",
             2176.0,
+        ),
+        (
+            ASSEMBLY_TEST_CIF,
+            "pore",
+            71160.0,
         ),
     ],
 )
@@ -86,6 +94,16 @@ def test_volumize_pdb(pdb_file: Path, expected_annotation_df: pd.DataFrame):
         (
             GENERAL_TEST_PDB,
             GENERAL_TEST_PDB.with_suffix(".annotated.pdb"),
+            GENERAL_TEST_DF,
+        ),
+        (
+            GENERAL_TEST_CIF,
+            GENERAL_TEST_CIF.with_suffix(".annotated.pdb"),
+            GENERAL_TEST_DF,
+        ),
+        (
+            GENERAL_TEST_MMTF,
+            GENERAL_TEST_MMTF.with_suffix(".annotated.pdb"),
             GENERAL_TEST_DF,
         ),
     ],
