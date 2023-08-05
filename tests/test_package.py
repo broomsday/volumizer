@@ -11,7 +11,10 @@ TEST_PDB_DIR = TEST_DIR / "pdbs"
 TEST_DF_DIR = TEST_DIR / "dfs"
 
 GENERAL_TEST_PDB = TEST_PDB_DIR / "4jpn.pdb"
+GENERAL_TEST_CIF = TEST_PDB_DIR / "4jpn.cif"
+GENERAL_TEST_MMTF = TEST_PDB_DIR / "4jpn.mmtf"
 GENERAL_TEST_DF = TEST_DF_DIR / "4jpn.json"
+ASSEMBLY_TEST_CIF = TEST_PDB_DIR / "4jpp.cif"
 
 
 @pytest.mark.parametrize(
@@ -37,6 +40,11 @@ GENERAL_TEST_DF = TEST_DF_DIR / "4jpn.json"
             "hub",
             2176.0,
         ),
+        (
+            ASSEMBLY_TEST_CIF,
+            "pore",
+            71160.0,
+        ),
     ],
 )
 def test_volume_annotations(
@@ -45,38 +53,6 @@ def test_volume_annotations(
     largest_volume: float,
 ):
     utils.set_resolution(2.0)
-    utils.reset_protein_components()
-
-    pdb_structure = pdb.load_structure(pdb_file)
-    prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
-    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
-
-    assert (annotation_df.iloc[0].type == largest_type) and (
-        annotation_df.iloc[0].volume == largest_volume
-    )
-
-
-@pytest.mark.parametrize(
-    "pdb_file, removed_components, largest_type, largest_volume",
-    [
-        (GENERAL_TEST_PDB, set(), "pore", 38286.0),
-        (
-            GENERAL_TEST_PDB,
-            {"GLY", "ALA", "LEU", "GLU", "ASP", "LYS", "ILE"},
-            "hub",
-            35964.0,
-        ),
-    ],
-)
-def test_component_removal(
-    pdb_file: Path,
-    removed_components: set[str],
-    largest_type: str,
-    largest_volume: float,
-):
-    utils.set_resolution(3.0)
-    utils.reset_protein_components()
-    utils.remove_protein_components(removed_components)
 
     pdb_structure = pdb.load_structure(pdb_file)
     prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
@@ -107,7 +83,6 @@ def test_component_removal(
 )
 def test_volumize_pdb(pdb_file: Path, expected_annotation_df: pd.DataFrame):
     utils.set_resolution(3.0)
-    utils.reset_protein_components()
 
     annotation_df, _, _ = volumizer.volumize_pdb(pdb_file)
     assert annotation_df.iloc[0].to_dict() == expected_annotation_df.iloc[0].to_dict()
@@ -119,6 +94,16 @@ def test_volumize_pdb(pdb_file: Path, expected_annotation_df: pd.DataFrame):
         (
             GENERAL_TEST_PDB,
             GENERAL_TEST_PDB.with_suffix(".annotated.pdb"),
+            GENERAL_TEST_DF,
+        ),
+        (
+            GENERAL_TEST_CIF,
+            GENERAL_TEST_CIF.with_suffix(".annotated.pdb"),
+            GENERAL_TEST_DF,
+        ),
+        (
+            GENERAL_TEST_MMTF,
+            GENERAL_TEST_MMTF.with_suffix(".annotated.pdb"),
             GENERAL_TEST_DF,
         ),
     ],

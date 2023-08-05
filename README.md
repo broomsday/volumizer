@@ -59,9 +59,10 @@ pdb.save_pdb_lines(pdb_lines, "volumized_pdb.pdb")
 volumes_df.to_json("volumized_df.json")
 ```
 
-## Changing Resolution, Modifying PDB Cleaning, and Beyond
-If you are interested in additional control over the volumizing method, the resolution of the voxels can be changed,
-you can skip cleaning, or modify which residues are kept/removed by the cleaning process
+## Changing Resolution, and Beyond
+If you are interested in additional control over the volumizing method:
+- the resolution of the voxels can be changed
+- cleaning can be skipped
 
 Note: the default voxel resolution is 3.0 Angstroms, which gives sensible results in the majority of cases.
 Higher resolutions especially < 2.0 Angstroms will often find small paths through a protein structure, making e.g. cavities look like pores, etc.
@@ -73,13 +74,7 @@ By constrast all non-covalently attached residues are removed.  Currently glycan
 ```
 from volumizer import volumizer, pdb, utils
 
-# specify whichever residues you are interested in keeping during cleaning, or having additionally removed
-KEEP_RESIDUE_NAMES = {"GAL", "NAG", "MAN", "GLC"}  # some example sugar residues to keep when cleaning
-REMOVE_RESIDUE_NAMES = {"SME"}  # some example NCAAs to remove when cleaning
-
 utils.set_resolution(2.0)
-utils.add_protein_components(KEEP_RESIDUE_NAMES)
-utils.remove_protein_components(REMOVE_RESIDUE_NAMES)
 
 pdb_structure = pdb.load_structure("my_input.pdb")
 cleaned_structure = volumizer.prepare_pdb_structure(pdb_structure)  # skip this if you want to keep the exact input structure

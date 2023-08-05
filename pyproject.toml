@@ -1,13 +1,13 @@
 [tool.poetry]
 name = "volumizer"
-version = "0.1.0"
+version = "0.1.3"
 description = "Search the RCSB for occluded volumes like cavities, pockets, and pores."
 authors = ["Aron Broom <broomsday@gmail.com>"]
 readme = "README.md"
 packages = [{include = "volumizer"}]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 pyntcloud = "^0.1.5"
 biotite = "^0.37.0"
 
