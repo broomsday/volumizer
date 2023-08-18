@@ -38,7 +38,7 @@ def load_structure(file_path: Path) -> bts.AtomArray:
         else:
             return biotite_load_structure(file_path)
         return assembly
-    except InvalidFileError:
+    except (InvalidFileError, NotImplementedError):
         return biotite_load_structure(file_path)
 
 
