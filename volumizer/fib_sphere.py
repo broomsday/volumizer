@@ -8,7 +8,7 @@ import ctypes
 import pandas as pd
 import numpy as np
 
-from volumizer import utils
+from volumizer import utils, native_backend
 from volumizer.constants import ATOMIC_RADII, BASE_ATOMIC_RADIUS
 from volumizer.paths import C_CODE_DIR
 
@@ -20,10 +20,36 @@ if utils.using_performant():
     FIB_SPHERE_C = ctypes.CDLL(str(FIB_SPHERE_C_PATH.absolute()))
 
 
-def fibonacci_sphere(radius: float, x: float, y: float, z: float, samples: int) -> dict[str, list[float]]:
+def fibonacci_sphere(
+    radius: float,
+    x: float,
+    y: float,
+    z: float,
+    samples: int,
+    backend: str | None = None,
+) -> dict[str, list[float]]:
     """
     Generate `samples` points at `radius` from `x,y,z` such that points are roughly equally spaced.
     """
+    if samples <= 0:
+        return {"x": [], "y": [], "z": []}
+
+    requested_backend = backend if backend is not None else utils.get_active_backend()
+    if requested_backend == "native":
+        native_module = native_backend.get_native_module_for_mode("native")
+        if native_module is None:
+            raise RuntimeError(
+                "Native backend requested but `volumizer_native` is not available."
+            )
+
+        native_points = native_module.fibonacci_sphere_points(radius, x, y, z, samples)
+        native_points = np.asarray(native_points, dtype=float)
+        return {
+            "x": native_points[:, 0].tolist(),
+            "y": native_points[:, 1].tolist(),
+            "z": native_points[:, 2].tolist(),
+        }
+
     # this function could likely be made more performant by using numpy more intelligently
     x_coords = []
     y_coords = []
@@ -111,6 +137,38 @@ def add_extra_points_python(coords: pd.DataFrame, voxel_size: float = utils.VOXE
     return coords
 
 
+def add_extra_points_native(
+    coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE
+) -> pd.DataFrame:
+    """
+    Add extra atomic shell points using the native fibonacci sphere kernel.
+    """
+    elemental_radii = {
+        element: get_fibonacci_sphere_radii(element, voxel_size)
+        for element in set(coords["element"])
+    }
+
+    extra_x, extra_y, extra_z, extra_element = [], [], [], []
+    for element, radii in elemental_radii.items():
+        for radius in radii:
+            num_samples = estimate_fibonacci_sphere_samples(radius, voxel_size)
+            for _, coord in coords[coords["element"] == element].iterrows():
+                extra_points = fibonacci_sphere(
+                    radius, coord.x, coord.y, coord.z, num_samples, backend="native"
+                )
+                extra_x += extra_points["x"]
+                extra_y += extra_points["y"]
+                extra_z += extra_points["z"]
+                extra_element += [element] * num_samples
+
+    extra_coords = pd.DataFrame.from_dict(
+        {"x": extra_x, "y": extra_y, "z": extra_z, "element": extra_element}
+    )
+    coords = pd.concat([coords, extra_coords], ignore_index=True)
+
+    return coords
+
+
 def add_extra_points_c(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE) -> pd.DataFrame:
     """
     For each given point which represents the center of a heavy atom,
@@ -148,12 +206,19 @@ def add_extra_points_c(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZ
 
 
 def add_extra_points(
-    coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE, performant: bool = utils.using_performant()
+    coords: pd.DataFrame,
+    voxel_size: float = utils.VOXEL_SIZE,
+    performant: bool = utils.using_performant(),
+    backend: str | None = None,
 ) -> pd.DataFrame:
     """
     For each given point which represents the center of a heavy atom,
     add additional points on a surface around that point at one or more radii.
     """
+    requested_backend = backend if backend is not None else utils.get_active_backend()
+    if requested_backend == "native":
+        return add_extra_points_native(coords, voxel_size)
+
     if performant:
         return add_extra_points_c(coords, voxel_size)
 

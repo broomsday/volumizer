@@ -11,6 +11,7 @@ import pandas as pd
 from volumizer import constants
 from volumizer.types import Annotation, VoxelGroup
 from volumizer.paths import C_CODE_DIR
+from volumizer import native_backend
 
 
 VOXEL_SIZE = constants.VOXEL_SIZE
@@ -175,3 +176,17 @@ def using_performant() -> bool:
         return True
 
     return False
+
+
+def using_native() -> bool:
+    """
+    Return True if native Rust backend is active.
+    """
+    return native_backend.using_native()
+
+
+def get_active_backend() -> str:
+    """
+    Return currently active backend label.
+    """
+    return native_backend.active_backend()

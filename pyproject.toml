@@ -1,22 +1,32 @@
-[tool.poetry]
+[project]
 name = "volumizer"
 version = "0.1.4"
 description = "Search the RCSB for occluded volumes like cavities, pockets, and pores."
-authors = ["Aron Broom <broomsday@gmail.com>"]
 readme = "README.md"
-packages = [{include = "volumizer"}]
-
-[tool.poetry.dependencies]
-python = "^3.10"
-pyntcloud = "^0.1.5"
-biotite = "^0.37.0"
-
-[tool.poetry.group.test.dependencies]
-pytest = "^6.2"
-
-[build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires-python = ">=3.10,<3.12"
+authors = [
+  { name = "Aron Broom", email = "broomsday@gmail.com" },
+]
+dependencies = [
+  "numpy>=1.23,<2.0",
+  "pyntcloud>=0.1.5,<0.2.0",
+  "biotite>=0.37.0,<0.38.0",
+]
 
 [project.urls]
-"Homepage" = "https://github.com/broomsday/volumizer"
+Homepage = "https://github.com/broomsday/volumizer"
+
+[dependency-groups]
+test = [
+  "pytest>=6.2,<7.0",
+]
+native = [
+  "maturin>=1.6,<2.0",
+]
+
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["volumizer"]

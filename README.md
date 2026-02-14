@@ -26,8 +26,23 @@ The dataframe output shows volume/dimensinos of each occluded volume in the stru
 The package is published on PyPi, `pip install volumizer`.
 
 ## Developing the Volumizer Package
-If you want to develop the package, `poetry install` within the repository.
-Test with `pytest` within the repository base directory
+`biotite==0.37.0` does not support Python 3.14. Use Python 3.10 or 3.11 with `uv`.
+
+If you want to develop the package:
+1. `uv python install 3.11`
+2. `uv sync --python 3.11 --group test`
+3. `bash src/compile_c_libs.sh`
+4. `uv run --python 3.11 pytest`
+
+Optional native scaffold (Phase 1):
+1. `uv sync --python 3.11 --group test --group native`
+2. Install Rust toolchain (`cargo`, `rustc`).
+3. `uv run --python 3.11 maturin develop --manifest-path native/Cargo.toml`
+
+Backend selection:
+- `VOLUMIZER_BACKEND=auto` (default): use native if importable, otherwise Python
+- `VOLUMIZER_BACKEND=python`: force Python
+- `VOLUMIZER_BACKEND=native`: require native module and fail if unavailable
 
 # Usage
 Using the test file `tests/pdbs/4jpn.pdb` try out the following:

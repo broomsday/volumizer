@@ -1,0 +1,15 @@
+[package]
+name = "volumizer_native"
+version = "0.1.0"
+edition = "2021"
+description = "Native Rust acceleration module for volumizer"
+license = "MIT"
+
+[lib]
+name = "volumizer_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+ndarray = "0.15"
+numpy = "0.22"
+pyo3 = { version = "0.22", features = ["extension-module"] }
