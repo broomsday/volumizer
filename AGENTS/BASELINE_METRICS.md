@@ -47,3 +47,11 @@ Copy from benchmark stdout or `summary` in `AGENTS/benchmark.baseline.json`.
 - Keep resolution constant (`2.0 A`) when comparing before/after migration.
 - If backend changes, record separate baseline blocks by backend.
 - If hardware changes, do not compare absolute timing directly; compare only within the same host profile.
+
+## 5. Migration Benchmark Status
+
+- `ctypes-c` baseline: completed (table above).
+- `native` backend benchmark: pending publication in `AGENTS/PERFORMANCE_REPORT.md`.
+- Required comparison runs:
+- `VOLUMIZER_BACKEND=python` at `2.0 A`
+- `VOLUMIZER_BACKEND=native` at `2.0 A`

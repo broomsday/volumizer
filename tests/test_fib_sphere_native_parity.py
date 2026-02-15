@@ -2,10 +2,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from volumizer import fib_sphere
+from volumizer import fib_sphere, native_backend
 
 
-pytest.importorskip("volumizer_native")
+@pytest.fixture(scope="module", autouse=True)
+def _require_native_backend():
+    native_backend.clear_backend_cache()
+    if native_backend.get_native_module_for_mode("auto") is None:
+        pytest.skip("native backend artifact/module not available")
 
 
 @pytest.mark.parametrize(

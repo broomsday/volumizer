@@ -9,3 +9,4 @@ data/prepared_pdbs/
 *.so
 
 dist/
+native/target/

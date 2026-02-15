@@ -10,6 +10,5 @@ name = "volumizer_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-ndarray = "0.15"
 numpy = "0.22"
 pyo3 = { version = "0.22", features = ["extension-module"] }

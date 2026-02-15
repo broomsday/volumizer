@@ -24,6 +24,9 @@ def test_auto_backend_falls_back_to_python_when_native_missing(monkeypatch):
 
     monkeypatch.setenv("VOLUMIZER_BACKEND", "auto")
     monkeypatch.setattr(native_backend.importlib, "import_module", fake_import)
+    monkeypatch.setattr(
+        native_backend, "_load_native_module_from_local_artifact", lambda: None
+    )
 
     assert native_backend.get_native_module() is None
     assert native_backend.active_backend() == "python"
@@ -39,6 +42,9 @@ def test_forced_native_backend_raises_when_missing(monkeypatch):
 
     monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
     monkeypatch.setattr(native_backend.importlib, "import_module", fake_import)
+    monkeypatch.setattr(
+        native_backend, "_load_native_module_from_local_artifact", lambda: None
+    )
 
     with pytest.raises(RuntimeError):
         native_backend.get_native_module()

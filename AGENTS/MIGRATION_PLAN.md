@@ -1,5 +1,24 @@
 # Volumizer Migration Plan (Python -> Rust/C Core)
 
+## 0. Current Status (2026-02-15)
+
+Phase status:
+- `Phase 0` (baseline + guardrails): completed.
+- `Phase 1` (native scaffold + FFI contract): completed.
+- `Phase 2` (fib sphere native path): completed for kernel + integration; further batch-optimization still pending.
+- `Phase 3` (neighbor/BFS native kernels): completed for kernel + integration.
+- `Phase 4` (native classification): partially completed.
+
+Completed in Phase 4:
+- Native `classify_buried_components` is implemented in Rust.
+- Python dispatch can consume native classifier output.
+- End-to-end parity scaffolding for native vs Python pipeline is in place.
+
+Remaining in Phase 4:
+- Port exposed/buried solvent split to native.
+- Remove remaining Python orchestration loops from classification path where feasible.
+- Benchmark native backend thoroughly and tune hotspots.
+
 ## 1. Objective
 
 Migrate the computationally expensive parts of `volumizer` from Python into a native core (Rust preferred, C acceptable) while preserving current scientific behavior and improving install/use ergonomics.
@@ -213,9 +232,9 @@ Risk:
 Mitigation:
 - Deterministic sort keys for components and explicit test coverage for ordering.
 
-## 8. Immediate Next Actions (Week 1)
+## 8. Immediate Next Actions (Current)
 
-1. Add baseline benchmark harness and golden outputs.
-2. Create native extension skeleton and CI build job.
-3. Define and document FFI contract before porting any algorithm.
-4. Port fib-sphere expansion as first production native stage.
+1. Port `get_exposed_and_buried_voxels()` to native and wire backend dispatch.
+2. Run backend comparison benchmarks at `2.0 A` and publish `AGENTS/PERFORMANCE_REPORT.md`.
+3. Add CI job that builds native module and runs native parity tests.
+4. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).

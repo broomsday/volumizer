@@ -12,7 +12,7 @@ import pandas as pd
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from volumizer import utils, align
+from volumizer import utils, align, native_backend
 from volumizer.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
 from volumizer.types import VoxelGroup
 from volumizer.paths import C_CODE_DIR
@@ -21,6 +21,15 @@ from volumizer.paths import C_CODE_DIR
 if utils.using_performant():
     VOXEL_C_PATH = C_CODE_DIR / "voxel.so"
     VOXEL_C = ctypes.CDLL(str(VOXEL_C_PATH.absolute()))
+
+
+NATIVE_COMPONENT_TYPE_CODE_MAP = {
+    0: "occluded",
+    1: "cavity",
+    2: "pocket",
+    3: "pore",
+    4: "hub",
+}
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -310,16 +319,51 @@ def get_neighbor_voxels_c(
     )
 
 
+def get_neighbor_voxels_native(
+    query_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
+    reference_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Return the voxels from a query group that neighbor a reference group using native backend.
+    """
+    native_module = native_backend.get_native_module_for_mode("native")
+    if native_module is None:
+        raise RuntimeError(
+            "Native backend requested but `volumizer_native` is not importable."
+        )
+
+    query_array = np.stack(query_voxels, axis=1).astype(np.int32, copy=False)
+    reference_array = np.stack(reference_voxels, axis=1).astype(np.int32, copy=False)
+    neighbor_indices = np.asarray(
+        native_module.get_neighbor_voxel_indices(query_array, reference_array),
+        dtype=np.int64,
+    )
+    if neighbor_indices.size == 0:
+        return np.array([]), np.array([]), np.array([])
+
+    return (
+        query_voxels[0][neighbor_indices],
+        query_voxels[1][neighbor_indices],
+        query_voxels[2][neighbor_indices],
+    )
+
+
 def get_first_shell_exposed_voxels(
     exposed_voxels: VoxelGroup,
     buried_voxels: VoxelGroup,
     voxel_grid: VoxelGrid,
     performant: bool = utils.using_performant(),
+    backend: str | None = None,
 ) -> VoxelGroup:
     """
     Subset exposed voxels into only those neighboring one or more buried voxels.
     """
-    if performant:
+    requested_backend = backend if backend is not None else utils.get_active_backend()
+    if requested_backend == "native":
+        first_shell_voxels = get_neighbor_voxels_native(
+            exposed_voxels.voxels, buried_voxels.voxels
+        )
+    elif performant:
         first_shell_voxels = get_neighbor_voxels_c(
             exposed_voxels.voxels, buried_voxels.voxels
         )
@@ -464,15 +508,43 @@ def breadth_first_search_c(
     return set([i for i in neighbor_indices_c.contents if i != -1])
 
 
+def breadth_first_search_native(
+    voxels: tuple[np.ndarray, ...], searchable_indices: set[int]
+) -> set[int]:
+    """
+    Native backend version of breadth-first search over voxel indices.
+    """
+    if len(searchable_indices) == 0:
+        return set()
+
+    native_module = native_backend.get_native_module_for_mode("native")
+    if native_module is None:
+        raise RuntimeError(
+            "Native backend requested but `volumizer_native` is not importable."
+        )
+
+    voxel_array = np.stack(voxels, axis=1).astype(np.int32, copy=False)
+    searchable_index_array = np.array(list(searchable_indices), dtype=np.int32)
+    neighbor_indices = native_module.bfs_component_indices(
+        voxel_array, searchable_index_array
+    )
+    return set(np.asarray(neighbor_indices, dtype=np.int64).tolist())
+
+
 def breadth_first_search(
     voxels: tuple[np.ndarray, ...],
     searchable_indices: set[int],
     performant: bool = utils.using_performant(),
+    backend: str | None = None,
 ) -> set[int]:
     """
     Given a set of voxels and list of possible indices to add,
     add indices for all ordinal neighbors iteratively until no more such neighbors exist.
     """
+    requested_backend = backend if backend is not None else utils.get_active_backend()
+    if requested_backend == "native":
+        return breadth_first_search_native(voxels, searchable_indices)
+
     if performant:
         return breadth_first_search_c(voxels, searchable_indices)
 
@@ -500,6 +572,7 @@ def get_agglomerated_type(
     buried_voxels: tuple[np.ndarray, ...],
     exposed_voxels: tuple[np.ndarray, ...],
     voxel_grid_dimensions: np.ndarray,
+    backend: str | None = None,
 ) -> tuple[set[int], str]:
     """
     Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Four possibilites:
@@ -542,12 +615,14 @@ def get_agglomerated_type(
     # NOTE: we have to union the direct and neighbor surfaces, otherwise small discritization
     #   on the surface would look like a distinct surface
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
-    single_surface_indices = breadth_first_search(buried_voxels, surface_indices)
+    single_surface_indices = breadth_first_search(
+        buried_voxels, surface_indices, backend=backend
+    )
     if len(single_surface_indices) < len(surface_indices):
         # run the agglomeration one more time on what's left
         remaining_surface_indices = surface_indices - single_surface_indices
         single_surface_indices = breadth_first_search(
-            buried_voxels, remaining_surface_indices
+            buried_voxels, remaining_surface_indices, backend=backend
         )
 
         # if there are stil indices left, there were more than 2 surfaces, hence a hub
@@ -603,8 +678,162 @@ def get_voxel_group_axial_lengths(
     )
 
 
-def get_pores_pockets_cavities_occluded(
+def _extract_component_voxels(
+    buried_voxels: VoxelGroup, component_indices: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Convert indices into a component voxel tuple.
+    """
+    component_indices = np.asarray(component_indices, dtype=np.int64)
+    if component_indices.size == 0:
+        return (
+            np.array([], dtype=np.int64),
+            np.array([], dtype=np.int64),
+            np.array([], dtype=np.int64),
+        )
+
+    return (
+        buried_voxels.voxels[0][component_indices],
+        buried_voxels.voxels[1][component_indices],
+        buried_voxels.voxels[2][component_indices],
+    )
+
+
+def _build_voxel_group_from_component_indices(
+    buried_voxels: VoxelGroup,
+    voxel_grid: VoxelGrid,
+    component_indices: np.ndarray,
+    surface_component_indices: np.ndarray,
+    agglomerated_type: str,
+) -> VoxelGroup:
+    """
+    Construct a VoxelGroup from native component-index outputs.
+    """
+    volume_voxels = _extract_component_voxels(buried_voxels, component_indices)
+    surface_voxels = _extract_component_voxels(
+        buried_voxels, surface_component_indices
+    )
+
+    volume_indices = compute_voxel_indices(volume_voxels, voxel_grid.x_y_z)
+    surface_indices = compute_voxel_indices(surface_voxels, voxel_grid.x_y_z)
+    if len(volume_indices) == 0:
+        center = np.array([0.0, 0.0, 0.0])
+        axial_lengths = [0.0, 0.0, 0.0]
+    else:
+        center = get_voxel_group_center(volume_indices, voxel_grid)
+        axial_lengths = get_voxel_group_axial_lengths(volume_indices, voxel_grid)
+
+    return VoxelGroup(
+        voxels=volume_voxels,
+        indices=volume_indices,
+        surface_indices=surface_indices,
+        num_voxels=len(volume_indices),
+        voxel_type=agglomerated_type,
+        volume=compute_voxel_group_volume(len(volume_indices)),
+        center=center,
+        axial_lengths=axial_lengths,
+    )
+
+
+def classify_buried_components_native(
     buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid: VoxelGrid
+) -> tuple[
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+    dict[int, VoxelGroup],
+]:
+    """
+    Use native classifier output (if exposed by the native backend) and map into VoxelGroups.
+    """
+    native_module = native_backend.get_native_module_for_mode("native")
+    if native_module is None or not hasattr(
+        native_module, "classify_buried_components"
+    ):
+        raise RuntimeError(
+            "Native backend does not provide `classify_buried_components`."
+        )
+
+    buried_array = np.stack(buried_voxels.voxels, axis=1).astype(np.int32, copy=False)
+    exposed_array = np.stack(exposed_voxels.voxels, axis=1).astype(np.int32, copy=False)
+    grid_dimensions = np.array(voxel_grid.x_y_z, dtype=np.int32)
+
+    native_output = native_module.classify_buried_components(
+        buried_array,
+        exposed_array,
+        grid_dimensions,
+        int(MIN_NUM_VOXELS),
+        float(utils.VOXEL_SIZE),
+    )
+    if not isinstance(native_output, dict):
+        raise RuntimeError(
+            "Unexpected native classifier output, expected dict with flattened arrays."
+        )
+
+    component_type_codes = np.asarray(
+        native_output["component_type_codes"], dtype=np.int64
+    )
+    component_offsets = np.asarray(native_output["component_offsets"], dtype=np.int64)
+    voxel_indices_flat = np.asarray(
+        native_output["component_voxel_indices_flat"], dtype=np.int64
+    )
+    surface_indices_flat = np.asarray(
+        native_output["component_surface_indices_flat"], dtype=np.int64
+    )
+    surface_offsets = np.asarray(
+        native_output.get("surface_offsets", component_offsets), dtype=np.int64
+    )
+
+    if (
+        len(component_offsets) != len(component_type_codes) + 1
+        or len(surface_offsets) != len(component_type_codes) + 1
+    ):
+        raise RuntimeError(
+            "Native classifier output has inconsistent component offsets."
+        )
+
+    hubs, pores, pockets, cavities, occluded = {}, {}, {}, {}, {}
+    counters = {"hub": 0, "pore": 0, "pocket": 0, "cavity": 0, "occluded": 0}
+    bucket_map = {
+        "hub": hubs,
+        "pore": pores,
+        "pocket": pockets,
+        "cavity": cavities,
+        "occluded": occluded,
+    }
+
+    for component_id, type_code in enumerate(component_type_codes):
+        agglomerated_type = NATIVE_COMPONENT_TYPE_CODE_MAP.get(int(type_code))
+        if agglomerated_type is None:
+            raise RuntimeError(f"Unknown native component type code: {type_code}")
+
+        volume_slice = slice(component_offsets[component_id], component_offsets[component_id + 1])
+        surface_slice = slice(surface_offsets[component_id], surface_offsets[component_id + 1])
+        component_indices = voxel_indices_flat[volume_slice]
+        surface_component_indices = surface_indices_flat[surface_slice]
+
+        voxel_group = _build_voxel_group_from_component_indices(
+            buried_voxels,
+            voxel_grid,
+            component_indices,
+            surface_component_indices,
+            agglomerated_type,
+        )
+
+        bucket = bucket_map[agglomerated_type]
+        type_index = counters[agglomerated_type]
+        bucket[type_index] = voxel_group
+        counters[agglomerated_type] += 1
+
+    return hubs, pores, pockets, cavities, occluded
+
+
+def get_pores_pockets_cavities_occluded(
+    buried_voxels: VoxelGroup,
+    exposed_voxels: VoxelGroup,
+    voxel_grid: VoxelGrid,
+    backend: str | None = None,
 ) -> tuple[
     dict[int, VoxelGroup],
     dict[int, VoxelGroup],
@@ -615,6 +844,16 @@ def get_pores_pockets_cavities_occluded(
     """
     Agglomerate buried solvent voxels into hubs, pores, pockets, cavities, and simply occluded.
     """
+    requested_backend = backend if backend is not None else utils.get_active_backend()
+    if requested_backend == "native":
+        native_module = native_backend.get_native_module_for_mode("native")
+        if native_module is not None and hasattr(
+            native_module, "classify_buried_components"
+        ):
+            return classify_buried_components_native(
+                buried_voxels, exposed_voxels, voxel_grid
+            )
+
     buried_indices = set(range(buried_voxels.voxels[0].size))
     agglomerated_indices = set()
 
@@ -626,7 +865,7 @@ def get_pores_pockets_cavities_occluded(
 
         # perform BFS over the remaining indices
         agglomerable_indices = breadth_first_search(
-            buried_voxels.voxels, remaining_indices
+            buried_voxels.voxels, remaining_indices, backend=requested_backend
         )
         # iterate our counter of finished indices
         agglomerated_indices = agglomerated_indices.union(agglomerable_indices)
@@ -642,6 +881,7 @@ def get_pores_pockets_cavities_occluded(
                 buried_voxels.voxels,
                 exposed_voxels.voxels,
                 voxel_grid.x_y_z,
+                backend=requested_backend,
             )
 
         # get the surface voxels for use in getting their voxel-grid indices

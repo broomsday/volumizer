@@ -6,7 +6,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 import importlib
+import importlib.util
 import os
+from pathlib import Path
+import sys
 from types import ModuleType
 
 
@@ -15,13 +18,43 @@ BACKEND_AUTO = "auto"
 BACKEND_NATIVE = "native"
 BACKEND_PYTHON = "python"
 VALID_BACKENDS = {BACKEND_AUTO, BACKEND_NATIVE, BACKEND_PYTHON}
+DEFAULT_BACKEND = BACKEND_PYTHON
+
+
+def _load_native_module_from_local_artifact() -> ModuleType | None:
+    """
+    Load a locally-built native module artifact (debug/release target) when present.
+    """
+    root_dir = Path(__file__).resolve().parents[1]
+    candidates = [
+        root_dir / "native" / "target" / "debug" / "libvolumizer_native.so",
+        root_dir / "native" / "target" / "release" / "libvolumizer_native.so",
+        root_dir / "native" / "target" / "debug" / "volumizer_native.pyd",
+        root_dir / "native" / "target" / "release" / "volumizer_native.pyd",
+        root_dir / "native" / "target" / "debug" / "libvolumizer_native.dylib",
+        root_dir / "native" / "target" / "release" / "libvolumizer_native.dylib",
+    ]
+
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("volumizer_native", candidate)
+        if spec is None or spec.loader is None:
+            continue
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["volumizer_native"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    return None
 
 
 def get_requested_backend() -> str:
     """
     Return requested backend mode from environment.
     """
-    backend = os.getenv(BACKEND_ENV, BACKEND_AUTO).strip().lower()
+    backend = os.getenv(BACKEND_ENV, DEFAULT_BACKEND).strip().lower()
     if backend not in VALID_BACKENDS:
         return BACKEND_AUTO
     return backend
@@ -38,6 +71,10 @@ def _load_native_module(mode: str) -> ModuleType | None:
     try:
         return importlib.import_module("volumizer_native")
     except ImportError as error:
+        local_module = _load_native_module_from_local_artifact()
+        if local_module is not None:
+            return local_module
+
         if mode == BACKEND_NATIVE:
             raise RuntimeError(
                 "Native backend requested but `volumizer_native` is not importable. "

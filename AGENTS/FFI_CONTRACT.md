@@ -1,4 +1,4 @@
-# Volumizer Native FFI Contract (Phase 1 Draft)
+# Volumizer Native FFI Contract
 
 ## 1. Purpose
 
@@ -9,6 +9,16 @@ This contract targets:
 - voxel neighbor detection
 - BFS component expansion
 - (later) full volume classification
+
+Current implementation status:
+- Implemented in `volumizer_native`:
+- `fibonacci_sphere_points`
+- `get_neighbor_voxel_indices`
+- `bfs_component_indices`
+- `classify_buried_components`
+- Still pending:
+- Native exposed/buried voxel split kernel
+- Stable packaging/import contract for installed wheels across platforms
 
 ## 2. Conventions
 
@@ -22,9 +32,9 @@ This contract targets:
 ## 3. Backend Selection
 
 Python runtime should support:
-- `VOLUMIZER_BACKEND=python` -> always Python implementation
+- `VOLUMIZER_BACKEND=python` (default) -> always Python implementation
 - `VOLUMIZER_BACKEND=native` -> require native module, fail loudly if unavailable
-- `VOLUMIZER_BACKEND=auto` (default) -> use native when import succeeds, otherwise Python
+- `VOLUMIZER_BACKEND=auto` -> use native when import succeeds, otherwise Python
 
 ## 4. Function Contracts
 
@@ -93,8 +103,9 @@ Input:
 Output:
 - Structured dict/tuple with:
 - `component_type_codes: np.ndarray[int8]` (`0=occluded,1=cavity,2=pocket,3=pore,4=hub`)
-- `component_offsets: np.ndarray[int32]` prefix offsets into flattened index buffers
+- `component_offsets: np.ndarray[int32]` prefix offsets into `component_voxel_indices_flat`
 - `component_voxel_indices_flat: np.ndarray[int32]`
+- `surface_offsets: np.ndarray[int32]` prefix offsets into `component_surface_indices_flat`
 - `component_surface_indices_flat: np.ndarray[int32]`
 - `component_centers: np.ndarray[float32]` shape `(C,3)`
 - `component_axial_lengths: np.ndarray[float32]` shape `(C,3)`

@@ -40,8 +40,8 @@ Optional native scaffold (Phase 1):
 3. `uv run --python 3.11 maturin develop --manifest-path native/Cargo.toml`
 
 Backend selection:
-- `VOLUMIZER_BACKEND=auto` (default): use native if importable, otherwise Python
-- `VOLUMIZER_BACKEND=python`: force Python
+- `VOLUMIZER_BACKEND=python` (default): use Python/C-ctypes implementation
+- `VOLUMIZER_BACKEND=auto`: use native if importable, otherwise Python
 - `VOLUMIZER_BACKEND=native`: require native module and fail if unavailable
 
 # Usage
