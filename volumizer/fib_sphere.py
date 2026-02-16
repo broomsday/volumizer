@@ -4,6 +4,7 @@ Functions for creating points on a sphere surface.
 
 
 import ctypes
+from functools import lru_cache
 
 import pandas as pd
 import numpy as np
@@ -80,18 +81,39 @@ def get_example_point_distance(coords: dict[str, list[float]]) -> float:
     return np.linalg.norm(coord_diff)
 
 
-def estimate_fibonacci_sphere_samples(radius: float, voxel_size: float) -> int:
+@lru_cache(maxsize=512)
+def _estimate_fibonacci_sphere_samples_cached(radius: float, voxel_size: float) -> int:
     """
     Based on the voxel-size and radius being used, estimate how many samples will be needed.
     Smaller voxel-size requires more samples
     """
     num_samples = 20
-    coords = fibonacci_sphere(radius, 0, 0, 0, num_samples)
+    coords = fibonacci_sphere(radius, 0, 0, 0, num_samples, backend="python")
     while get_example_point_distance(coords) > voxel_size:
         num_samples *= 2
-        coords = fibonacci_sphere(radius, 0, 0, 0, num_samples)
+        coords = fibonacci_sphere(radius, 0, 0, 0, num_samples, backend="python")
 
     return num_samples
+
+
+def estimate_fibonacci_sphere_samples(radius: float, voxel_size: float) -> int:
+    """
+    Cached wrapper to avoid recomputing sample counts for repeated radius/voxel-size pairs.
+    """
+    return _estimate_fibonacci_sphere_samples_cached(float(radius), float(voxel_size))
+
+
+@lru_cache(maxsize=256)
+def _get_fibonacci_sphere_radii_cached(element: str, voxel_size: float) -> tuple[float, ...]:
+    vdw_radius = ATOMIC_RADII.get(element, BASE_ATOMIC_RADIUS)
+    radii = [vdw_radius]
+
+    scale_factor = 1
+    while min(radii) > voxel_size:
+        radii.append(vdw_radius - (voxel_size * scale_factor))
+        scale_factor += 1
+
+    return tuple(radii)
 
 
 def get_fibonacci_sphere_radii(element: str, voxel_size: float) -> list[float]:
@@ -102,15 +124,7 @@ def get_fibonacci_sphere_radii(element: str, voxel_size: float) -> list[float]:
     We always place a single radii at the VDW radius for the element corresponding to this
     atom, and only use additional, smaller radii when needed.
     """
-    vdw_radius = ATOMIC_RADII.get(element, BASE_ATOMIC_RADIUS)
-    radii = [vdw_radius]
-
-    scale_factor = 1
-    while min(radii) > voxel_size:
-        radii.append(vdw_radius - (voxel_size * scale_factor))
-        scale_factor += 1
-
-    return radii
+    return list(_get_fibonacci_sphere_radii_cached(element, float(voxel_size)))
 
 
 def add_extra_points_python(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE) -> pd.DataFrame:
@@ -143,30 +157,78 @@ def add_extra_points_native(
     """
     Add extra atomic shell points using the native fibonacci sphere kernel.
     """
+    native_module = native_backend.get_native_module_for_mode("native")
+    if native_module is None:
+        raise RuntimeError(
+            "Native backend requested but `volumizer_native` is not available."
+        )
+
+    element_order = coords["element"].drop_duplicates().tolist()
     elemental_radii = {
         element: get_fibonacci_sphere_radii(element, voxel_size)
-        for element in set(coords["element"])
+        for element in element_order
+    }
+    element_centers = {
+        element: coords.loc[coords["element"] == element, ["x", "y", "z"]].to_numpy(
+            dtype=np.float32,
+            copy=True,
+        )
+        for element in element_order
     }
 
-    extra_x, extra_y, extra_z, extra_element = [], [], [], []
+    supports_batch = hasattr(native_module, "fibonacci_sphere_points_batch")
+    extra_blocks = []
     for element, radii in elemental_radii.items():
+        centers = element_centers[element]
+        if centers.shape[0] == 0:
+            continue
+
         for radius in radii:
             num_samples = estimate_fibonacci_sphere_samples(radius, voxel_size)
-            for _, coord in coords[coords["element"] == element].iterrows():
-                extra_points = fibonacci_sphere(
-                    radius, coord.x, coord.y, coord.z, num_samples, backend="native"
+            if supports_batch:
+                points = native_module.fibonacci_sphere_points_batch(
+                    float(radius),
+                    centers,
+                    int(num_samples),
                 )
-                extra_x += extra_points["x"]
-                extra_y += extra_points["y"]
-                extra_z += extra_points["z"]
-                extra_element += [element] * num_samples
+                points = np.asarray(points, dtype=np.float32)
+            else:
+                # Backward compatibility for older native artifacts without batch API.
+                point_blocks = []
+                for center in centers:
+                    point_blocks.append(
+                        np.asarray(
+                            native_module.fibonacci_sphere_points(
+                                float(radius),
+                                float(center[0]),
+                                float(center[1]),
+                                float(center[2]),
+                                int(num_samples),
+                            ),
+                            dtype=np.float32,
+                        )
+                    )
+                points = np.vstack(point_blocks)
 
-    extra_coords = pd.DataFrame.from_dict(
-        {"x": extra_x, "y": extra_y, "z": extra_z, "element": extra_element}
-    )
-    coords = pd.concat([coords, extra_coords], ignore_index=True)
+            if points.size == 0:
+                continue
 
-    return coords
+            extra_blocks.append(
+                pd.DataFrame.from_dict(
+                    {
+                        "x": points[:, 0],
+                        "y": points[:, 1],
+                        "z": points[:, 2],
+                        "element": np.full(points.shape[0], element),
+                    }
+                )
+            )
+
+    if len(extra_blocks) == 0:
+        return coords
+
+    extra_coords = pd.concat(extra_blocks, ignore_index=True)
+    return pd.concat([coords, extra_coords], ignore_index=True)
 
 
 def add_extra_points_c(coords: pd.DataFrame, voxel_size: float = utils.VOXEL_SIZE) -> pd.DataFrame:

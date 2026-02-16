@@ -14,6 +14,7 @@ This contract targets:
 Current implementation status:
 - Implemented in `volumizer_native`:
 - `fibonacci_sphere_points`
+- `fibonacci_sphere_points_batch`
 - `get_neighbor_voxel_indices`
 - `bfs_component_indices`
 - `get_exposed_and_buried_voxel_indices`
@@ -57,7 +58,25 @@ Output:
 Notes:
 - Semantics must match current `volumizer.fib_sphere.fibonacci_sphere`.
 
-## 4.2 `get_neighbor_voxel_indices`
+## 4.2 `fibonacci_sphere_points_batch`
+
+Intent:
+- Generate sphere points for many centers in one call to reduce Python/native call overhead.
+
+Input:
+- `radius: float`
+- `centers: np.ndarray[float32]` shape `(N, 3)`
+- `samples: int`
+
+Output:
+- `np.ndarray[float32]` with shape `(N * samples, 3)`
+
+Notes:
+- Output ordering is deterministic:
+- all `samples` points for `centers[0]`, then `centers[1]`, etc.
+- Semantics per center must match `fibonacci_sphere_points`.
+
+## 4.3 `get_neighbor_voxel_indices`
 
 Intent:
 - Return indices of query voxels that are 6-neighbors of any reference voxel.
@@ -73,7 +92,7 @@ Notes:
 - Neighbor rule is ordinal adjacency (Manhattan distance exactly 1).
 - Must preserve parity with current `get_neighbor_voxels_*` behavior.
 
-## 4.3 `bfs_component_indices`
+## 4.4 `bfs_component_indices`
 
 Intent:
 - Perform BFS over candidate voxel indices and return one connected component.
@@ -89,7 +108,7 @@ Notes:
 - Connectivity rule is same 6-neighbor adjacency.
 - Component seed semantics must match current Python/C implementations.
 
-## 4.4 `get_exposed_and_buried_voxel_indices`
+## 4.5 `get_exposed_and_buried_voxel_indices`
 
 Intent:
 - Classify solvent voxels into exposed vs buried based on axis-occlusion heuristics.
@@ -108,7 +127,7 @@ Notes:
 - Must preserve parity with current `get_exposed_and_buried_voxels` semantics.
 - Returned indices are deterministic and ordered by input traversal.
 
-## 4.5 `classify_buried_components` (Phase 2+)
+## 4.6 `classify_buried_components` (Phase 2+)
 
 Intent:
 - Full native kernel for agglomerating buried voxels and classifying cavity/pocket/pore/hub.

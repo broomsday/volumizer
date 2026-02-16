@@ -52,4 +52,5 @@ Copy from benchmark stdout or `summary` in `AGENTS/benchmark.baseline.json`.
 
 - `ctypes-c` baseline: completed (table above).
 - Backend comparison runs (`python`, `ctypes-c`, `native`) at `2.0 A`: completed.
+- Native optimized rerun at `2.0 A`: completed (`AGENTS/benchmark.native.optimized.json`).
 - Published report: `AGENTS/PERFORMANCE_REPORT.md`.

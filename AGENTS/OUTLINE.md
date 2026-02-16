@@ -92,6 +92,7 @@ Implemented so far:
 - Native backend selection exists via `VOLUMIZER_BACKEND` in `volumizer/native_backend.py`.
 - Native kernels currently implemented:
 - Fibonacci sphere point generation.
+- Fibonacci sphere batch point generation.
 - Neighbor voxel index detection.
 - BFS component expansion.
 - Exposed/buried solvent split.
@@ -100,7 +101,7 @@ Implemented so far:
 - Native parity and integration tests are present and passing when the module is built.
 
 Still pending for full switch-over:
-- Reduce Python-side dataframe/loop overhead in `add_extra_points` bulk expansion.
+- Further reduce Python-side dataframe/orchestration overhead around native paths.
 - Package native module for standard install path (prebuilt wheels/CI matrix).
 - Maintain and refresh backend-vs-backend performance reporting.
 

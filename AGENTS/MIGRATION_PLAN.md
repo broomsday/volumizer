@@ -5,7 +5,7 @@
 Phase status:
 - `Phase 0` (baseline + guardrails): completed.
 - `Phase 1` (native scaffold + FFI contract): completed.
-- `Phase 2` (fib sphere native path): completed for kernel + integration; further batch-optimization still pending.
+- `Phase 2` (fib sphere native path): completed for kernel + integration, including first batch-optimization pass.
 - `Phase 3` (neighbor/BFS native kernels): completed for kernel + integration.
 - `Phase 4` (native classification): partially completed.
 
@@ -234,6 +234,6 @@ Mitigation:
 
 ## 8. Immediate Next Actions (Current)
 
-1. Benchmark and tune full native path (including exposed/buried split) at `2.0 A`.
-2. Add CI job that builds native module and runs native parity tests.
-3. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).
+1. Add CI job that builds native module, runs native parity tests, and stores benchmark artifacts.
+2. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).
+3. Add a lightweight performance regression check against `AGENTS/benchmark.native.optimized.json`.

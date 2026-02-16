@@ -96,3 +96,48 @@ def test_add_extra_points_prefers_native_when_requested(monkeypatch):
     )
 
     assert len(out_df) > len(coords)
+
+
+def test_add_extra_points_native_uses_batch_kernel_when_available(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def fibonacci_sphere_points_batch(radius, centers, samples):
+            assert centers.shape == (2, 3)
+            assert samples == 2
+            return np.repeat(centers, samples, axis=0)
+
+        @staticmethod
+        def fibonacci_sphere_points(*args, **kwargs):
+            raise RuntimeError("Single-point kernel should not be used when batch is available")
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+    monkeypatch.setattr(
+        fib_sphere,
+        "estimate_fibonacci_sphere_samples",
+        lambda radius, voxel_size: 2,
+    )
+    monkeypatch.setattr(
+        fib_sphere,
+        "get_fibonacci_sphere_radii",
+        lambda element, voxel_size: [1.0],
+    )
+
+    coords = pd.DataFrame.from_dict(
+        {
+            "x": [0.0, 1.0],
+            "y": [0.5, 1.5],
+            "z": [1.0, 2.0],
+            "element": ["C", "C"],
+        }
+    )
+    out_df = fib_sphere.add_extra_points(
+        coords,
+        voxel_size=2.0,
+        performant=True,
+        backend="native",
+    )
+
+    assert len(out_df) == len(coords) + 4

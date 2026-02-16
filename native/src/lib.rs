@@ -59,6 +59,88 @@ fn fibonacci_sphere_points<'py>(
     Ok(array.into_pyarray_bound(py))
 }
 
+fn validate_float_coordinate_array_shape(
+    array: &PyReadonlyArray2<'_, f32>,
+    name: &str,
+) -> PyResult<()> {
+    let shape = array.shape();
+    if shape.len() != 2 || shape[1] != 3 {
+        return Err(PyValueError::new_err(format!(
+            "{name} must have shape (N, 3), got {:?}",
+            shape
+        )));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn fibonacci_sphere_points_batch<'py>(
+    py: Python<'py>,
+    radius: f32,
+    centers: PyReadonlyArray2<'_, f32>,
+    samples: usize,
+) -> PyResult<Bound<'py, PyArray2<f32>>> {
+    if samples == 0 {
+        return Err(PyValueError::new_err("samples must be > 0"));
+    }
+    if !radius.is_finite() {
+        return Err(PyValueError::new_err("radius must be finite"));
+    }
+    validate_float_coordinate_array_shape(&centers, "centers")?;
+
+    let centers_view = centers.as_array();
+    let num_centers = centers_view.shape()[0];
+    if num_centers == 0 {
+        let array = Array2::from_shape_vec((0, 3), Vec::<f32>::new())
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        return Ok(array.into_pyarray_bound(py));
+    }
+
+    // Precompute sphere offsets once, then translate for each center.
+    let golden_ratio = (1.0_f32 + 5.0_f32.sqrt()) / 4.0_f32;
+    let mut offsets = Vec::with_capacity(samples * 3);
+    for i in 0..samples {
+        let i_f = i as f32;
+        let samples_f = samples as f32;
+
+        let phi = (1.0_f32 - 2.0_f32 * (i_f + 0.5_f32) / samples_f).acos();
+        let theta = (std::f32::consts::PI * i_f) / golden_ratio;
+
+        offsets.push((theta.cos() * phi.sin()) * radius);
+        offsets.push((theta.sin() * phi.sin()) * radius);
+        offsets.push(phi.cos() * radius);
+    }
+
+    let total_points = num_centers
+        .checked_mul(samples)
+        .ok_or_else(|| PyValueError::new_err("centers * samples is too large"))?;
+    let mut values = Vec::with_capacity(total_points * 3);
+    for center_index in 0..num_centers {
+        let center = [
+            centers_view[[center_index, 0]],
+            centers_view[[center_index, 1]],
+            centers_view[[center_index, 2]],
+        ];
+        if !center[0].is_finite() || !center[1].is_finite() || !center[2].is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "centers[{}] must be finite, got {:?}",
+                center_index, center
+            )));
+        }
+
+        for offset_index in 0..samples {
+            let base = offset_index * 3;
+            values.push(center[0] + offsets[base]);
+            values.push(center[1] + offsets[base + 1]);
+            values.push(center[2] + offsets[base + 2]);
+        }
+    }
+
+    let array = Array2::from_shape_vec((total_points, 3), values)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    Ok(array.into_pyarray_bound(py))
+}
+
 fn is_neighbor_voxel(a: [i32; 3], b: [i32; 3]) -> bool {
     let mut sum_differences = 0_i32;
     for dimension in 0..3 {
@@ -260,27 +342,34 @@ fn get_neighbor_voxel_indices<'py>(
     let query = query_voxels.as_array();
     let reference = reference_voxels.as_array();
 
+    let mut reference_set: HashSet<[i32; 3]> =
+        HashSet::with_capacity(reference.shape()[0].saturating_mul(2));
+    for reference_index in 0..reference.shape()[0] {
+        reference_set.insert([
+            reference[[reference_index, 0]],
+            reference[[reference_index, 1]],
+            reference[[reference_index, 2]],
+        ]);
+    }
+
     let mut neighbor_indices: Vec<i32> = Vec::new();
     for query_index in 0..query.shape()[0] {
-        let query_voxel = [
-            query[[query_index, 0]],
-            query[[query_index, 1]],
-            query[[query_index, 2]],
-        ];
-        for reference_index in 0..reference.shape()[0] {
-            let reference_voxel = [
-                reference[[reference_index, 0]],
-                reference[[reference_index, 1]],
-                reference[[reference_index, 2]],
-            ];
-            if is_neighbor_voxel(query_voxel, reference_voxel) {
-                neighbor_indices.push(query_index as i32);
-                break;
-            }
+        let x = query[[query_index, 0]];
+        let y = query[[query_index, 1]];
+        let z = query[[query_index, 2]];
+
+        // A query voxel is a 6-neighbor when any axis-adjacent coordinate exists in reference.
+        if reference_set.contains(&[x - 1, y, z])
+            || reference_set.contains(&[x + 1, y, z])
+            || reference_set.contains(&[x, y - 1, z])
+            || reference_set.contains(&[x, y + 1, z])
+            || reference_set.contains(&[x, y, z - 1])
+            || reference_set.contains(&[x, y, z + 1])
+        {
+            neighbor_indices.push(query_index as i32);
         }
     }
 
-    neighbor_indices.sort_unstable();
     Ok(Array1::from(neighbor_indices).into_pyarray_bound(py))
 }
 
@@ -585,6 +674,7 @@ fn volumizer_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<(
     module.add_function(wrap_pyfunction!(contract_version, module)?)?;
     module.add_function(wrap_pyfunction!(backend_info, module)?)?;
     module.add_function(wrap_pyfunction!(fibonacci_sphere_points, module)?)?;
+    module.add_function(wrap_pyfunction!(fibonacci_sphere_points_batch, module)?)?;
     module.add_function(wrap_pyfunction!(get_neighbor_voxel_indices, module)?)?;
     module.add_function(wrap_pyfunction!(bfs_component_indices, module)?)?;
     module.add_function(wrap_pyfunction!(

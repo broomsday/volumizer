@@ -60,3 +60,42 @@ def test_add_extra_points_native_matches_python():
         native_df[["x", "y", "z"]].to_numpy(),
         atol=1e-5,
     )
+
+
+def test_fibonacci_sphere_batch_native_matches_single_kernel():
+    native_module = native_backend.get_native_module_for_mode("auto")
+    if native_module is None or not hasattr(native_module, "fibonacci_sphere_points_batch"):
+        pytest.skip("native batch fibonacci kernel not available")
+
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.25, -2.0, 3.5],
+        ],
+        dtype=np.float32,
+    )
+    radius = 1.7
+    samples = 20
+
+    batch_points = np.asarray(
+        native_module.fibonacci_sphere_points_batch(radius, centers, samples),
+        dtype=np.float32,
+    )
+    assert batch_points.shape == (centers.shape[0] * samples, 3)
+
+    single_points = []
+    for center in centers:
+        single_points.append(
+            np.asarray(
+                native_module.fibonacci_sphere_points(
+                    radius,
+                    float(center[0]),
+                    float(center[1]),
+                    float(center[2]),
+                    samples,
+                ),
+                dtype=np.float32,
+            )
+        )
+    single_points = np.vstack(single_points)
+    assert np.allclose(batch_points, single_points, atol=1e-5)

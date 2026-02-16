@@ -13,11 +13,14 @@
 - Native backend selection and fallback wiring are implemented.
 - Native kernels implemented and integrated:
 - fib sphere points
+- fib sphere batch expansion
 - neighbor voxel detection
 - BFS component expansion
 - exposed/buried solvent split
 - buried-component classification
 - Native parity/integration test scaffolding exists and is passing.
+- Backend comparison benchmark report published in `AGENTS/PERFORMANCE_REPORT.md`.
+- Native optimization pass completed (batch fib expansion + neighbor-kernel rewrite) with updated benchmarks published.
 
 ## Remaining
 
