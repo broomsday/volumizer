@@ -8,6 +8,7 @@ This contract targets:
 - `fib_sphere` bulk point generation
 - voxel neighbor detection
 - BFS component expansion
+- exposed/buried solvent split
 - (later) full volume classification
 
 Current implementation status:
@@ -15,9 +16,9 @@ Current implementation status:
 - `fibonacci_sphere_points`
 - `get_neighbor_voxel_indices`
 - `bfs_component_indices`
+- `get_exposed_and_buried_voxel_indices`
 - `classify_buried_components`
 - Still pending:
-- Native exposed/buried voxel split kernel
 - Stable packaging/import contract for installed wheels across platforms
 
 ## 2. Conventions
@@ -88,7 +89,26 @@ Notes:
 - Connectivity rule is same 6-neighbor adjacency.
 - Component seed semantics must match current Python/C implementations.
 
-## 4.4 `classify_buried_components` (Phase 2+)
+## 4.4 `get_exposed_and_buried_voxel_indices`
+
+Intent:
+- Classify solvent voxels into exposed vs buried based on axis-occlusion heuristics.
+
+Input:
+- `solvent_voxels: np.ndarray[int32]` shape `(S, 3)`
+- `protein_voxels: np.ndarray[int32]` shape `(P, 3)`
+- `grid_dims: np.ndarray[int32]` shape `(3,)`
+
+Output:
+- `dict` with:
+- `exposed_indices: np.ndarray[int32]` shape `(E,)`, indices into `solvent_voxels`
+- `buried_indices: np.ndarray[int32]` shape `(B,)`, indices into `solvent_voxels`
+
+Notes:
+- Must preserve parity with current `get_exposed_and_buried_voxels` semantics.
+- Returned indices are deterministic and ordered by input traversal.
+
+## 4.5 `classify_buried_components` (Phase 2+)
 
 Intent:
 - Full native kernel for agglomerating buried voxels and classifying cavity/pocket/pore/hub.

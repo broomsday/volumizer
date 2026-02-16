@@ -51,7 +51,5 @@ Copy from benchmark stdout or `summary` in `AGENTS/benchmark.baseline.json`.
 ## 5. Migration Benchmark Status
 
 - `ctypes-c` baseline: completed (table above).
-- `native` backend benchmark: pending publication in `AGENTS/PERFORMANCE_REPORT.md`.
-- Required comparison runs:
-- `VOLUMIZER_BACKEND=python` at `2.0 A`
-- `VOLUMIZER_BACKEND=native` at `2.0 A`
+- Backend comparison runs (`python`, `ctypes-c`, `native`) at `2.0 A`: completed.
+- Published report: `AGENTS/PERFORMANCE_REPORT.md`.

@@ -1,4 +1,4 @@
-# Migration Status Snapshot (2026-02-15)
+# Migration Status Snapshot (2026-02-16)
 
 ## Completed
 
@@ -15,14 +15,13 @@
 - fib sphere points
 - neighbor voxel detection
 - BFS component expansion
+- exposed/buried solvent split
 - buried-component classification
 - Native parity/integration test scaffolding exists and is passing.
 
 ## Remaining
 
-- Port exposed/buried solvent split to native.
 - Reduce Python loop/dataframe overhead around native kernels where possible.
-- Publish backend-vs-backend benchmark report in `AGENTS/PERFORMANCE_REPORT.md`.
 - Add CI native build + parity test job.
 - Finalize native packaging/wheel strategy and default backend policy.
 - Plan and implement CLI/UI improvements for broader usability.

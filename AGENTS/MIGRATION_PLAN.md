@@ -1,6 +1,6 @@
 # Volumizer Migration Plan (Python -> Rust/C Core)
 
-## 0. Current Status (2026-02-15)
+## 0. Current Status (2026-02-16)
 
 Phase status:
 - `Phase 0` (baseline + guardrails): completed.
@@ -11,11 +11,11 @@ Phase status:
 
 Completed in Phase 4:
 - Native `classify_buried_components` is implemented in Rust.
+- Native exposed/buried solvent split kernel is implemented in Rust.
 - Python dispatch can consume native classifier output.
 - End-to-end parity scaffolding for native vs Python pipeline is in place.
 
 Remaining in Phase 4:
-- Port exposed/buried solvent split to native.
 - Remove remaining Python orchestration loops from classification path where feasible.
 - Benchmark native backend thoroughly and tune hotspots.
 
@@ -234,7 +234,6 @@ Mitigation:
 
 ## 8. Immediate Next Actions (Current)
 
-1. Port `get_exposed_and_buried_voxels()` to native and wire backend dispatch.
-2. Run backend comparison benchmarks at `2.0 A` and publish `AGENTS/PERFORMANCE_REPORT.md`.
-3. Add CI job that builds native module and runs native parity tests.
-4. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).
+1. Benchmark and tune full native path (including exposed/buried split) at `2.0 A`.
+2. Add CI job that builds native module and runs native parity tests.
+3. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).

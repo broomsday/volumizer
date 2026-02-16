@@ -188,7 +188,44 @@ def build_planar_voxel_coordinate_arrays(
     return z_array, y_array, x_array
 
 
-def get_exposed_and_buried_voxels(
+def _build_exposed_and_buried_voxel_groups(
+    exposed_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
+    buried_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
+    voxel_grid_dimensions: np.ndarray,
+) -> tuple[VoxelGroup, VoxelGroup]:
+    """
+    Build typed voxel groups for exposed/buried solvent subsets.
+    """
+    buried_voxel_indices = compute_voxel_indices(buried_voxels, voxel_grid_dimensions)
+    exposed_voxel_indices = compute_voxel_indices(exposed_voxels, voxel_grid_dimensions)
+
+    return (
+        VoxelGroup(
+            voxels=(
+                np.array(exposed_voxels[0]),
+                np.array(exposed_voxels[1]),
+                np.array(exposed_voxels[2]),
+            ),
+            indices=exposed_voxel_indices,
+            num_voxels=len(exposed_voxel_indices),
+            voxel_type="exposed",
+            volume=compute_voxel_group_volume(len(exposed_voxel_indices)),
+        ),
+        VoxelGroup(
+            voxels=(
+                np.array(buried_voxels[0]),
+                np.array(buried_voxels[1]),
+                np.array(buried_voxels[2]),
+            ),
+            indices=buried_voxel_indices,
+            num_voxels=len(buried_voxel_indices),
+            voxel_type="buried",
+            volume=compute_voxel_group_volume(len(buried_voxel_indices)),
+        ),
+    )
+
+
+def get_exposed_and_buried_voxels_python(
     solvent_voxels: VoxelGroup,
     protein_voxels: VoxelGroup,
     voxel_grid_dimensions: np.ndarray,
@@ -226,32 +263,92 @@ def get_exposed_and_buried_voxels(
             exposed_voxels[1].append(query_voxel[1])
             exposed_voxels[2].append(query_voxel[2])
 
-    buried_voxel_indices = compute_voxel_indices(buried_voxels, voxel_grid_dimensions)
-    exposed_voxel_indices = compute_voxel_indices(exposed_voxels, voxel_grid_dimensions)
+    return _build_exposed_and_buried_voxel_groups(
+        (
+            np.array(exposed_voxels[0]),
+            np.array(exposed_voxels[1]),
+            np.array(exposed_voxels[2]),
+        ),
+        (
+            np.array(buried_voxels[0]),
+            np.array(buried_voxels[1]),
+            np.array(buried_voxels[2]),
+        ),
+        voxel_grid_dimensions,
+    )
 
-    return (
-        VoxelGroup(
-            voxels=(
-                np.array(exposed_voxels[0]),
-                np.array(exposed_voxels[1]),
-                np.array(exposed_voxels[2]),
-            ),
-            indices=exposed_voxel_indices,
-            num_voxels=len(exposed_voxel_indices),
-            voxel_type="exposed",
-            volume=compute_voxel_group_volume(len(exposed_voxel_indices)),
-        ),
-        VoxelGroup(
-            voxels=(
-                np.array(buried_voxels[0]),
-                np.array(buried_voxels[1]),
-                np.array(buried_voxels[2]),
-            ),
-            indices=buried_voxel_indices,
-            num_voxels=len(buried_voxel_indices),
-            voxel_type="buried",
-            volume=compute_voxel_group_volume(len(buried_voxel_indices)),
-        ),
+
+def get_exposed_and_buried_voxels_native(
+    solvent_voxels: VoxelGroup,
+    protein_voxels: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray,
+) -> tuple[VoxelGroup, VoxelGroup]:
+    """
+    Native backend version of exposed/buried solvent split.
+    """
+    native_module = native_backend.get_native_module_for_mode("native")
+    if native_module is None:
+        raise RuntimeError(
+            "Native backend requested but `volumizer_native` is not importable."
+        )
+
+    if not hasattr(native_module, "get_exposed_and_buried_voxel_indices"):
+        raise RuntimeError(
+            "Native backend does not provide `get_exposed_and_buried_voxel_indices`."
+        )
+
+    solvent_array = np.stack(solvent_voxels.voxels, axis=1).astype(np.int32, copy=False)
+    protein_array = np.stack(protein_voxels.voxels, axis=1).astype(np.int32, copy=False)
+    native_output = native_module.get_exposed_and_buried_voxel_indices(
+        solvent_array,
+        protein_array,
+        np.asarray(voxel_grid_dimensions, dtype=np.int32),
+    )
+    if not isinstance(native_output, dict):
+        raise RuntimeError(
+            "Unexpected native exposed/buried output, expected dict with index arrays."
+        )
+
+    exposed_indices = np.asarray(native_output["exposed_indices"], dtype=np.int64)
+    buried_indices = np.asarray(native_output["buried_indices"], dtype=np.int64)
+
+    exposed_voxels = (
+        solvent_voxels.voxels[0][exposed_indices],
+        solvent_voxels.voxels[1][exposed_indices],
+        solvent_voxels.voxels[2][exposed_indices],
+    )
+    buried_voxels = (
+        solvent_voxels.voxels[0][buried_indices],
+        solvent_voxels.voxels[1][buried_indices],
+        solvent_voxels.voxels[2][buried_indices],
+    )
+
+    return _build_exposed_and_buried_voxel_groups(
+        exposed_voxels, buried_voxels, voxel_grid_dimensions
+    )
+
+
+def get_exposed_and_buried_voxels(
+    solvent_voxels: VoxelGroup,
+    protein_voxels: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray,
+    backend: str | None = None,
+) -> tuple[VoxelGroup, VoxelGroup]:
+    """
+    Use simple geometric heuristics to determine if a group of solvent voxels is buried or exposed.
+    """
+    requested_backend = backend if backend is not None else utils.get_active_backend()
+    if requested_backend == "native":
+        native_module = native_backend.get_native_module_for_mode("native")
+        if native_module is not None and hasattr(
+            native_module, "get_exposed_and_buried_voxel_indices"
+        ):
+            return get_exposed_and_buried_voxels_native(
+                solvent_voxels, protein_voxels, voxel_grid_dimensions
+            )
+
+    return get_exposed_and_buried_voxels_python(
+        solvent_voxels, protein_voxels, voxel_grid_dimensions
     )
 
 

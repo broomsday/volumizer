@@ -94,15 +94,15 @@ Implemented so far:
 - Fibonacci sphere point generation.
 - Neighbor voxel index detection.
 - BFS component expansion.
+- Exposed/buried solvent split.
 - Buried-component classification output in flattened buffer format.
 - Python dispatch/fallback paths are wired in `volumizer/fib_sphere.py` and `volumizer/voxel.py`.
 - Native parity and integration tests are present and passing when the module is built.
 
 Still pending for full switch-over:
-- Port exposed/buried solvent split (`get_exposed_and_buried_voxels`) to native.
 - Reduce Python-side dataframe/loop overhead in `add_extra_points` bulk expansion.
 - Package native module for standard install path (prebuilt wheels/CI matrix).
-- Produce and maintain a backend-vs-backend performance report.
+- Maintain and refresh backend-vs-backend performance reporting.
 
 ## 7. Important Configuration Knobs
 

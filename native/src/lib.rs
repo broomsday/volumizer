@@ -1,14 +1,15 @@
 use numpy::{
     ndarray::{Array1, Array2},
-    IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2,
-    PyUntypedArrayMethods,
+    IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyUntypedArrayMethods,
 };
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::{HashSet, VecDeque};
+use std::i32;
 
 const NATIVE_CONTRACT_VERSION: u32 = 1;
+const OCCLUDED_DIMENSION_LIMIT: i32 = 4;
 
 #[pyfunction]
 fn contract_version() -> u32 {
@@ -33,7 +34,9 @@ fn fibonacci_sphere_points<'py>(
         return Err(PyValueError::new_err("samples must be > 0"));
     }
     if !radius.is_finite() || !x.is_finite() || !y.is_finite() || !z.is_finite() {
-        return Err(PyValueError::new_err("radius and coordinates must be finite"));
+        return Err(PyValueError::new_err(
+            "radius and coordinates must be finite",
+        ));
     }
 
     // Keep this formula aligned with the existing Python implementation.
@@ -76,6 +79,45 @@ fn validate_voxel_array_shape(array: &PyReadonlyArray2<'_, i32>, name: &str) -> 
             shape
         )));
     }
+    Ok(())
+}
+
+fn validate_grid_dimensions(grid_dimensions: &PyReadonlyArray1<'_, i32>) -> PyResult<[i32; 3]> {
+    let dims = grid_dimensions.as_slice()?;
+    if dims.len() != 3 {
+        return Err(PyValueError::new_err(format!(
+            "grid_dimensions must have shape (3,), got length {}",
+            dims.len()
+        )));
+    }
+    if dims[0] <= 0 || dims[1] <= 0 || dims[2] <= 0 {
+        return Err(PyValueError::new_err(
+            "grid_dimensions values must all be > 0",
+        ));
+    }
+
+    Ok([dims[0], dims[1], dims[2]])
+}
+
+fn validate_voxel_in_grid(
+    voxel: [i32; 3],
+    grid_dimensions: [i32; 3],
+    array_name: &str,
+    index: usize,
+) -> PyResult<()> {
+    if voxel[0] < 0
+        || voxel[1] < 0
+        || voxel[2] < 0
+        || voxel[0] >= grid_dimensions[0]
+        || voxel[1] >= grid_dimensions[1]
+        || voxel[2] >= grid_dimensions[2]
+    {
+        return Err(PyValueError::new_err(format!(
+            "{array_name}[{index}] is out of bounds for grid_dimensions {:?}: {:?}",
+            grid_dimensions, voxel
+        )));
+    }
+
     Ok(())
 }
 
@@ -168,7 +210,10 @@ fn get_agglomerated_type(
         }
     }
 
-    let mut surface_indices: HashSet<i32> = direct_surface_indices.union(&neighbor_surface_indices).copied().collect();
+    let mut surface_indices: HashSet<i32> = direct_surface_indices
+        .union(&neighbor_surface_indices)
+        .copied()
+        .collect();
     let single_surface_indices = bfs_component_from_set(buried_voxels, &surface_indices);
     if single_surface_indices.len() < surface_indices.len() {
         for index in single_surface_indices {
@@ -307,6 +352,137 @@ fn bfs_component_indices<'py>(
 }
 
 #[pyfunction]
+fn get_exposed_and_buried_voxel_indices(
+    py: Python<'_>,
+    solvent_voxels: PyReadonlyArray2<'_, i32>,
+    protein_voxels: PyReadonlyArray2<'_, i32>,
+    grid_dimensions: PyReadonlyArray1<'_, i32>,
+) -> PyResult<PyObject> {
+    validate_voxel_array_shape(&solvent_voxels, "solvent_voxels")?;
+    validate_voxel_array_shape(&protein_voxels, "protein_voxels")?;
+    let grid_dims = validate_grid_dimensions(&grid_dimensions)?;
+
+    let grid_x = grid_dims[0] as usize;
+    let grid_y = grid_dims[1] as usize;
+    let grid_z = grid_dims[2] as usize;
+
+    let z_array_len = grid_x
+        .checked_mul(grid_y)
+        .ok_or_else(|| PyValueError::new_err("grid_dimensions are too large"))?;
+    let y_array_len = grid_x
+        .checked_mul(grid_z)
+        .ok_or_else(|| PyValueError::new_err("grid_dimensions are too large"))?;
+    let x_array_len = grid_y
+        .checked_mul(grid_z)
+        .ok_or_else(|| PyValueError::new_err("grid_dimensions are too large"))?;
+
+    // For each plane, track only min/max coordinate in the 3rd dimension.
+    let mut z_min = vec![i32::MAX; z_array_len];
+    let mut z_max = vec![i32::MIN; z_array_len];
+    let mut y_min = vec![i32::MAX; y_array_len];
+    let mut y_max = vec![i32::MIN; y_array_len];
+    let mut x_min = vec![i32::MAX; x_array_len];
+    let mut x_max = vec![i32::MIN; x_array_len];
+
+    let protein_view = protein_voxels.as_array();
+    for protein_index in 0..protein_view.shape()[0] {
+        let voxel = [
+            protein_view[[protein_index, 0]],
+            protein_view[[protein_index, 1]],
+            protein_view[[protein_index, 2]],
+        ];
+        validate_voxel_in_grid(voxel, grid_dims, "protein_voxels", protein_index)?;
+        let x = voxel[0] as usize;
+        let y = voxel[1] as usize;
+        let z = voxel[2] as usize;
+
+        let z_idx = x * grid_y + y;
+        z_min[z_idx] = z_min[z_idx].min(voxel[2]);
+        z_max[z_idx] = z_max[z_idx].max(voxel[2]);
+
+        let y_idx = x * grid_z + z;
+        y_min[y_idx] = y_min[y_idx].min(voxel[1]);
+        y_max[y_idx] = y_max[y_idx].max(voxel[1]);
+
+        let x_idx = y * grid_z + z;
+        x_min[x_idx] = x_min[x_idx].min(voxel[0]);
+        x_max[x_idx] = x_max[x_idx].max(voxel[0]);
+    }
+
+    let solvent_view = solvent_voxels.as_array();
+    let mut exposed_indices: Vec<i32> = Vec::new();
+    let mut buried_indices: Vec<i32> = Vec::new();
+
+    for solvent_index in 0..solvent_view.shape()[0] {
+        let voxel = [
+            solvent_view[[solvent_index, 0]],
+            solvent_view[[solvent_index, 1]],
+            solvent_view[[solvent_index, 2]],
+        ];
+        validate_voxel_in_grid(voxel, grid_dims, "solvent_voxels", solvent_index)?;
+
+        let x = voxel[0] as usize;
+        let y = voxel[1] as usize;
+        let z = voxel[2] as usize;
+        let mut occluded_dimensions = [0_i32; 6];
+
+        let z_idx = x * grid_y + y;
+        if z_min[z_idx] != i32::MAX {
+            if z_min[z_idx] < voxel[2] {
+                occluded_dimensions[4] = 1;
+            }
+            if z_max[z_idx] > voxel[2] {
+                occluded_dimensions[5] = 1;
+            }
+        }
+
+        let y_idx = x * grid_z + z;
+        if y_min[y_idx] != i32::MAX {
+            if y_min[y_idx] < voxel[1] {
+                occluded_dimensions[2] = 1;
+            }
+            if y_max[y_idx] > voxel[1] {
+                occluded_dimensions[3] = 1;
+            }
+        }
+
+        let x_idx = y * grid_z + z;
+        if x_min[x_idx] != i32::MAX {
+            if x_min[x_idx] < voxel[0] {
+                occluded_dimensions[0] = 1;
+            }
+            if x_max[x_idx] > voxel[0] {
+                occluded_dimensions[1] = 1;
+            }
+        }
+
+        let num_occluded: i32 = occluded_dimensions.iter().sum();
+        let buried = num_occluded > OCCLUDED_DIMENSION_LIMIT
+            || (num_occluded == OCCLUDED_DIMENSION_LIMIT
+                && ((occluded_dimensions[0] == 0 && occluded_dimensions[1] == 0)
+                    || (occluded_dimensions[2] == 0 && occluded_dimensions[3] == 0)
+                    || (occluded_dimensions[4] == 0 && occluded_dimensions[5] == 0)));
+
+        if buried {
+            buried_indices.push(solvent_index as i32);
+        } else {
+            exposed_indices.push(solvent_index as i32);
+        }
+    }
+
+    let result = PyDict::new_bound(py);
+    result.set_item(
+        "exposed_indices",
+        Array1::from(exposed_indices).into_pyarray_bound(py),
+    )?;
+    result.set_item(
+        "buried_indices",
+        Array1::from(buried_indices).into_pyarray_bound(py),
+    )?;
+    Ok(result.into())
+}
+
+#[pyfunction]
 fn classify_buried_components(
     py: Python<'_>,
     buried_voxels: PyReadonlyArray2<'_, i32>,
@@ -317,13 +493,7 @@ fn classify_buried_components(
 ) -> PyResult<PyObject> {
     validate_voxel_array_shape(&buried_voxels, "buried_voxels")?;
     validate_voxel_array_shape(&exposed_voxels, "exposed_voxels")?;
-    let grid_dims = grid_dimensions.as_slice()?;
-    if grid_dims.len() != 3 {
-        return Err(PyValueError::new_err(format!(
-            "grid_dimensions must have shape (3,), got length {}",
-            grid_dims.len()
-        )));
-    }
+    let grid_dims = validate_grid_dimensions(&grid_dimensions)?;
     if min_num_voxels < 0 {
         return Err(PyValueError::new_err("min_num_voxels must be >= 0"));
     }
@@ -332,10 +502,22 @@ fn classify_buried_components(
     let exposed_view = exposed_voxels.as_array();
 
     let buried: Vec<[i32; 3]> = (0..buried_view.shape()[0])
-        .map(|i| [buried_view[[i, 0]], buried_view[[i, 1]], buried_view[[i, 2]]])
+        .map(|i| {
+            [
+                buried_view[[i, 0]],
+                buried_view[[i, 1]],
+                buried_view[[i, 2]],
+            ]
+        })
         .collect();
     let exposed: Vec<[i32; 3]> = (0..exposed_view.shape()[0])
-        .map(|i| [exposed_view[[i, 0]], exposed_view[[i, 1]], exposed_view[[i, 2]]])
+        .map(|i| {
+            [
+                exposed_view[[i, 0]],
+                exposed_view[[i, 1]],
+                exposed_view[[i, 2]],
+            ]
+        })
         .collect();
     let grid_dims_array = [grid_dims[0], grid_dims[1], grid_dims[2]];
 
@@ -363,12 +545,7 @@ fn classify_buried_components(
         let (surface_indices, type_code) = if component_indices.len() <= min_num_voxels as usize {
             (Vec::new(), 0_i8) // occluded
         } else {
-            get_agglomerated_type(
-                &component_index_set,
-                &buried,
-                &exposed,
-                grid_dims_array,
-            )
+            get_agglomerated_type(&component_index_set, &buried, &exposed, grid_dims_array)
         };
 
         component_type_codes.push(type_code);
@@ -410,6 +587,10 @@ fn volumizer_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<(
     module.add_function(wrap_pyfunction!(fibonacci_sphere_points, module)?)?;
     module.add_function(wrap_pyfunction!(get_neighbor_voxel_indices, module)?)?;
     module.add_function(wrap_pyfunction!(bfs_component_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        get_exposed_and_buried_voxel_indices,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(classify_buried_components, module)?)?;
     Ok(())
 }

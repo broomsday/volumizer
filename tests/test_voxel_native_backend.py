@@ -44,6 +44,95 @@ def test_get_neighbor_voxels_native_uses_native_module(monkeypatch):
     assert np.array_equal(computed[2], np.array([100, 300]))
 
 
+def test_get_exposed_and_buried_voxels_native_uses_native_module(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def get_exposed_and_buried_voxel_indices(solvent, protein, grid_dimensions):
+            assert solvent.shape == (3, 3)
+            assert protein.shape == (2, 3)
+            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            return {
+                "exposed_indices": np.array([0, 2], dtype=np.int32),
+                "buried_indices": np.array([1], dtype=np.int32),
+            }
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+
+    solvent_voxels = VoxelGroup(
+        voxels=(np.array([0, 1, 2]), np.array([0, 1, 2]), np.array([1, 1, 1])),
+        indices=set([1, 21, 41]),
+        num_voxels=3,
+        voxel_type="solvent",
+        volume=24.0,
+    )
+    protein_voxels = VoxelGroup(
+        voxels=(np.array([1, 2]), np.array([0, 3]), np.array([0, 3])),
+        indices=set([16, 47]),
+        num_voxels=2,
+        voxel_type="protein",
+        volume=16.0,
+    )
+
+    exposed, buried = voxel.get_exposed_and_buried_voxels(
+        solvent_voxels,
+        protein_voxels,
+        np.array([4, 4, 4], dtype=np.int32),
+        backend="native",
+    )
+
+    assert exposed.num_voxels == 2
+    assert buried.num_voxels == 1
+    assert exposed.indices == set([1, 41])
+    assert buried.indices == set([21])
+    assert np.array_equal(exposed.voxels[0], np.array([0, 2]))
+    assert np.array_equal(buried.voxels[0], np.array([1]))
+
+
+def test_get_exposed_and_buried_voxels_native_falls_back_when_missing(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def get_neighbor_voxel_indices(*args, **kwargs):
+            return np.array([], dtype=np.int32)
+
+    expected_output = ("exposed", "buried")
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+    monkeypatch.setattr(
+        voxel,
+        "get_exposed_and_buried_voxels_python",
+        lambda solvent_voxels, protein_voxels, voxel_grid_dimensions: expected_output,
+    )
+
+    solvent_voxels = VoxelGroup(
+        voxels=(np.array([0]), np.array([0]), np.array([0])),
+        indices=set([0]),
+        num_voxels=1,
+        voxel_type="solvent",
+        volume=8.0,
+    )
+    protein_voxels = VoxelGroup(
+        voxels=(np.array([1]), np.array([1]), np.array([1])),
+        indices=set([21]),
+        num_voxels=1,
+        voxel_type="protein",
+        volume=8.0,
+    )
+
+    result = voxel.get_exposed_and_buried_voxels(
+        solvent_voxels,
+        protein_voxels,
+        np.array([4, 4, 4], dtype=np.int32),
+        backend="native",
+    )
+    assert result == expected_output
+
+
 def test_breadth_first_search_prefers_native_when_requested(monkeypatch):
     monkeypatch.setattr(
         voxel,
