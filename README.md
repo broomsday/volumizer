@@ -45,6 +45,33 @@ Backend selection:
 - `VOLUMIZER_BACKEND=native`: require native module and fail if unavailable
 
 # Usage
+
+## CLI
+The package now includes a CLI entrypoint: `volumizer`.
+
+Analyze a local structure file:
+
+```bash
+volumizer --input my_structure.cif --output-dir out
+```
+
+Analyze one PDB ID (downloaded from RCSB as CIF):
+
+```bash
+volumizer --pdb-id 4JPN --output-dir out
+```
+
+Analyze cluster representatives for an identity threshold:
+
+```bash
+volumizer --cluster-identity 30 --max-structures 25 --output-dir out
+```
+
+CLI outputs:
+- `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms
+- `<label>.annotation.json`: web-friendly volume data payload
+- `run.summary.json`: run configuration and per-structure status
+
 Using the test file `tests/pdbs/4jpn.pdb` try out the following:
 
 ## Volumize a PDB and Save the Volumized PDB and DataFrame

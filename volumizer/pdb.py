@@ -42,6 +42,28 @@ def load_structure(file_path: Path) -> bts.AtomArray:
         return biotite_load_structure(file_path)
 
 
+def save_structure(structure: bts.AtomArray, output: Path | str) -> None:
+    """
+    Save a structure to PDB or CIF based on file suffix.
+    """
+    output_path = Path(output)
+    suffix = output_path.suffix.lower()
+
+    if suffix == ".pdb":
+        pdb_file = pdb.PDBFile()
+        pdb_file.set_structure(structure)
+        pdb_file.write(output_path)
+        return
+
+    if suffix in {".cif", ".mmcif"}:
+        pdbx_file = pdbx.PDBxFile()
+        pdbx.set_structure(pdbx_file, structure, data_block="structure")
+        pdbx_file.write(output_path)
+        return
+
+    raise ValueError(f"Unsupported structure output format: {suffix}")
+
+
 def save_pdb_lines(pdb_lines: list[str], output: Path | str) -> None:
     """
     Save individual pdb lines to a file.

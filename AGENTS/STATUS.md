@@ -22,9 +22,10 @@
 - Backend comparison benchmark report published in `AGENTS/PERFORMANCE_REPORT.md`.
 - Native optimization pass completed (batch fib expansion + neighbor-kernel rewrite) with updated benchmarks published.
 - Native CI workflow added for parity tests and lightweight performance regression checks.
+- CLI entrypoint added for local files, PDB-ID download, and cluster-representative runs with CIF + JSON outputs.
 
 ## Remaining
 
 - Reduce Python loop/dataframe overhead around native kernels where possible.
 - Finalize native packaging/wheel strategy and default backend policy.
-- Plan and implement CLI/UI improvements for broader usability.
+- Harden and expand CLI UX (resume, richer filtering/selection, and better run-progress reporting).

@@ -16,6 +16,9 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/broomsday/volumizer"
 
+[project.scripts]
+volumizer = "volumizer.cli:main"
+
 [dependency-groups]
 test = [
   "pytest>=6.2,<7.0",
