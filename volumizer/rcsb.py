@@ -5,6 +5,7 @@ Helpers for downloading structures and sequence clusters from RCSB services.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
@@ -70,17 +71,38 @@ def normalize_method_filter_name(method_filter: str) -> str:
     return canonical
 
 
-def _download_bytes(url: str, timeout: float = 60.0) -> bytes:
+def _download_bytes(
+    url: str,
+    timeout: float = 60.0,
+    retries: int = 0,
+    retry_delay: float = 1.0,
+) -> bytes:
     """
-    Download raw bytes from a URL.
+    Download raw bytes from a URL with simple exponential backoff retries.
     """
-    try:
-        with urlopen(url, timeout=timeout) as response:
-            return response.read()
-    except HTTPError as error:
-        raise RuntimeError(f"HTTP error while fetching {url}: {error.code}") from error
-    except URLError as error:
-        raise RuntimeError(f"Network error while fetching {url}: {error.reason}") from error
+    max_retries = max(0, int(retries))
+    base_delay = max(0.0, float(retry_delay))
+
+    for attempt in range(max_retries + 1):
+        try:
+            with urlopen(url, timeout=timeout) as response:
+                return response.read()
+        except HTTPError as error:
+            is_terminal = error.code in {400, 401, 403, 404}
+            if attempt >= max_retries or is_terminal:
+                raise RuntimeError(
+                    f"HTTP error while fetching {url}: {error.code}"
+                ) from error
+        except URLError as error:
+            if attempt >= max_retries:
+                raise RuntimeError(
+                    f"Network error while fetching {url}: {error.reason}"
+                ) from error
+
+        if base_delay > 0:
+            time.sleep(base_delay * (2**attempt))
+
+    raise RuntimeError(f"Failed to fetch {url}")
 
 
 def download_structure_cif(
@@ -88,6 +110,8 @@ def download_structure_cif(
     output_dir: Path,
     overwrite: bool = False,
     timeout: float = 60.0,
+    retries: int = 0,
+    retry_delay: float = 1.0,
 ) -> Path:
     """
     Download a structure CIF by PDB ID and return local file path.
@@ -100,18 +124,33 @@ def download_structure_cif(
         return out_path
 
     url = RCSB_CIF_URL_TEMPLATE.format(pdb_id=normalized_id)
-    data = _download_bytes(url, timeout=timeout)
+    data = _download_bytes(
+        url,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    )
     out_path.write_bytes(data)
     return out_path
 
 
-def fetch_entry_metadata(pdb_id: str, timeout: float = 60.0) -> dict:
+def fetch_entry_metadata(
+    pdb_id: str,
+    timeout: float = 60.0,
+    retries: int = 0,
+    retry_delay: float = 1.0,
+) -> dict:
     """
     Fetch RCSB core entry JSON metadata for one PDB ID.
     """
     normalized_id = normalize_pdb_id(pdb_id)
     url = RCSB_ENTRY_URL_TEMPLATE.format(pdb_id=normalized_id)
-    payload = _download_bytes(url, timeout=timeout)
+    payload = _download_bytes(
+        url,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    )
     return json.loads(payload.decode("utf-8"))
 
 
@@ -238,6 +277,8 @@ def fetch_cluster_representative_entry_ids(
     max_structures: int | None = None,
     timeout: float = 60.0,
     include_non_pdb: bool = False,
+    retries: int = 0,
+    retry_delay: float = 1.0,
 ) -> list[str]:
     """
     Fetch and parse representative entry IDs for a sequence-identity cluster file.
@@ -249,7 +290,12 @@ def fetch_cluster_representative_entry_ids(
         )
 
     url = RCSB_CLUSTER_URL_TEMPLATE.format(identity=identity)
-    cluster_text = _download_bytes(url, timeout=timeout).decode("utf-8")
+    cluster_text = _download_bytes(
+        url,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    ).decode("utf-8")
     entry_ids = parse_cluster_representative_entry_ids(
         cluster_text,
         include_non_pdb=include_non_pdb,

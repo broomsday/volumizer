@@ -5,6 +5,7 @@ Command-line interface for volumizer.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,9 @@ import sys
 from typing import Sequence
 
 from volumizer import native_backend, pdb, rcsb, utils, volumizer
+
+
+DEFAULT_METADATA_CACHE_FILENAME = "entry_metadata_cache.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,6 +95,20 @@ def build_parser() -> argparse.ArgumentParser:
             "Entries missing resolution are excluded when this is set."
         ),
     )
+    parser.add_argument(
+        "--metadata-cache",
+        type=Path,
+        default=None,
+        help=(
+            "Path for cluster entry-metadata cache JSON "
+            f"(default: <output-dir>/{DEFAULT_METADATA_CACHE_FILENAME})."
+        ),
+    )
+    parser.add_argument(
+        "--no-metadata-cache",
+        action="store_true",
+        help="Disable metadata-cache read/write for --cluster-identity runs.",
+    )
 
     parser.add_argument(
         "--resolution",
@@ -122,10 +140,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Keep non-protein residues during structure cleaning.",
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="Parallel worker count for analysis and cluster network steps (default: 1).",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=60.0,
-        help="Network timeout in seconds for RCSB downloads (default: 60).",
+        help="Network timeout in seconds for RCSB requests (default: 60).",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=2,
+        help="Retry count for transient RCSB network errors (default: 2).",
+    )
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=1.0,
+        help="Base delay in seconds between retries (default: 1.0).",
     )
 
     write_group = parser.add_mutually_exclusive_group()
@@ -215,6 +251,175 @@ def _resolve_cluster_method_filters(args: argparse.Namespace) -> list[str] | Non
     return list(dict.fromkeys(normalized_methods))
 
 
+def _resolve_metadata_cache_path(
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> Path | None:
+    if args.no_metadata_cache:
+        return None
+
+    if args.metadata_cache is not None:
+        return Path(args.metadata_cache)
+
+    return output_dir / DEFAULT_METADATA_CACHE_FILENAME
+
+
+def _load_metadata_cache(cache_path: Path | None) -> dict[str, dict]:
+    if cache_path is None or not cache_path.is_file():
+        return {}
+
+    try:
+        raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    if not isinstance(raw_payload, dict):
+        return {}
+
+    cache: dict[str, dict] = {}
+    for key, value in raw_payload.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        try:
+            normalized_key = rcsb.normalize_pdb_id(key)
+        except ValueError:
+            continue
+        cache[normalized_key] = value
+
+    return cache
+
+
+def _save_metadata_cache(cache_path: Path, cache_payload: dict[str, dict]) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(
+        json.dumps(dict(sorted(cache_payload.items())), indent=2),
+        encoding="utf-8",
+    )
+
+
+def _fetch_metadata_for_ids(
+    representative_ids: list[str],
+    args: argparse.Namespace,
+) -> tuple[dict[str, dict], int]:
+    fetched: dict[str, dict] = {}
+    errors = 0
+
+    if len(representative_ids) == 0:
+        return fetched, errors
+
+    if args.jobs <= 1:
+        for representative_id in representative_ids:
+            try:
+                fetched[representative_id] = rcsb.fetch_entry_metadata(
+                    representative_id,
+                    timeout=args.timeout,
+                    retries=args.retries,
+                    retry_delay=args.retry_delay,
+                )
+            except Exception as error:
+                errors += 1
+                print(
+                    f"metadata error for {representative_id}: {error}",
+                    file=sys.stderr,
+                )
+                if args.fail_fast:
+                    raise
+        return fetched, errors
+
+    max_workers = min(args.jobs, len(representative_ids))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_id = {
+            executor.submit(
+                rcsb.fetch_entry_metadata,
+                representative_id,
+                timeout=args.timeout,
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+            ): representative_id
+            for representative_id in representative_ids
+        }
+
+        for future in as_completed(future_to_id):
+            representative_id = future_to_id[future]
+            try:
+                fetched[representative_id] = future.result()
+            except Exception as error:
+                errors += 1
+                print(
+                    f"metadata error for {representative_id}: {error}",
+                    file=sys.stderr,
+                )
+                if args.fail_fast:
+                    raise
+
+    return fetched, errors
+
+
+def _download_cluster_structures(
+    selected_ids: list[str],
+    args: argparse.Namespace,
+    download_dir: Path,
+    output_dir: Path,
+) -> dict[str, Path]:
+    ids_to_download = []
+    for representative_id in selected_ids:
+        source_label = _sanitize_label(representative_id)
+        if args.resume and _has_complete_outputs(output_dir, source_label):
+            continue
+        ids_to_download.append(representative_id)
+
+    if len(ids_to_download) == 0:
+        return {}
+
+    downloaded_paths: dict[str, Path] = {}
+
+    if args.jobs <= 1:
+        for index, representative_id in enumerate(ids_to_download, start=1):
+            print(
+                f"[{index}/{len(ids_to_download)}] downloading {representative_id}...",
+                file=sys.stderr,
+            )
+            downloaded_paths[representative_id] = rcsb.download_structure_cif(
+                representative_id,
+                output_dir=download_dir,
+                overwrite=args.overwrite,
+                timeout=args.timeout,
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+            )
+        return downloaded_paths
+
+    print(
+        f"downloading {len(ids_to_download)} structures with {args.jobs} workers...",
+        file=sys.stderr,
+    )
+    with ThreadPoolExecutor(max_workers=args.jobs) as executor:
+        future_to_id = {
+            executor.submit(
+                rcsb.download_structure_cif,
+                representative_id,
+                output_dir=download_dir,
+                overwrite=args.overwrite,
+                timeout=args.timeout,
+                retries=args.retries,
+                retry_delay=args.retry_delay,
+            ): representative_id
+            for representative_id in ids_to_download
+        }
+
+        completed = 0
+        for future in as_completed(future_to_id):
+            representative_id = future_to_id[future]
+            downloaded_paths[representative_id] = future.result()
+            completed += 1
+            print(
+                f"[{completed}/{len(ids_to_download)}] downloaded {representative_id}",
+                file=sys.stderr,
+            )
+
+    return downloaded_paths
+
+
 def resolve_input_structures(
     args: argparse.Namespace,
     download_dir: Path,
@@ -241,65 +446,95 @@ def resolve_input_structures(
             output_dir=download_dir,
             overwrite=args.overwrite,
             timeout=args.timeout,
+            retries=args.retries,
+            retry_delay=args.retry_delay,
         )
         return [(source_label, structure_path)]
 
     if args.cluster_identity is not None:
         cluster_method_filters = _resolve_cluster_method_filters(args)
+        metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
+        metadata_cache = _load_metadata_cache(metadata_cache_path)
+
         representative_ids = rcsb.fetch_cluster_representative_entry_ids(
             identity=args.cluster_identity,
             max_structures=None,
             timeout=args.timeout,
             include_non_pdb=False,
+            retries=args.retries,
+            retry_delay=args.retry_delay,
         )
         if len(representative_ids) == 0:
             raise RuntimeError(
                 f"No representative PDB IDs found for cluster identity {args.cluster_identity}."
             )
 
-        selected_ids = []
+        target_selection = len(representative_ids)
+        if args.max_structures is not None and args.max_structures > 0:
+            target_selection = args.max_structures
+
+        selected_ids: list[str] = []
         examined_count = 0
         filtered_by_method = 0
         filtered_by_resolution = 0
         filtered_missing_resolution = 0
         metadata_errors = 0
+        cache_hits = 0
+        cache_misses = 0
+        cache_updates = 0
 
-        for representative_id in representative_ids:
-            if args.max_structures is not None and args.max_structures > 0:
-                if len(selected_ids) >= args.max_structures:
+        batch_size = max(1, int(args.jobs))
+        for batch_start in range(0, len(representative_ids), batch_size):
+            if len(selected_ids) >= target_selection:
+                break
+
+            batch_ids = representative_ids[batch_start : batch_start + batch_size]
+            batch_metadata: dict[str, dict] = {}
+            missing_ids: list[str] = []
+
+            for representative_id in batch_ids:
+                cached_metadata = metadata_cache.get(representative_id)
+                if isinstance(cached_metadata, dict):
+                    batch_metadata[representative_id] = cached_metadata
+                    cache_hits += 1
+                else:
+                    cache_misses += 1
+                    missing_ids.append(representative_id)
+
+            fetched_metadata, batch_errors = _fetch_metadata_for_ids(missing_ids, args)
+            metadata_errors += batch_errors
+            for representative_id, metadata in fetched_metadata.items():
+                batch_metadata[representative_id] = metadata
+                metadata_cache[representative_id] = metadata
+                cache_updates += 1
+
+            for representative_id in batch_ids:
+                if len(selected_ids) >= target_selection:
                     break
 
-            examined_count += 1
-            try:
-                entry_metadata = rcsb.fetch_entry_metadata(
-                    representative_id,
-                    timeout=args.timeout,
-                )
-            except Exception as error:
-                metadata_errors += 1
-                print(
-                    f"metadata error for {representative_id}: {error}",
-                    file=sys.stderr,
-                )
-                if args.fail_fast:
-                    raise
-                continue
+                examined_count += 1
+                entry_metadata = batch_metadata.get(representative_id)
+                if entry_metadata is None:
+                    continue
 
-            passes_filters, rejection_reason = rcsb.entry_passes_filters(
-                entry_metadata,
-                allowed_method_filters=cluster_method_filters,
-                max_resolution=args.cluster_max_resolution,
-            )
-            if not passes_filters:
-                if rejection_reason == "experimental_method":
-                    filtered_by_method += 1
-                elif rejection_reason == "resolution":
-                    filtered_by_resolution += 1
-                elif rejection_reason == "missing_resolution":
-                    filtered_missing_resolution += 1
-                continue
+                passes_filters, rejection_reason = rcsb.entry_passes_filters(
+                    entry_metadata,
+                    allowed_method_filters=cluster_method_filters,
+                    max_resolution=args.cluster_max_resolution,
+                )
+                if not passes_filters:
+                    if rejection_reason == "experimental_method":
+                        filtered_by_method += 1
+                    elif rejection_reason == "resolution":
+                        filtered_by_resolution += 1
+                    elif rejection_reason == "missing_resolution":
+                        filtered_missing_resolution += 1
+                    continue
 
-            selected_ids.append(representative_id)
+                selected_ids.append(representative_id)
+
+        if metadata_cache_path is not None and cache_updates > 0:
+            _save_metadata_cache(metadata_cache_path, metadata_cache)
 
         if len(selected_ids) == 0:
             raise RuntimeError(
@@ -322,6 +557,9 @@ def resolve_input_structures(
             f"examined={examined_count}, "
             f"methods={method_label}, "
             f"max_resolution={args.cluster_max_resolution}, "
+            f"cache_hits={cache_hits}, "
+            f"cache_misses={cache_misses}, "
+            f"cache_updates={cache_updates}, "
             f"filtered_by_method={filtered_by_method}, "
             f"filtered_by_resolution={filtered_by_resolution}, "
             f"missing_resolution={filtered_missing_resolution}, "
@@ -329,25 +567,20 @@ def resolve_input_structures(
             file=sys.stderr,
         )
 
-        structures = []
-        for index, representative_id in enumerate(selected_ids, start=1):
-            source_label = _sanitize_label(representative_id)
+        downloaded_paths = _download_cluster_structures(
+            selected_ids,
+            args,
+            download_dir,
+            output_dir,
+        )
 
+        structures = []
+        for representative_id in selected_ids:
+            source_label = _sanitize_label(representative_id)
             if args.resume and _has_complete_outputs(output_dir, source_label):
                 structures.append((source_label, download_dir / f"{representative_id}.cif"))
-                continue
-
-            print(
-                f"[{index}/{len(selected_ids)}] downloading {representative_id}...",
-                file=sys.stderr,
-            )
-            structure_path = rcsb.download_structure_cif(
-                representative_id,
-                output_dir=download_dir,
-                overwrite=args.overwrite,
-                timeout=args.timeout,
-            )
-            structures.append((source_label, structure_path))
+            else:
+                structures.append((source_label, downloaded_paths[representative_id]))
 
         return structures
 
@@ -430,10 +663,128 @@ def analyze_structure_file(
     }
 
 
+def _analyze_structures(
+    structures: list[tuple[str, Path]],
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> tuple[list[dict], list[dict], list[dict], int]:
+    results: list[dict] = []
+    errors: list[dict] = []
+    skipped: list[dict] = []
+
+    pending_structures: list[tuple[str, Path]] = []
+    for source_label, input_path in structures:
+        if args.resume and _has_complete_outputs(output_dir, source_label):
+            print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
+            skipped.append(
+                _build_resume_skip_entry(
+                    source_label=source_label,
+                    input_path=input_path,
+                    output_dir=output_dir,
+                )
+            )
+            continue
+        pending_structures.append((source_label, input_path))
+
+    analysis_workers = int(args.jobs)
+    if args.fail_fast and analysis_workers > 1:
+        print(
+            "--fail-fast enabled; forcing analysis worker count to 1.",
+            file=sys.stderr,
+        )
+        analysis_workers = 1
+
+    if len(pending_structures) == 0:
+        return results, errors, skipped, analysis_workers
+
+    if analysis_workers <= 1:
+        for source_label, input_path in pending_structures:
+            print(f"analyzing {source_label}: {input_path}", file=sys.stderr)
+            try:
+                result = analyze_structure_file(
+                    source_label=source_label,
+                    input_path=input_path,
+                    output_dir=output_dir,
+                    min_voxels=int(args.min_voxels),
+                    min_volume=args.min_volume,
+                    overwrite=bool(args.overwrite),
+                )
+                results.append(result)
+            except Exception as error:  # pragma: no cover - exercised via CLI integration tests
+                error_entry = {
+                    "source": source_label,
+                    "input_path": str(input_path),
+                    "error": str(error),
+                }
+                errors.append(error_entry)
+                print(f"error for {source_label}: {error}", file=sys.stderr)
+                if args.fail_fast:
+                    break
+
+        return results, errors, skipped, analysis_workers
+
+    print(
+        f"analyzing {len(pending_structures)} structures with {analysis_workers} workers...",
+        file=sys.stderr,
+    )
+    with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
+        future_to_context = {
+            executor.submit(
+                analyze_structure_file,
+                source_label=source_label,
+                input_path=input_path,
+                output_dir=output_dir,
+                min_voxels=int(args.min_voxels),
+                min_volume=args.min_volume,
+                overwrite=bool(args.overwrite),
+            ): (index, source_label, input_path)
+            for index, (source_label, input_path) in enumerate(pending_structures)
+        }
+
+        ordered_results: dict[int, dict] = {}
+        ordered_errors: dict[int, dict] = {}
+        completed = 0
+
+        for future in as_completed(future_to_context):
+            index, source_label, input_path = future_to_context[future]
+            completed += 1
+            try:
+                ordered_results[index] = future.result()
+                print(
+                    f"[{completed}/{len(pending_structures)}] completed {source_label}",
+                    file=sys.stderr,
+                )
+            except Exception as error:  # pragma: no cover - exercised via CLI integration tests
+                ordered_errors[index] = {
+                    "source": source_label,
+                    "input_path": str(input_path),
+                    "error": str(error),
+                }
+                print(
+                    f"[{completed}/{len(pending_structures)}] error for {source_label}: {error}",
+                    file=sys.stderr,
+                )
+
+    for index in range(len(pending_structures)):
+        if index in ordered_results:
+            results.append(ordered_results[index])
+        elif index in ordered_errors:
+            errors.append(ordered_errors[index])
+
+    return results, errors, skipped, analysis_workers
+
+
 def run_cli(args: argparse.Namespace) -> int:
     """
     Execute CLI command and return process status code.
     """
+    if args.jobs < 1:
+        raise ValueError("--jobs must be >= 1.")
+    if args.retries < 0:
+        raise ValueError("--retries must be >= 0.")
+    if args.retry_delay < 0:
+        raise ValueError("--retry-delay must be >= 0.")
+
     if args.cluster_identity is None:
         if args.cluster_method is not None:
             raise ValueError("--cluster-method requires --cluster-identity.")
@@ -441,6 +792,10 @@ def run_cli(args: argparse.Namespace) -> int:
             raise ValueError("--cluster-allow-all-methods requires --cluster-identity.")
         if args.cluster_max_resolution is not None:
             raise ValueError("--cluster-max-resolution requires --cluster-identity.")
+        if args.metadata_cache is not None:
+            raise ValueError("--metadata-cache requires --cluster-identity.")
+        if args.no_metadata_cache:
+            raise ValueError("--no-metadata-cache requires --cluster-identity.")
 
     if args.backend is not None:
         os.environ[native_backend.BACKEND_ENV] = args.backend
@@ -459,47 +814,17 @@ def run_cli(args: argparse.Namespace) -> int:
 
     structures = resolve_input_structures(args, download_dir, output_dir)
 
-    results = []
-    errors = []
-    skipped = []
-
-    for source_label, input_path in structures:
-        if args.resume and _has_complete_outputs(output_dir, source_label):
-            print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
-            skipped.append(
-                _build_resume_skip_entry(
-                    source_label=source_label,
-                    input_path=input_path,
-                    output_dir=output_dir,
-                )
-            )
-            continue
-
-        print(f"analyzing {source_label}: {input_path}", file=sys.stderr)
-        try:
-            result = analyze_structure_file(
-                source_label=source_label,
-                input_path=input_path,
-                output_dir=output_dir,
-                min_voxels=int(args.min_voxels),
-                min_volume=args.min_volume,
-                overwrite=bool(args.overwrite),
-            )
-            results.append(result)
-        except Exception as error:  # pragma: no cover - exercised via CLI integration tests
-            error_entry = {
-                "source": source_label,
-                "input_path": str(input_path),
-                "error": str(error),
-            }
-            errors.append(error_entry)
-            print(f"error for {source_label}: {error}", file=sys.stderr)
-            if args.fail_fast:
-                break
+    results, errors, skipped, analysis_workers = _analyze_structures(
+        structures,
+        args,
+        output_dir,
+    )
 
     cluster_method_filters = None
+    metadata_cache_path = None
     if args.cluster_identity is not None:
         cluster_method_filters = _resolve_cluster_method_filters(args)
+        metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
 
     summary = {
         "config": {
@@ -510,6 +835,8 @@ def run_cli(args: argparse.Namespace) -> int:
             "cluster_method_filters": cluster_method_filters,
             "cluster_allow_all_methods": args.cluster_allow_all_methods,
             "cluster_max_resolution": args.cluster_max_resolution,
+            "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
+            "no_metadata_cache": args.no_metadata_cache,
             "output_dir": str(output_dir),
             "download_dir": str(download_dir),
             "resolution": args.resolution,
@@ -517,6 +844,11 @@ def run_cli(args: argparse.Namespace) -> int:
             "min_volume": args.min_volume,
             "backend": args.backend if args.backend is not None else utils.get_active_backend(),
             "keep_non_protein": args.keep_non_protein,
+            "jobs": args.jobs,
+            "analysis_workers": analysis_workers,
+            "timeout": args.timeout,
+            "retries": args.retries,
+            "retry_delay": args.retry_delay,
             "overwrite": args.overwrite,
             "resume": args.resume,
         },

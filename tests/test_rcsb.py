@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -50,6 +51,62 @@ def test_entry_passes_filters_by_method_and_resolution():
     )
 
 
+def test_download_bytes_retries_then_succeeds(monkeypatch):
+    attempts = {"count": 0}
+
+    class _DummyResponse:
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def read(self) -> bytes:
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _fake_urlopen(url, timeout=60.0):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise URLError("temporary")
+        return _DummyResponse(b"ok")
+
+    sleep_calls = []
+    monkeypatch.setattr(rcsb, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(rcsb.time, "sleep", lambda seconds: sleep_calls.append(seconds))
+
+    payload = rcsb._download_bytes(
+        "https://example.org/test",
+        retries=2,
+        retry_delay=0.5,
+    )
+
+    assert payload == b"ok"
+    assert attempts["count"] == 3
+    assert sleep_calls == [0.5, 1.0]
+
+
+def test_download_bytes_does_not_retry_terminal_http_error(monkeypatch):
+    attempts = {"count": 0}
+
+    def _fake_urlopen(url, timeout=60.0):
+        attempts["count"] += 1
+        raise HTTPError(url=url, code=404, msg="not found", hdrs=None, fp=None)
+
+    monkeypatch.setattr(rcsb, "urlopen", _fake_urlopen)
+
+    with pytest.raises(RuntimeError):
+        rcsb._download_bytes(
+            "https://example.org/missing",
+            retries=5,
+            retry_delay=0.0,
+        )
+
+    assert attempts["count"] == 1
+
+
 def test_parse_cluster_representative_entry_ids_filters_non_pdb_and_dedupes():
     cluster_text = "\n".join(
         [
@@ -81,7 +138,7 @@ def test_fetch_cluster_representative_entry_ids_respects_cap(monkeypatch):
     monkeypatch.setattr(
         rcsb,
         "_download_bytes",
-        lambda url, timeout=60.0: cluster_text.encode("utf-8"),
+        lambda url, timeout=60.0, retries=0, retry_delay=1.0: cluster_text.encode("utf-8"),
     )
 
     parsed = rcsb.fetch_cluster_representative_entry_ids(30, max_structures=2)
@@ -93,7 +150,7 @@ def test_download_structure_cif_writes_downloaded_data(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(
         rcsb,
         "_download_bytes",
-        lambda url, timeout=60.0: expected_content,
+        lambda url, timeout=60.0, retries=0, retry_delay=1.0: expected_content,
     )
 
     output_path = rcsb.download_structure_cif("1abc", tmp_path)
@@ -104,7 +161,7 @@ def test_download_structure_cif_writes_downloaded_data(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(
         rcsb,
         "_download_bytes",
-        lambda url, timeout=60.0: (_ for _ in ()).throw(
+        lambda url, timeout=60.0, retries=0, retry_delay=1.0: (_ for _ in ()).throw(
             RuntimeError("should not download")
         ),
     )

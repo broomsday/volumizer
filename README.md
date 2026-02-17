@@ -78,6 +78,9 @@ Cluster filtering defaults:
 - Override with `--cluster-method` (repeatable), e.g. `--cluster-method xray --cluster-method neutron`
 - Disable method filtering with `--cluster-allow-all-methods`
 - Optional resolution gate with `--cluster-max-resolution`, e.g. `--cluster-max-resolution 3.0`
+- Parallel workers for metadata/download + analysis with `--jobs`, e.g. `--jobs 8`
+- Retry transient network errors with `--retries` and `--retry-delay`
+- Cluster metadata cache defaults to `<output-dir>/entry_metadata_cache.json`; override with `--metadata-cache` or disable with `--no-metadata-cache`
 
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms

@@ -24,9 +24,10 @@
 - Native CI workflow added for parity tests and lightweight performance regression checks.
 - CLI entrypoint added for local files, PDB-ID download, and cluster-representative runs with CIF + JSON outputs.
 - CLI resume mode and initial cluster selection filters added (default X-ray/cryo-EM method filter with optional method and resolution filters).
+- CLI parallel worker support added (`--jobs`) with network retry controls and entry-metadata caching for large cluster runs.
 
 ## Remaining
 
 - Reduce Python loop/dataframe overhead around native kernels where possible.
 - Finalize native packaging/wheel strategy and default backend policy.
-- Continue CLI UX hardening: progress reporting, failure-recovery behavior, and advanced cluster selection filters.
+- Continue CLI UX hardening: richer progress/ETA reporting and advanced cluster selection controls beyond the baseline method/resolution filters.

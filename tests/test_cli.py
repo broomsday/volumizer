@@ -9,6 +9,36 @@ from volumizer.paths import TEST_DIR
 TEST_PDB = TEST_DIR / "pdbs" / "cavity.pdb"
 
 
+def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
+    defaults = {
+        "input": None,
+        "pdb_id": None,
+        "cluster_identity": None,
+        "output_dir": tmp_path,
+        "download_dir": None,
+        "max_structures": None,
+        "cluster_method": None,
+        "cluster_allow_all_methods": False,
+        "cluster_max_resolution": None,
+        "metadata_cache": None,
+        "no_metadata_cache": False,
+        "resolution": 3.0,
+        "min_voxels": 2,
+        "min_volume": None,
+        "backend": None,
+        "keep_non_protein": False,
+        "jobs": 1,
+        "timeout": 60.0,
+        "retries": 0,
+        "retry_delay": 0.0,
+        "overwrite": False,
+        "resume": False,
+        "fail_fast": False,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
 def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
     out_path = tmp_path / "1ABC.cif"
     out_path.write_text("dummy", encoding="utf-8")
@@ -16,22 +46,10 @@ def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(
         rcsb,
         "download_structure_cif",
-        lambda pdb_id, output_dir, overwrite=False, timeout=60.0: out_path,
+        lambda pdb_id, output_dir, overwrite=False, timeout=60.0, retries=0, retry_delay=1.0: out_path,
     )
 
-    args = SimpleNamespace(
-        input=None,
-        pdb_id="1abc",
-        cluster_identity=None,
-        overwrite=False,
-        resume=False,
-        timeout=60.0,
-        max_structures=None,
-        cluster_method=None,
-        cluster_allow_all_methods=False,
-        cluster_max_resolution=None,
-        fail_fast=False,
-    )
+    args = _make_args(tmp_path, pdb_id="1abc")
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", out_path)]
 
@@ -40,7 +58,7 @@ def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(
         rcsb,
         "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False: [
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
             "1ABC",
             "2DEF",
         ],
@@ -59,10 +77,10 @@ def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(
         rcsb,
         "fetch_entry_metadata",
-        lambda pdb_id, timeout=60.0: metadata_by_id[pdb_id],
+        lambda pdb_id, timeout=60.0, retries=0, retry_delay=1.0: metadata_by_id[pdb_id],
     )
 
-    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0):
+    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0, retries=0, retry_delay=1.0):
         path = output_dir / f"{pdb_id}.cif"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("dummy", encoding="utf-8")
@@ -70,19 +88,7 @@ def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Pa
 
     monkeypatch.setattr(rcsb, "download_structure_cif", _download)
 
-    args = SimpleNamespace(
-        input=None,
-        pdb_id=None,
-        cluster_identity=30,
-        overwrite=False,
-        resume=False,
-        timeout=60.0,
-        max_structures=None,
-        cluster_method=None,
-        cluster_allow_all_methods=False,
-        cluster_max_resolution=None,
-        fail_fast=False,
-    )
+    args = _make_args(tmp_path, cluster_identity=30)
 
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert len(resolved) == 2
@@ -97,7 +103,7 @@ def test_resolve_cluster_identity_default_method_filter_excludes_nmr(
     monkeypatch.setattr(
         rcsb,
         "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False: [
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
             "1ABC",
             "2DEF",
         ],
@@ -116,10 +122,10 @@ def test_resolve_cluster_identity_default_method_filter_excludes_nmr(
     monkeypatch.setattr(
         rcsb,
         "fetch_entry_metadata",
-        lambda pdb_id, timeout=60.0: metadata_by_id[pdb_id],
+        lambda pdb_id, timeout=60.0, retries=0, retry_delay=1.0: metadata_by_id[pdb_id],
     )
 
-    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0):
+    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0, retries=0, retry_delay=1.0):
         path = output_dir / f"{pdb_id}.cif"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("dummy", encoding="utf-8")
@@ -127,19 +133,7 @@ def test_resolve_cluster_identity_default_method_filter_excludes_nmr(
 
     monkeypatch.setattr(rcsb, "download_structure_cif", _download)
 
-    args = SimpleNamespace(
-        input=None,
-        pdb_id=None,
-        cluster_identity=30,
-        overwrite=False,
-        resume=False,
-        timeout=60.0,
-        max_structures=None,
-        cluster_method=None,
-        cluster_allow_all_methods=False,
-        cluster_max_resolution=None,
-        fail_fast=False,
-    )
+    args = _make_args(tmp_path, cluster_identity=30)
 
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
@@ -149,7 +143,7 @@ def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: P
     monkeypatch.setattr(
         rcsb,
         "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False: [
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
             "1ABC",
             "2DEF",
         ],
@@ -168,10 +162,10 @@ def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: P
     monkeypatch.setattr(
         rcsb,
         "fetch_entry_metadata",
-        lambda pdb_id, timeout=60.0: metadata_by_id[pdb_id],
+        lambda pdb_id, timeout=60.0, retries=0, retry_delay=1.0: metadata_by_id[pdb_id],
     )
 
-    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0):
+    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0, retries=0, retry_delay=1.0):
         path = output_dir / f"{pdb_id}.cif"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("dummy", encoding="utf-8")
@@ -179,22 +173,69 @@ def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: P
 
     monkeypatch.setattr(rcsb, "download_structure_cif", _download)
 
-    args = SimpleNamespace(
-        input=None,
-        pdb_id=None,
+    args = _make_args(
+        tmp_path,
         cluster_identity=30,
-        overwrite=False,
-        resume=False,
-        timeout=60.0,
-        max_structures=None,
         cluster_method=["em"],
-        cluster_allow_all_methods=False,
         cluster_max_resolution=2.5,
-        fail_fast=False,
     )
 
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
+
+
+def test_resolve_cluster_identity_uses_metadata_cache(monkeypatch, tmp_path: Path):
+    cache_path = tmp_path / "metadata-cache.json"
+    cache_payload = {
+        "1ABC": {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        }
+    }
+    cache_path.write_text(json.dumps(cache_payload), encoding="utf-8")
+
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_cluster_representative_entry_ids",
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
+            "1ABC",
+            "2DEF",
+        ],
+    )
+
+    fetch_calls = []
+
+    def _fetch_entry_metadata(pdb_id, timeout=60.0, retries=0, retry_delay=1.0):
+        fetch_calls.append(pdb_id)
+        return {
+            "exptl": [{"method": "ELECTRON MICROSCOPY"}],
+            "rcsb_entry_info": {"resolution_combined": [2.6]},
+        }
+
+    monkeypatch.setattr(rcsb, "fetch_entry_metadata", _fetch_entry_metadata)
+
+    def _download(pdb_id, output_dir, overwrite=False, timeout=60.0, retries=0, retry_delay=1.0):
+        path = output_dir / f"{pdb_id}.cif"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("dummy", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(rcsb, "download_structure_cif", _download)
+
+    args = _make_args(
+        tmp_path,
+        cluster_identity=30,
+        metadata_cache=cache_path,
+        jobs=2,
+    )
+
+    resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
+    assert len(resolved) == 2
+    assert fetch_calls == ["2DEF"]
+
+    updated_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert "1ABC" in updated_cache
+    assert "2DEF" in updated_cache
 
 
 def test_analyze_structure_file_writes_cif_and_json(tmp_path: Path):
@@ -218,6 +259,40 @@ def test_analyze_structure_file_writes_cif_and_json(tmp_path: Path):
     assert payload["num_volumes"] == len(payload["volumes"])
     assert payload["num_volumes"] >= 0
     assert isinstance(payload["volumes"], list)
+
+
+def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_path: Path):
+    args = _make_args(tmp_path, jobs=2)
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    summary_path = tmp_path / "run.summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 2
+    assert summary["num_failed"] == 0
 
 
 def test_cli_main_single_input_writes_summary(monkeypatch, tmp_path: Path):
