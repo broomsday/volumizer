@@ -67,6 +67,18 @@ Analyze cluster representatives for an identity threshold:
 volumizer --cluster-identity 30 --max-structures 25 --output-dir out
 ```
 
+Resume a previous run (skip entries that already have both output files):
+
+```bash
+volumizer --cluster-identity 30 --max-structures 25 --output-dir out --resume
+```
+
+Cluster filtering defaults:
+- Methods: X-ray + cryo-EM (RCSB method labels `X-RAY DIFFRACTION` and `ELECTRON MICROSCOPY`)
+- Override with `--cluster-method` (repeatable), e.g. `--cluster-method xray --cluster-method neutron`
+- Disable method filtering with `--cluster-allow-all-methods`
+- Optional resolution gate with `--cluster-max-resolution`, e.g. `--cluster-max-resolution 3.0`
+
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms
 - `<label>.annotation.json`: web-friendly volume data payload

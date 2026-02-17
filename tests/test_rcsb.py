@@ -14,6 +14,42 @@ def test_normalize_pdb_id_valid_and_invalid():
         rcsb.normalize_pdb_id("ABCDE")
 
 
+def test_normalize_method_filter_name_aliases_and_invalid():
+    assert rcsb.normalize_method_filter_name("xray") == "xray"
+    assert rcsb.normalize_method_filter_name("x-ray") == "xray"
+    assert rcsb.normalize_method_filter_name("cryo-em") == "em"
+    assert rcsb.normalize_method_filter_name("em") == "em"
+
+    with pytest.raises(ValueError):
+        rcsb.normalize_method_filter_name("sas")
+
+
+def test_entry_passes_filters_by_method_and_resolution():
+    entry_metadata = {
+        "exptl": [{"method": "X-RAY DIFFRACTION"}],
+        "rcsb_entry_info": {"resolution_combined": [2.1]},
+    }
+
+    assert rcsb.entry_passes_filters(entry_metadata, ["xray"], None) == (True, None)
+    assert rcsb.entry_passes_filters(entry_metadata, ["em"], None) == (
+        False,
+        "experimental_method",
+    )
+    assert rcsb.entry_passes_filters(entry_metadata, ["xray"], 2.0) == (
+        False,
+        "resolution",
+    )
+
+    no_resolution_metadata = {
+        "exptl": [{"method": "ELECTRON MICROSCOPY"}],
+        "rcsb_entry_info": {},
+    }
+    assert rcsb.entry_passes_filters(no_resolution_metadata, ["em"], 3.0) == (
+        False,
+        "missing_resolution",
+    )
+
+
 def test_parse_cluster_representative_entry_ids_filters_non_pdb_and_dedupes():
     cluster_text = "\n".join(
         [
@@ -68,7 +104,9 @@ def test_download_structure_cif_writes_downloaded_data(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(
         rcsb,
         "_download_bytes",
-        lambda url, timeout=60.0: (_ for _ in ()).throw(RuntimeError("should not download")),
+        lambda url, timeout=60.0: (_ for _ in ()).throw(
+            RuntimeError("should not download")
+        ),
     )
     cached_path = rcsb.download_structure_cif("1ABC", tmp_path, overwrite=False)
     assert cached_path == output_path
