@@ -1,0 +1,47 @@
+name: Native CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  native-parity-and-perf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --python 3.11 --group test --group native
+
+      - name: Build C helpers
+        run: bash src/compile_c_libs.sh
+
+      - name: Build native extension
+        run: uv run --python 3.11 maturin develop --manifest-path native/Cargo.toml
+
+      - name: Native parity tests
+        run: |
+          uv run --python 3.11 pytest -q \
+            tests/test_native_backend.py \
+            tests/test_fib_sphere_native_parity.py \
+            tests/test_voxel_native_parity.py \
+            tests/test_pipeline_native_parity.py
+
+      - name: Native performance regression check
+        run: |
+          uv run --python 3.11 python scripts/check_native_perf_regression.py \
+            --group medium \
+            --repeats 1 \
+            --max-ratio 1.10

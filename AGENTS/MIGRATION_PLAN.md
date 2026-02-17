@@ -234,6 +234,6 @@ Mitigation:
 
 ## 8. Immediate Next Actions (Current)
 
-1. Add CI job that builds native module, runs native parity tests, and stores benchmark artifacts.
+1. Validate and tune the new native CI workflow (`.github/workflows/native-ci.yml`) across push/PR runs.
 2. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).
-3. Add a lightweight performance regression check against `AGENTS/benchmark.native.optimized.json`.
+3. Add release-oriented docs for native install/fallback behavior.

@@ -21,10 +21,10 @@
 - Native parity/integration test scaffolding exists and is passing.
 - Backend comparison benchmark report published in `AGENTS/PERFORMANCE_REPORT.md`.
 - Native optimization pass completed (batch fib expansion + neighbor-kernel rewrite) with updated benchmarks published.
+- Native CI workflow added for parity tests and lightweight performance regression checks.
 
 ## Remaining
 
 - Reduce Python loop/dataframe overhead around native kernels where possible.
-- Add CI native build + parity test job.
 - Finalize native packaging/wheel strategy and default backend policy.
 - Plan and implement CLI/UI improvements for broader usability.
