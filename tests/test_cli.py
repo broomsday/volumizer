@@ -15,10 +15,12 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "cache_command": None,
         "input": None,
         "pdb_id": None,
+        "manifest": None,
         "cluster_identity": None,
         "output_dir": tmp_path,
         "download_dir": None,
         "max_structures": None,
+        "write_manifest": None,
         "cluster_method": None,
         "cluster_allow_all_methods": False,
         "cluster_max_resolution": None,
@@ -87,6 +89,113 @@ def test_resolve_input_structures_for_pdb_id_dry_run_skips_download(
     args = _make_args(tmp_path, command="analyze", pdb_id="1abc", dry_run=True)
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
+
+
+def test_resolve_input_structures_for_manifest_local_input(tmp_path: Path):
+    manifest_path = tmp_path / "structures.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "manifest_format": 1,
+                "structures": [
+                    {
+                        "source": "local-cavity",
+                        "input_path": str(TEST_PDB),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = _make_args(tmp_path, command="analyze", manifest=manifest_path)
+    resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
+    assert resolved == [("local-cavity", TEST_PDB)]
+
+
+def test_resolve_input_structures_for_manifest_pdb_id_dry_run(
+    monkeypatch,
+    tmp_path: Path,
+):
+    manifest_path = tmp_path / "structures.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "manifest_format": 1,
+                "structures": [
+                    {
+                        "pdb_id": "1abc",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        rcsb,
+        "download_structure_cif",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not download")),
+    )
+
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        manifest=manifest_path,
+        dry_run=True,
+    )
+    resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
+    assert resolved == [("1abc", tmp_path / "1ABC.cif")]
+
+
+def test_resolve_cluster_identity_writes_manifest(monkeypatch, tmp_path: Path):
+    manifest_path = tmp_path / "cluster-selection.manifest.json"
+
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_cluster_representative_entry_ids",
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
+            "1ABC",
+            "2DEF",
+        ],
+    )
+
+    metadata_by_id = {
+        "1ABC": {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [1.8]},
+        },
+        "2DEF": {
+            "exptl": [{"method": "SOLUTION NMR"}],
+            "rcsb_entry_info": {},
+        },
+    }
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_entry_metadata",
+        lambda pdb_id, timeout=60.0, retries=0, retry_delay=1.0: metadata_by_id[pdb_id],
+    )
+
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        write_manifest=manifest_path,
+        dry_run=True,
+    )
+
+    resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
+    assert resolved == [("1abc", tmp_path / "1ABC.cif")]
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["manifest_format"] == 1
+    assert payload["source_command"] == "cluster"
+    assert payload["structures"] == [{"source": "1abc", "pdb_id": "1ABC"}]
+    assert any(
+        rejection.get("pdb_id") == "2DEF"
+        and rejection.get("reason") == "experimental_method"
+        for rejection in payload["rejections"]
+    )
 
 
 def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Path):
@@ -654,6 +763,45 @@ def test_cli_main_analyze_subcommand_writes_summary(monkeypatch, tmp_path: Path)
     assert summary["num_processed"] == 1
     assert summary["num_failed"] == 0
     assert summary["num_skipped"] == 0
+
+
+def test_cli_main_analyze_manifest_subcommand_writes_summary(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
+
+    manifest_path = tmp_path / "structures.manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "manifest_format": 1,
+                "structures": [
+                    {
+                        "source": "cavity-from-manifest",
+                        "input_path": str(TEST_PDB),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "analyze",
+            "--manifest",
+            str(manifest_path),
+            "--output-dir",
+            str(tmp_path),
+            "--overwrite",
+        ]
+    )
+    assert exit_code == 0
+
+    summary_path = tmp_path / "run.summary.json"
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["config"]["manifest"] == str(manifest_path)
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 0
 
 
 def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_path: Path):

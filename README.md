@@ -79,6 +79,18 @@ Preview selection/filtering without downloading structures or running analysis:
 volumizer cluster --cluster-identity 30 --max-structures 25 --output-dir out --dry-run
 ```
 
+Write a reproducible manifest for selected cluster representatives:
+
+```bash
+volumizer cluster --cluster-identity 30 --max-structures 25 --output-dir out --write-manifest out/cluster.manifest.json
+```
+
+Replay that exact set later:
+
+```bash
+volumizer analyze --manifest out/cluster.manifest.json --output-dir out-rerun
+```
+
 Inspect metadata cache entries:
 
 ```bash
@@ -105,6 +117,8 @@ Cluster filtering defaults:
 - Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs
 - Checkpointing defaults to `<output-dir>/run.checkpoint.json`; override with `--checkpoint` or disable with `--no-checkpoint`
 - Structured progress events can be written with `--progress-jsonl <path>` (JSON Lines format)
+- Cluster runs can emit selected/rejected structure manifests with `--write-manifest <path>`
+- Analyze runs can replay any manifest with `--manifest <path>` (entries support `pdb_id` and/or `input_path`)
 
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms

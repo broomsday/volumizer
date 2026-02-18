@@ -20,6 +20,7 @@ from volumizer import native_backend, pdb, rcsb, utils, volumizer
 DEFAULT_METADATA_CACHE_FILENAME = "entry_metadata_cache.json"
 METADATA_CACHE_FORMAT_VERSION = 2
 DEFAULT_CHECKPOINT_FILENAME = "run.checkpoint.json"
+MANIFEST_FORMAT_VERSION = 1
 
 
 def _utc_timestamp() -> str:
@@ -159,6 +160,15 @@ def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Optional cap for selected cluster representatives.",
     )
+    parser.add_argument(
+        "--write-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Optional JSON manifest output path for selected IDs and "
+            "filter rejections."
+        ),
+    )
 
     cluster_method_group = parser.add_mutually_exclusive_group()
     cluster_method_group.add_argument(
@@ -230,6 +240,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         help="Single PDB ID to download from RCSB and analyze.",
     )
+    analyze_source_group.add_argument(
+        "--manifest",
+        type=Path,
+        help=(
+            "Path to a manifest JSON containing a `structures` list "
+            "(from `cluster --write-manifest` or custom)."
+        ),
+    )
     _add_common_analysis_args(analyze_parser)
     analyze_parser.set_defaults(
         command="analyze",
@@ -240,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
         cluster_max_resolution=None,
         metadata_cache=None,
         no_metadata_cache=False,
+        write_manifest=None,
     )
 
     cluster_parser = subparsers.add_parser(
@@ -252,6 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
         command="cluster",
         input=None,
         pdb_id=None,
+        manifest=None,
     )
 
     cache_parser = subparsers.add_parser(
@@ -298,11 +318,13 @@ def _normalize_argv_for_subcommands(argv_list: list[str]) -> list[str]:
     if first.startswith("-"):
         cluster_markers = {
             "--cluster-identity",
+            "--max-structures",
             "--cluster-method",
             "--cluster-allow-all-methods",
             "--cluster-max-resolution",
             "--metadata-cache",
             "--no-metadata-cache",
+            "--write-manifest",
         }
         inferred_command = (
             "cluster"
@@ -396,6 +418,178 @@ def _resolve_cluster_method_filters(args: argparse.Namespace) -> list[str] | Non
     return list(dict.fromkeys(normalized_methods))
 
 
+def _save_manifest(manifest_path: Path, payload: dict) -> None:
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _load_manifest_structures(manifest_path: Path) -> list[dict]:
+    if not manifest_path.is_file():
+        raise FileNotFoundError(f"Manifest does not exist: {manifest_path}")
+
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid manifest JSON: {manifest_path}: {error}") from error
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Manifest root must be a JSON object: {manifest_path}")
+
+    raw_structures = payload.get("structures")
+    if not isinstance(raw_structures, list) or len(raw_structures) == 0:
+        raise ValueError(
+            "Manifest must include a non-empty `structures` list: "
+            f"{manifest_path}"
+        )
+
+    manifest_structures: list[dict] = []
+    for index, raw_entry in enumerate(raw_structures, start=1):
+        if not isinstance(raw_entry, dict):
+            raise ValueError(
+                f"Manifest structure entry #{index} must be an object: {manifest_path}"
+            )
+
+        raw_source = raw_entry.get("source")
+        raw_pdb_id = raw_entry.get("pdb_id")
+        raw_input_path = raw_entry.get("input_path")
+
+        if raw_pdb_id is None and raw_input_path is None:
+            raise ValueError(
+                "Manifest structure entries require `pdb_id` or `input_path`: "
+                f"{manifest_path} entry #{index}"
+            )
+
+        source_label: str | None = None
+        if raw_source is not None:
+            if not isinstance(raw_source, str):
+                raise ValueError(
+                    f"Manifest `source` must be a string: {manifest_path} entry #{index}"
+                )
+            source_label = _sanitize_label(raw_source)
+
+        entry: dict[str, str | Path] = {}
+        if raw_pdb_id is not None:
+            if not isinstance(raw_pdb_id, str):
+                raise ValueError(
+                    f"Manifest `pdb_id` must be a string: {manifest_path} entry #{index}"
+                )
+            normalized_id = rcsb.normalize_pdb_id(raw_pdb_id)
+            entry["pdb_id"] = normalized_id
+            if source_label is None:
+                source_label = _sanitize_label(normalized_id)
+
+        if raw_input_path is not None:
+            if not isinstance(raw_input_path, str):
+                raise ValueError(
+                    f"Manifest `input_path` must be a string: {manifest_path} entry #{index}"
+                )
+            input_path = Path(raw_input_path)
+            if not input_path.is_absolute():
+                input_path = manifest_path.parent / input_path
+            entry["input_path"] = input_path
+            if source_label is None:
+                source_label = _sanitize_label(input_path.stem)
+
+        entry["source"] = source_label if source_label is not None else "structure"
+        manifest_structures.append(entry)
+
+    return manifest_structures
+
+
+def _resolve_manifest_structures(
+    manifest_structures: list[dict],
+    args: argparse.Namespace,
+    download_dir: Path,
+    output_dir: Path,
+) -> list[tuple[str, Path]]:
+    structures: list[tuple[str, Path]] = []
+    for entry in manifest_structures:
+        source_label = str(entry["source"])
+        input_path = entry.get("input_path")
+        if isinstance(input_path, Path):
+            if not input_path.is_file():
+                raise FileNotFoundError(
+                    f"Manifest input structure does not exist: {input_path}"
+                )
+            structures.append((source_label, input_path))
+            continue
+
+        normalized_id = str(entry["pdb_id"])
+        if args.resume and _has_complete_outputs(output_dir, source_label):
+            structures.append((source_label, download_dir / f"{normalized_id}.cif"))
+            continue
+
+        if args.dry_run:
+            structures.append((source_label, download_dir / f"{normalized_id}.cif"))
+            continue
+
+        structure_path = rcsb.download_structure_cif(
+            normalized_id,
+            output_dir=download_dir,
+            overwrite=args.overwrite,
+            timeout=args.timeout,
+            retries=args.retries,
+            retry_delay=args.retry_delay,
+        )
+        structures.append((source_label, structure_path))
+
+    return structures
+
+
+def _write_cluster_manifest(
+    manifest_path: Path,
+    args: argparse.Namespace,
+    selected_ids: list[str],
+    cluster_method_filters: list[str] | None,
+    rejection_entries: list[dict],
+    examined_count: int,
+    filtered_by_method: int,
+    filtered_by_resolution: int,
+    filtered_missing_resolution: int,
+    metadata_errors: int,
+    cache_hits: int,
+    negative_cache_hits: int,
+    cache_misses: int,
+    cache_updates: int,
+    negative_cache_updates: int,
+) -> None:
+    payload = {
+        "manifest_format": MANIFEST_FORMAT_VERSION,
+        "created_at": _utc_timestamp(),
+        "source_command": "cluster",
+        "selection": {
+            "cluster_identity": args.cluster_identity,
+            "max_structures": args.max_structures,
+            "cluster_method_filters": cluster_method_filters,
+            "cluster_allow_all_methods": args.cluster_allow_all_methods,
+            "cluster_max_resolution": args.cluster_max_resolution,
+        },
+        "summary": {
+            "selected": len(selected_ids),
+            "examined": examined_count,
+            "filtered_by_method": filtered_by_method,
+            "filtered_by_resolution": filtered_by_resolution,
+            "missing_resolution": filtered_missing_resolution,
+            "metadata_errors": metadata_errors,
+            "cache_hits": cache_hits,
+            "negative_cache_hits": negative_cache_hits,
+            "cache_misses": cache_misses,
+            "cache_updates": cache_updates,
+            "negative_cache_updates": negative_cache_updates,
+        },
+        "structures": [
+            {
+                "source": _sanitize_label(representative_id),
+                "pdb_id": representative_id,
+            }
+            for representative_id in selected_ids
+        ],
+        "rejections": rejection_entries,
+    }
+    _save_manifest(manifest_path, payload)
+    print(f"wrote manifest: {manifest_path}", file=sys.stderr)
+
+
 def _resolve_metadata_cache_path(
     args: argparse.Namespace,
     output_dir: Path,
@@ -439,12 +633,14 @@ def _make_checkpoint_signature(
         "command": args.command,
         "input": str(args.input) if args.input is not None else None,
         "pdb_id": args.pdb_id,
+        "manifest": str(args.manifest) if args.manifest is not None else None,
         "cluster_identity": args.cluster_identity,
         "max_structures": args.max_structures,
         "cluster_method_filters": cluster_method_filters,
         "cluster_allow_all_methods": args.cluster_allow_all_methods,
         "cluster_max_resolution": args.cluster_max_resolution,
         "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
+        "write_manifest": str(args.write_manifest) if args.write_manifest is not None else None,
         "output_dir": str(output_dir),
         "download_dir": str(download_dir),
         "resolution": args.resolution,
@@ -792,13 +988,14 @@ def _fetch_metadata_for_ids(
     representative_ids: list[str],
     args: argparse.Namespace,
     negative_entries: dict[str, dict],
-) -> tuple[dict[str, dict], int, int]:
+) -> tuple[dict[str, dict], int, int, list[dict]]:
     fetched: dict[str, dict] = {}
     errors = 0
     negative_updates = 0
+    error_entries: list[dict] = []
 
     if len(representative_ids) == 0:
-        return fetched, errors, negative_updates
+        return fetched, errors, negative_updates, error_entries
 
     if args.jobs <= 1:
         for representative_id in representative_ids:
@@ -818,13 +1015,22 @@ def _fetch_metadata_for_ids(
                         status_code,
                     )
                     negative_updates += 1
+                error_entries.append(
+                    {
+                        "pdb_id": representative_id,
+                        "reason": "metadata_error",
+                        "status_code": status_code,
+                        "permanent": is_permanent,
+                        "error": str(error),
+                    }
+                )
                 print(
                     f"metadata error for {representative_id}: {error}",
                     file=sys.stderr,
                 )
                 if args.fail_fast:
                     raise
-        return fetched, errors, negative_updates
+        return fetched, errors, negative_updates, error_entries
 
     max_workers = min(args.jobs, len(representative_ids))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -852,6 +1058,15 @@ def _fetch_metadata_for_ids(
                         status_code,
                     )
                     negative_updates += 1
+                error_entries.append(
+                    {
+                        "pdb_id": representative_id,
+                        "reason": "metadata_error",
+                        "status_code": status_code,
+                        "permanent": is_permanent,
+                        "error": str(error),
+                    }
+                )
                 print(
                     f"metadata error for {representative_id}: {error}",
                     file=sys.stderr,
@@ -859,7 +1074,7 @@ def _fetch_metadata_for_ids(
                 if args.fail_fast:
                     raise
 
-    return fetched, errors, negative_updates
+    return fetched, errors, negative_updates, error_entries
 
 
 def _download_cluster_structures(
@@ -941,6 +1156,16 @@ def resolve_input_structures(
             raise FileNotFoundError(f"Input structure does not exist: {input_path}")
         return [(_sanitize_label(input_path.stem), input_path)]
 
+    if args.manifest is not None:
+        manifest_path = Path(args.manifest)
+        manifest_structures = _load_manifest_structures(manifest_path)
+        return _resolve_manifest_structures(
+            manifest_structures,
+            args,
+            download_dir,
+            output_dir,
+        )
+
     if args.pdb_id is not None:
         normalized_id = rcsb.normalize_pdb_id(args.pdb_id)
         source_label = _sanitize_label(normalized_id)
@@ -994,6 +1219,7 @@ def resolve_input_structures(
         cache_misses = 0
         cache_updates = 0
         negative_cache_updates = 0
+        manifest_rejections: list[dict] = []
 
         batch_size = max(1, int(args.jobs))
         for batch_start in range(0, len(representative_ids), batch_size):
@@ -1014,6 +1240,14 @@ def resolve_input_structures(
                 cached_negative = negative_entries.get(representative_id)
                 if isinstance(cached_negative, dict):
                     negative_cache_hits += 1
+                    manifest_rejections.append(
+                        {
+                            "pdb_id": representative_id,
+                            "reason": "negative_metadata_cache",
+                            "status_code": cached_negative.get("status_code"),
+                            "detail": cached_negative.get("reason"),
+                        }
+                    )
                     continue
 
                 cache_misses += 1
@@ -1023,6 +1257,7 @@ def resolve_input_structures(
                 fetched_metadata,
                 batch_errors,
                 batch_negative_updates,
+                batch_error_entries,
             ) = _fetch_metadata_for_ids(
                 missing_ids,
                 args,
@@ -1030,6 +1265,7 @@ def resolve_input_structures(
             )
             metadata_errors += batch_errors
             negative_cache_updates += batch_negative_updates
+            manifest_rejections.extend(batch_error_entries)
 
             for representative_id, metadata in fetched_metadata.items():
                 batch_metadata[representative_id] = metadata
@@ -1057,6 +1293,12 @@ def resolve_input_structures(
                         filtered_by_resolution += 1
                     elif rejection_reason == "missing_resolution":
                         filtered_missing_resolution += 1
+                    manifest_rejections.append(
+                        {
+                            "pdb_id": representative_id,
+                            "reason": rejection_reason,
+                        }
+                    )
                     continue
 
                 selected_ids.append(representative_id)
@@ -1068,6 +1310,25 @@ def resolve_input_structures(
                 metadata_cache_path,
                 entries=metadata_entries,
                 negative_entries=negative_entries,
+            )
+
+        if args.write_manifest is not None:
+            _write_cluster_manifest(
+                manifest_path=Path(args.write_manifest),
+                args=args,
+                selected_ids=selected_ids,
+                cluster_method_filters=cluster_method_filters,
+                rejection_entries=manifest_rejections,
+                examined_count=examined_count,
+                filtered_by_method=filtered_by_method,
+                filtered_by_resolution=filtered_by_resolution,
+                filtered_missing_resolution=filtered_missing_resolution,
+                metadata_errors=metadata_errors,
+                cache_hits=cache_hits,
+                negative_cache_hits=negative_cache_hits,
+                cache_misses=cache_misses,
+                cache_updates=cache_updates,
+                negative_cache_updates=negative_cache_updates,
             )
 
         if len(selected_ids) == 0:
@@ -1460,6 +1721,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "command": args.command,
             "input": str(args.input) if args.input is not None else None,
             "pdb_id": args.pdb_id,
+            "manifest": str(args.manifest) if args.manifest is not None else None,
             "cluster_identity": args.cluster_identity,
             "max_structures": args.max_structures,
             "cluster_method_filters": cluster_method_filters,
@@ -1467,6 +1729,9 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "cluster_max_resolution": args.cluster_max_resolution,
             "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
             "no_metadata_cache": args.no_metadata_cache,
+            "write_manifest": (
+                str(args.write_manifest) if args.write_manifest is not None else None
+            ),
             "checkpoint": str(checkpoint_path) if checkpoint_path else None,
             "no_checkpoint": args.no_checkpoint,
             "progress_jsonl": str(progress_jsonl_path) if progress_jsonl_path else None,
