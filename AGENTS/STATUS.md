@@ -26,9 +26,10 @@
 - CLI resume mode and initial cluster selection filters added (default X-ray/cryo-EM method filter with optional method and resolution filters).
 - CLI parallel worker support added (`--jobs`) with network retry controls and entry-metadata caching for large cluster runs.
 - CLI dry-run mode added (`--dry-run`) plus negative metadata caching for permanent metadata failures (e.g. 404) to avoid repeat lookups.
+- CLI checkpoint persistence added (default `run.checkpoint.json`) with resumable run-state recovery and optional JSONL progress events (`--progress-jsonl`).
 
 ## Remaining
 
 - Reduce Python loop/dataframe overhead around native kernels where possible.
 - Finalize native packaging/wheel strategy and default backend policy.
-- Continue CLI UX hardening: richer progress/ETA reporting, checkpoint/restart behavior, and additional selection controls beyond baseline method/resolution filtering.
+- Continue CLI UX hardening: richer progress/ETA output semantics and additional selection controls beyond the current baseline.

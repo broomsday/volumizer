@@ -134,7 +134,7 @@ Likely architecture for next iteration:
 
 Current user interface includes both Python function calls and a CLI (`volumizer`) for file/PDB-ID/cluster inputs with CIF + JSON outputs. For broader adoption:
 
-1. Continue CLI UX hardening: richer progress/ETA reporting and broader cluster selection controls (resume + baseline method/resolution filtering + jobs/retries/metadata-cache support + dry-run + negative metadata caching now implemented).
+1. Continue CLI UX hardening: richer progress/ETA semantics and broader cluster selection controls (resume + baseline method/resolution filtering + jobs/retries/metadata-cache support + dry-run + negative metadata caching + checkpoint/progress-jsonl support now implemented).
 2. Improve install ergonomics for native acceleration (prebuilt wheels or optional Rust extension build).
 3. Add user-facing docs focused on:
    - quick start from raw PDB/CIF

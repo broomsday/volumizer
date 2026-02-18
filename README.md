@@ -88,6 +88,8 @@ Cluster filtering defaults:
 - Retry transient network errors with `--retries` and `--retry-delay`
 - Cluster metadata cache defaults to `<output-dir>/entry_metadata_cache.json`; override with `--metadata-cache` or disable with `--no-metadata-cache`
 - Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs
+- Checkpointing defaults to `<output-dir>/run.checkpoint.json`; override with `--checkpoint` or disable with `--no-checkpoint`
+- Structured progress events can be written with `--progress-jsonl <path>` (JSON Lines format)
 
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms

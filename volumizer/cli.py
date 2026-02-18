@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,11 @@ from volumizer import native_backend, pdb, rcsb, utils, volumizer
 
 DEFAULT_METADATA_CACHE_FILENAME = "entry_metadata_cache.json"
 METADATA_CACHE_FORMAT_VERSION = 2
+DEFAULT_CHECKPOINT_FILENAME = "run.checkpoint.json"
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -178,6 +184,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip structures that already have both output files.",
     )
 
+    checkpoint_group = parser.add_mutually_exclusive_group()
+    checkpoint_group.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Checkpoint JSON path "
+            f"(default: <output-dir>/{DEFAULT_CHECKPOINT_FILENAME})."
+        ),
+    )
+    checkpoint_group.add_argument(
+        "--no-checkpoint",
+        action="store_true",
+        help="Disable checkpoint persistence.",
+    )
+
+    parser.add_argument(
+        "--progress-jsonl",
+        type=Path,
+        default=None,
+        help="Optional JSONL path for structured per-event progress output.",
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -274,7 +302,6 @@ def _resolve_cluster_method_filters(args: argparse.Namespace) -> list[str] | Non
     for raw_method in args.cluster_method:
         normalized_methods.append(rcsb.normalize_method_filter_name(raw_method))
 
-    # De-duplicate while preserving user order.
     return list(dict.fromkeys(normalized_methods))
 
 
@@ -289,6 +316,52 @@ def _resolve_metadata_cache_path(
         return Path(args.metadata_cache)
 
     return output_dir / DEFAULT_METADATA_CACHE_FILENAME
+
+
+def _resolve_checkpoint_path(
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> Path | None:
+    if args.no_checkpoint:
+        return None
+
+    if args.checkpoint is not None:
+        return Path(args.checkpoint)
+
+    return output_dir / DEFAULT_CHECKPOINT_FILENAME
+
+
+def _resolve_progress_jsonl_path(args: argparse.Namespace) -> Path | None:
+    if args.progress_jsonl is None:
+        return None
+    return Path(args.progress_jsonl)
+
+
+def _make_checkpoint_signature(
+    args: argparse.Namespace,
+    output_dir: Path,
+    download_dir: Path,
+    cluster_method_filters: list[str] | None,
+    metadata_cache_path: Path | None,
+) -> dict:
+    return {
+        "input": str(args.input) if args.input is not None else None,
+        "pdb_id": args.pdb_id,
+        "cluster_identity": args.cluster_identity,
+        "max_structures": args.max_structures,
+        "cluster_method_filters": cluster_method_filters,
+        "cluster_allow_all_methods": args.cluster_allow_all_methods,
+        "cluster_max_resolution": args.cluster_max_resolution,
+        "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
+        "output_dir": str(output_dir),
+        "download_dir": str(download_dir),
+        "resolution": args.resolution,
+        "min_voxels": args.min_voxels,
+        "min_volume": args.min_volume,
+        "backend": args.backend,
+        "keep_non_protein": args.keep_non_protein,
+        "dry_run": args.dry_run,
+    }
 
 
 def _load_metadata_cache(cache_path: Path | None) -> tuple[dict[str, dict], dict[str, dict]]:
@@ -307,7 +380,6 @@ def _load_metadata_cache(cache_path: Path | None) -> tuple[dict[str, dict], dict
         raw_entries = raw_payload.get("entries")
         raw_negative_entries = raw_payload.get("negative_entries")
     else:
-        # Backward compatibility: older cache format stored only positive entries.
         raw_entries = raw_payload
         raw_negative_entries = {}
 
@@ -355,6 +427,237 @@ def _save_metadata_cache(
         json.dumps(payload, indent=2),
         encoding="utf-8",
     )
+
+
+class _RunTracker:
+    """
+    Tracks in-memory run state and persists checkpoint/progress events.
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: Path | None,
+        progress_jsonl_path: Path | None,
+        signature: dict,
+        resume: bool,
+    ):
+        self.checkpoint_path = checkpoint_path
+        self.progress_jsonl_path = progress_jsonl_path
+        self.signature = signature
+        self.resume = bool(resume)
+
+        self._entries: dict[str, dict[str, dict]] = {
+            "results": {},
+            "errors": {},
+            "skipped": {},
+            "planned": {},
+        }
+        self._order: dict[str, list[str]] = {
+            "results": [],
+            "errors": [],
+            "skipped": [],
+            "planned": [],
+        }
+
+        self._init_progress_stream()
+        self._load_checkpoint_if_resuming()
+
+    def _init_progress_stream(self) -> None:
+        if self.progress_jsonl_path is None:
+            return
+
+        self.progress_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.resume:
+            self.progress_jsonl_path.write_text("", encoding="utf-8")
+
+    def _load_checkpoint_if_resuming(self) -> None:
+        if not self.resume:
+            return
+        if self.checkpoint_path is None or not self.checkpoint_path.is_file():
+            return
+
+        try:
+            payload = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+
+        if not isinstance(payload, dict):
+            return
+
+        checkpoint_signature = payload.get("signature")
+        if checkpoint_signature != self.signature:
+            print(
+                "checkpoint signature mismatch; starting with empty run-state.",
+                file=sys.stderr,
+            )
+            return
+
+        for kind in ("results", "errors", "skipped", "planned"):
+            raw_list = payload.get(kind, [])
+            if not isinstance(raw_list, list):
+                continue
+            for entry in raw_list:
+                if not isinstance(entry, dict):
+                    continue
+                source = entry.get("source")
+                if not isinstance(source, str):
+                    continue
+                self._set_entry(kind, entry)
+
+        loaded_count = (
+            len(self.results)
+            + len(self.errors)
+            + len(self.skipped)
+            + len(self.planned)
+        )
+        if loaded_count > 0:
+            print(
+                (
+                    "loaded checkpoint state: "
+                    f"results={len(self.results)}, "
+                    f"errors={len(self.errors)}, "
+                    f"skipped={len(self.skipped)}, "
+                    f"planned={len(self.planned)}"
+                ),
+                file=sys.stderr,
+            )
+
+    def _remove_source_from_kind(self, kind: str, source: str) -> None:
+        if source in self._entries[kind]:
+            del self._entries[kind][source]
+        if source in self._order[kind]:
+            self._order[kind].remove(source)
+
+    def _remove_source_everywhere(self, source: str) -> None:
+        for kind in ("results", "errors", "skipped", "planned"):
+            self._remove_source_from_kind(kind, source)
+
+    def _set_entry(self, kind: str, entry: dict) -> None:
+        source = entry["source"]
+        self._remove_source_everywhere(source)
+        self._entries[kind][source] = entry
+        self._order[kind].append(source)
+
+    def _set_non_terminal_entry(self, kind: str, entry: dict) -> None:
+        source = entry["source"]
+        for terminal_kind in ("results", "errors", "skipped"):
+            self._remove_source_from_kind(terminal_kind, source)
+        self._remove_source_from_kind(kind, source)
+        self._entries[kind][source] = entry
+        self._order[kind].append(source)
+
+    @property
+    def results(self) -> list[dict]:
+        return [self._entries["results"][s] for s in self._order["results"]]
+
+    @property
+    def errors(self) -> list[dict]:
+        return [self._entries["errors"][s] for s in self._order["errors"]]
+
+    @property
+    def skipped(self) -> list[dict]:
+        return [self._entries["skipped"][s] for s in self._order["skipped"]]
+
+    @property
+    def planned(self) -> list[dict]:
+        return [self._entries["planned"][s] for s in self._order["planned"]]
+
+    def has_result(self, source: str) -> bool:
+        return source in self._entries["results"]
+
+    def emit_event(self, event: str, **payload: object) -> None:
+        if self.progress_jsonl_path is None:
+            return
+
+        event_record = {
+            "ts": _utc_timestamp(),
+            "event": event,
+        }
+        event_record.update(payload)
+        with self.progress_jsonl_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event_record) + "\n")
+
+    def persist_checkpoint(self) -> None:
+        if self.checkpoint_path is None:
+            return
+
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "checkpoint_format": 1,
+            "updated_at": _utc_timestamp(),
+            "signature": self.signature,
+            "results": self.results,
+            "errors": self.errors,
+            "skipped": self.skipped,
+            "planned": self.planned,
+        }
+        self.checkpoint_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def mark_run_start(self, total_structures: int, dry_run: bool) -> None:
+        self.emit_event(
+            "run_started",
+            total_structures=total_structures,
+            dry_run=dry_run,
+            resume=self.resume,
+        )
+        self.persist_checkpoint()
+
+    def mark_run_complete(self, exit_code: int) -> None:
+        self.emit_event(
+            "run_completed",
+            exit_code=exit_code,
+            num_processed=len(self.results),
+            num_failed=len(self.errors),
+            num_skipped=len(self.skipped),
+            num_planned=len(self.planned),
+        )
+        self.persist_checkpoint()
+
+    def mark_planned(self, entry: dict) -> None:
+        self._set_non_terminal_entry("planned", entry)
+        self.emit_event(
+            "structure_planned",
+            source=entry["source"],
+            input_path=entry["input_path"],
+        )
+        self.persist_checkpoint()
+
+    def mark_skipped(self, entry: dict) -> None:
+        self._set_entry("skipped", entry)
+        self.emit_event(
+            "structure_skipped",
+            source=entry["source"],
+            input_path=entry["input_path"],
+            reason=entry.get("reason"),
+        )
+        self.persist_checkpoint()
+
+    def mark_started(self, source: str, input_path: Path) -> None:
+        self.emit_event(
+            "structure_started",
+            source=source,
+            input_path=str(input_path),
+        )
+
+    def mark_result(self, entry: dict) -> None:
+        self._set_entry("results", entry)
+        self.emit_event(
+            "structure_succeeded",
+            source=entry["source"],
+            input_path=entry["input_path"],
+            num_volumes=entry.get("num_volumes"),
+        )
+        self.persist_checkpoint()
+
+    def mark_error(self, entry: dict) -> None:
+        self._set_entry("errors", entry)
+        self.emit_event(
+            "structure_failed",
+            source=entry["source"],
+            input_path=entry["input_path"],
+            error=entry["error"],
+        )
+        self.persist_checkpoint()
 
 
 def _extract_status_code_from_error_message(error: Exception) -> int | None:
@@ -814,14 +1117,16 @@ def _plan_dry_run(
     structures: list[tuple[str, Path]],
     args: argparse.Namespace,
     output_dir: Path,
-) -> tuple[list[dict], list[dict]]:
-    planned: list[dict] = []
-    skipped: list[dict] = []
+    tracker: _RunTracker,
+) -> None:
+    planned_now = 0
 
     for source_label, input_path in structures:
         if args.resume and _has_complete_outputs(output_dir, source_label):
+            if tracker.has_result(source_label):
+                continue
             print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
-            skipped.append(
+            tracker.mark_skipped(
                 _build_resume_skip_entry(
                     source_label=source_label,
                     input_path=input_path,
@@ -830,37 +1135,35 @@ def _plan_dry_run(
             )
             continue
 
-        planned.append(
+        tracker.mark_planned(
             _build_dry_run_plan_entry(
                 source_label=source_label,
                 input_path=input_path,
                 output_dir=output_dir,
             )
         )
+        planned_now += 1
 
-    if len(planned) > 0:
+    if planned_now > 0:
         print(
-            f"dry-run selected {len(planned)} structure(s); no downloads/analysis executed.",
+            f"dry-run selected {planned_now} structure(s); no downloads/analysis executed.",
             file=sys.stderr,
         )
-
-    return planned, skipped
 
 
 def _analyze_structures(
     structures: list[tuple[str, Path]],
     args: argparse.Namespace,
     output_dir: Path,
-) -> tuple[list[dict], list[dict], list[dict], int]:
-    results: list[dict] = []
-    errors: list[dict] = []
-    skipped: list[dict] = []
-
+    tracker: _RunTracker,
+) -> int:
     pending_structures: list[tuple[str, Path]] = []
     for source_label, input_path in structures:
         if args.resume and _has_complete_outputs(output_dir, source_label):
+            if tracker.has_result(source_label):
+                continue
             print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
-            skipped.append(
+            tracker.mark_skipped(
                 _build_resume_skip_entry(
                     source_label=source_label,
                     input_path=input_path,
@@ -879,33 +1182,35 @@ def _analyze_structures(
         analysis_workers = 1
 
     if len(pending_structures) == 0:
-        return results, errors, skipped, analysis_workers
+        return analysis_workers
 
     if analysis_workers <= 1:
         for source_label, input_path in pending_structures:
+            tracker.mark_started(source_label, input_path)
             print(f"analyzing {source_label}: {input_path}", file=sys.stderr)
             try:
-                result = analyze_structure_file(
-                    source_label=source_label,
-                    input_path=input_path,
-                    output_dir=output_dir,
-                    min_voxels=int(args.min_voxels),
-                    min_volume=args.min_volume,
-                    overwrite=bool(args.overwrite),
+                tracker.mark_result(
+                    analyze_structure_file(
+                        source_label=source_label,
+                        input_path=input_path,
+                        output_dir=output_dir,
+                        min_voxels=int(args.min_voxels),
+                        min_volume=args.min_volume,
+                        overwrite=bool(args.overwrite),
+                    )
                 )
-                results.append(result)
             except Exception as error:  # pragma: no cover - exercised via CLI integration tests
                 error_entry = {
                     "source": source_label,
                     "input_path": str(input_path),
                     "error": str(error),
                 }
-                errors.append(error_entry)
+                tracker.mark_error(error_entry)
                 print(f"error for {source_label}: {error}", file=sys.stderr)
                 if args.fail_fast:
                     break
 
-        return results, errors, skipped, analysis_workers
+        return analysis_workers
 
     print(
         f"analyzing {len(pending_structures)} structures with {analysis_workers} workers...",
@@ -924,6 +1229,9 @@ def _analyze_structures(
             ): (index, source_label, input_path)
             for index, (source_label, input_path) in enumerate(pending_structures)
         }
+
+        for _, source_label, input_path in future_to_context.values():
+            tracker.mark_started(source_label, input_path)
 
         ordered_results: dict[int, dict] = {}
         ordered_errors: dict[int, dict] = {}
@@ -951,11 +1259,11 @@ def _analyze_structures(
 
     for index in range(len(pending_structures)):
         if index in ordered_results:
-            results.append(ordered_results[index])
+            tracker.mark_result(ordered_results[index])
         elif index in ordered_errors:
-            errors.append(ordered_errors[index])
+            tracker.mark_error(ordered_errors[index])
 
-    return results, errors, skipped, analysis_workers
+    return analysis_workers
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -996,26 +1304,36 @@ def run_cli(args: argparse.Namespace) -> int:
         else output_dir / "downloads"
     )
 
-    structures = resolve_input_structures(args, download_dir, output_dir)
-
-    planned: list[dict] = []
-    if args.dry_run:
-        planned, skipped = _plan_dry_run(structures, args, output_dir)
-        results: list[dict] = []
-        errors: list[dict] = []
-        analysis_workers = 0
-    else:
-        results, errors, skipped, analysis_workers = _analyze_structures(
-            structures,
-            args,
-            output_dir,
-        )
-
     cluster_method_filters = None
     metadata_cache_path = None
     if args.cluster_identity is not None:
         cluster_method_filters = _resolve_cluster_method_filters(args)
         metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
+
+    checkpoint_path = _resolve_checkpoint_path(args, output_dir)
+    progress_jsonl_path = _resolve_progress_jsonl_path(args)
+
+    tracker = _RunTracker(
+        checkpoint_path=checkpoint_path,
+        progress_jsonl_path=progress_jsonl_path,
+        signature=_make_checkpoint_signature(
+            args,
+            output_dir=output_dir,
+            download_dir=download_dir,
+            cluster_method_filters=cluster_method_filters,
+            metadata_cache_path=metadata_cache_path,
+        ),
+        resume=args.resume,
+    )
+
+    structures = resolve_input_structures(args, download_dir, output_dir)
+    tracker.mark_run_start(total_structures=len(structures), dry_run=args.dry_run)
+
+    if args.dry_run:
+        _plan_dry_run(structures, args, output_dir, tracker)
+        analysis_workers = 0
+    else:
+        analysis_workers = _analyze_structures(structures, args, output_dir, tracker)
 
     summary = {
         "config": {
@@ -1028,6 +1346,9 @@ def run_cli(args: argparse.Namespace) -> int:
             "cluster_max_resolution": args.cluster_max_resolution,
             "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
             "no_metadata_cache": args.no_metadata_cache,
+            "checkpoint": str(checkpoint_path) if checkpoint_path else None,
+            "no_checkpoint": args.no_checkpoint,
+            "progress_jsonl": str(progress_jsonl_path) if progress_jsonl_path else None,
             "output_dir": str(output_dir),
             "download_dir": str(download_dir),
             "resolution": args.resolution,
@@ -1044,23 +1365,23 @@ def run_cli(args: argparse.Namespace) -> int:
             "resume": args.resume,
             "dry_run": args.dry_run,
         },
-        "num_processed": len(results),
-        "num_failed": len(errors),
-        "num_skipped": len(skipped),
-        "num_planned": len(planned),
-        "results": results,
-        "errors": errors,
-        "skipped": skipped,
-        "planned": planned,
+        "num_processed": len(tracker.results),
+        "num_failed": len(tracker.errors),
+        "num_skipped": len(tracker.skipped),
+        "num_planned": len(tracker.planned),
+        "results": tracker.results,
+        "errors": tracker.errors,
+        "skipped": tracker.skipped,
+        "planned": tracker.planned,
     }
 
     summary_path = output_dir / "run.summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"wrote summary: {summary_path}", file=sys.stderr)
 
-    if len(errors) > 0:
-        return 1
-    return 0
+    exit_code = 1 if len(tracker.errors) > 0 else 0
+    tracker.mark_run_complete(exit_code)
+    return exit_code
 
 
 def main(argv: Sequence[str] | None = None) -> int:

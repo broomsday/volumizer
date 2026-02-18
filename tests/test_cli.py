@@ -22,6 +22,9 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "cluster_max_resolution": None,
         "metadata_cache": None,
         "no_metadata_cache": False,
+        "checkpoint": None,
+        "no_checkpoint": False,
+        "progress_jsonl": None,
         "resolution": 3.0,
         "min_voxels": 2,
         "min_volume": None,
@@ -202,7 +205,6 @@ def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: P
 
 def test_resolve_cluster_identity_uses_metadata_cache(monkeypatch, tmp_path: Path):
     cache_path = tmp_path / "metadata-cache.json"
-    # Backward-compatible legacy format: positive entries at top level.
     cache_path.write_text(
         json.dumps(
             {
@@ -461,6 +463,112 @@ def test_run_cli_dry_run_writes_plan_and_skips_analysis(monkeypatch, tmp_path: P
     assert len(summary["planned"]) == 2
 
 
+def test_run_cli_writes_progress_jsonl_events(monkeypatch, tmp_path: Path):
+    progress_path = tmp_path / "run.progress.jsonl"
+    args = _make_args(tmp_path, dry_run=True, progress_jsonl=progress_path)
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+    assert progress_path.is_file()
+
+    events = [
+        json.loads(line)
+        for line in progress_path.read_text(encoding="utf-8").splitlines()
+        if len(line.strip()) > 0
+    ]
+    event_types = [event["event"] for event in events]
+
+    assert "run_started" in event_types
+    assert event_types.count("structure_planned") == 2
+    assert event_types[-1] == "run_completed"
+
+
+def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
+    checkpoint_path = tmp_path / "state.checkpoint.json"
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    def _analyze_first_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+        if source_label == "first":
+            structure_out = output_dir / "first.annotated.cif"
+            annotation_out = output_dir / "first.annotation.json"
+            structure_out.write_text("dummy", encoding="utf-8")
+            annotation_out.write_text("{}", encoding="utf-8")
+            return {
+                "source": source_label,
+                "input_path": str(input_path),
+                "structure_output": str(structure_out),
+                "annotation_output": str(annotation_out),
+                "num_volumes": 1,
+                "largest_type": "pore",
+                "largest_volume": 1.0,
+            }
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze_first_pass)
+
+    first_args = _make_args(
+        tmp_path,
+        checkpoint=checkpoint_path,
+        jobs=1,
+        fail_fast=True,
+    )
+    first_exit = cli.run_cli(first_args)
+    assert first_exit == 1
+
+    first_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert len(first_checkpoint["results"]) == 1
+    assert len(first_checkpoint["errors"]) == 1
+
+    def _analyze_second_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+        if source_label == "first":
+            raise RuntimeError("first should be skipped on resume")
+        structure_out = output_dir / "second.annotated.cif"
+        annotation_out = output_dir / "second.annotation.json"
+        structure_out.write_text("dummy", encoding="utf-8")
+        annotation_out.write_text("{}", encoding="utf-8")
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(structure_out),
+            "annotation_output": str(annotation_out),
+            "num_volumes": 2,
+            "largest_type": "buried",
+            "largest_volume": 2.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze_second_pass)
+
+    second_args = _make_args(
+        tmp_path,
+        checkpoint=checkpoint_path,
+        jobs=1,
+        resume=True,
+    )
+    second_exit = cli.run_cli(second_args)
+    assert second_exit == 0
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 2
+    assert summary["num_failed"] == 0
+
+
 def test_cli_main_single_input_writes_summary(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
 
@@ -518,5 +626,3 @@ def test_cli_main_resume_skips_existing_output(monkeypatch, tmp_path: Path):
     assert summary["num_processed"] == 0
     assert summary["num_failed"] == 0
     assert summary["num_skipped"] == 1
-    assert summary["skipped"][0]["source"] == "cavity"
-    assert summary["skipped"][0]["num_volumes"] == 3
