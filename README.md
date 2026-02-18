@@ -91,6 +91,12 @@ Replay that exact set later:
 volumizer analyze --manifest out/cluster.manifest.json --output-dir out-rerun
 ```
 
+Replay only failed structures from a previous summary:
+
+```bash
+volumizer analyze --from-summary out/run.summary.json --only failed --output-dir out-retry
+```
+
 Inspect metadata cache entries:
 
 ```bash
@@ -119,6 +125,7 @@ Cluster filtering defaults:
 - Structured progress events can be written with `--progress-jsonl <path>` (JSON Lines format)
 - Cluster runs can emit selected/rejected structure manifests with `--write-manifest <path>`
 - Analyze runs can replay any manifest with `--manifest <path>` (entries support `pdb_id` and/or `input_path`)
+- Analyze runs can also replay structures from a prior `run.summary.json` using `--from-summary <path> --only failed|skipped|planned|all`
 
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms

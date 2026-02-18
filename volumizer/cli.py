@@ -248,6 +248,23 @@ def build_parser() -> argparse.ArgumentParser:
             "(from `cluster --write-manifest` or custom)."
         ),
     )
+    analyze_source_group.add_argument(
+        "--from-summary",
+        type=Path,
+        help=(
+            "Path to an existing run.summary.json to replay selected "
+            "structures."
+        ),
+    )
+    analyze_parser.add_argument(
+        "--only",
+        choices=("failed", "skipped", "planned", "all"),
+        default="failed",
+        help=(
+            "Used with --from-summary to select which entries to replay "
+            "(default: failed)."
+        ),
+    )
     _add_common_analysis_args(analyze_parser)
     analyze_parser.set_defaults(
         command="analyze",
@@ -272,6 +289,8 @@ def build_parser() -> argparse.ArgumentParser:
         input=None,
         pdb_id=None,
         manifest=None,
+        from_summary=None,
+        only="failed",
     )
 
     cache_parser = subparsers.add_parser(
@@ -536,6 +555,77 @@ def _resolve_manifest_structures(
     return structures
 
 
+def _resolve_summary_input_path(raw_input_path: str, summary_path: Path) -> Path:
+    input_path = Path(raw_input_path)
+    if input_path.is_absolute():
+        return input_path
+
+    if input_path.is_file():
+        return input_path
+
+    return summary_path.parent / input_path
+
+
+def _load_structures_from_summary(
+    summary_path: Path,
+    only: str,
+) -> list[tuple[str, Path]]:
+    if not summary_path.is_file():
+        raise FileNotFoundError(f"Summary file does not exist: {summary_path}")
+
+    try:
+        payload = json.loads(summary_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid summary JSON: {summary_path}: {error}") from error
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Summary root must be a JSON object: {summary_path}")
+
+    section_by_only = {
+        "failed": "errors",
+        "skipped": "skipped",
+        "planned": "planned",
+    }
+    if only == "all":
+        selected_sections = ("errors", "skipped", "planned", "results")
+    else:
+        selected_sections = (section_by_only[only],)
+
+    structures: list[tuple[str, Path]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for section in selected_sections:
+        section_entries = payload.get(section, [])
+        if not isinstance(section_entries, list):
+            raise ValueError(
+                f"Summary section `{section}` must be a list: {summary_path}"
+            )
+
+        for entry in section_entries:
+            if not isinstance(entry, dict):
+                continue
+
+            raw_source = entry.get("source")
+            raw_input_path = entry.get("input_path")
+            if not isinstance(raw_source, str) or not isinstance(raw_input_path, str):
+                continue
+
+            source_label = _sanitize_label(raw_source)
+            input_path = _resolve_summary_input_path(raw_input_path, summary_path)
+            key = (source_label, str(input_path))
+            if key in seen:
+                continue
+            seen.add(key)
+            structures.append((source_label, input_path))
+
+    if len(structures) == 0:
+        raise RuntimeError(
+            f"No structures selected from summary for --only {only}: {summary_path}"
+        )
+
+    return structures
+
+
 def _write_cluster_manifest(
     manifest_path: Path,
     args: argparse.Namespace,
@@ -634,6 +724,10 @@ def _make_checkpoint_signature(
         "input": str(args.input) if args.input is not None else None,
         "pdb_id": args.pdb_id,
         "manifest": str(args.manifest) if args.manifest is not None else None,
+        "from_summary": (
+            str(args.from_summary) if args.from_summary is not None else None
+        ),
+        "from_summary_only": args.only if args.from_summary is not None else None,
         "cluster_identity": args.cluster_identity,
         "max_structures": args.max_structures,
         "cluster_method_filters": cluster_method_filters,
@@ -1155,6 +1249,17 @@ def resolve_input_structures(
         if not input_path.is_file():
             raise FileNotFoundError(f"Input structure does not exist: {input_path}")
         return [(_sanitize_label(input_path.stem), input_path)]
+
+    if args.from_summary is not None:
+        summary_path = Path(args.from_summary)
+        summary_structures = _load_structures_from_summary(summary_path, args.only)
+        for _, input_path in summary_structures:
+            if not input_path.is_file():
+                raise FileNotFoundError(
+                    "Summary replay input structure does not exist: "
+                    f"{input_path}"
+                )
+        return summary_structures
 
     if args.manifest is not None:
         manifest_path = Path(args.manifest)
@@ -1722,6 +1827,10 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "input": str(args.input) if args.input is not None else None,
             "pdb_id": args.pdb_id,
             "manifest": str(args.manifest) if args.manifest is not None else None,
+            "from_summary": (
+                str(args.from_summary) if args.from_summary is not None else None
+            ),
+            "from_summary_only": args.only if args.from_summary is not None else None,
             "cluster_identity": args.cluster_identity,
             "max_structures": args.max_structures,
             "cluster_method_filters": cluster_method_filters,

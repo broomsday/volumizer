@@ -16,6 +16,8 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "input": None,
         "pdb_id": None,
         "manifest": None,
+        "from_summary": None,
+        "only": "failed",
         "cluster_identity": None,
         "output_dir": tmp_path,
         "download_dir": None,
@@ -196,6 +198,67 @@ def test_resolve_cluster_identity_writes_manifest(monkeypatch, tmp_path: Path):
         and rejection.get("reason") == "experimental_method"
         for rejection in payload["rejections"]
     )
+
+
+def test_resolve_input_structures_for_from_summary_failed(tmp_path: Path):
+    previous_dir = tmp_path / "previous"
+    downloads_dir = previous_dir / "downloads"
+    downloads_dir.mkdir(parents=True)
+
+    failed_path = downloads_dir / "1ABC.cif"
+    failed_path.write_text("dummy", encoding="utf-8")
+    ok_path = downloads_dir / "2DEF.cif"
+    ok_path.write_text("dummy", encoding="utf-8")
+
+    summary_path = previous_dir / "run.summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "errors": [{"source": "1abc", "input_path": "downloads/1ABC.cif"}],
+                "results": [{"source": "2def", "input_path": "downloads/2DEF.cif"}],
+                "skipped": [],
+                "planned": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        from_summary=summary_path,
+        only="failed",
+    )
+    resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
+    assert resolved == [("1abc", failed_path)]
+
+
+def test_resolve_input_structures_for_from_summary_missing_input_raises(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "errors": [{"source": "1abc", "input_path": "downloads/1ABC.cif"}],
+                "results": [],
+                "skipped": [],
+                "planned": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        from_summary=summary_path,
+        only="failed",
+    )
+
+    try:
+        cli.resolve_input_structures(args, tmp_path, tmp_path)
+        assert False, "expected FileNotFoundError"
+    except FileNotFoundError as error:
+        assert "Summary replay input structure does not exist" in str(error)
 
 
 def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Path):
@@ -800,6 +863,43 @@ def test_cli_main_analyze_manifest_subcommand_writes_summary(monkeypatch, tmp_pa
     assert summary_path.is_file()
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["config"]["manifest"] == str(manifest_path)
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 0
+
+
+def test_cli_main_analyze_from_summary_failed_writes_summary(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
+
+    summary_path = tmp_path / "previous.summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "errors": [{"source": "failed-cavity", "input_path": str(TEST_PDB)}],
+                "results": [{"source": "ok-cavity", "input_path": str(TEST_PDB)}],
+                "skipped": [],
+                "planned": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = cli.main(
+        [
+            "analyze",
+            "--from-summary",
+            str(summary_path),
+            "--only",
+            "failed",
+            "--output-dir",
+            str(tmp_path),
+            "--overwrite",
+        ]
+    )
+    assert exit_code == 0
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["config"]["from_summary"] == str(summary_path)
+    assert summary["config"]["from_summary_only"] == "failed"
     assert summary["num_processed"] == 1
     assert summary["num_failed"] == 0
 
