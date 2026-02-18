@@ -11,6 +11,8 @@ TEST_PDB = TEST_DIR / "pdbs" / "cavity.pdb"
 
 def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
     defaults = {
+        "command": "analyze",
+        "cache_command": None,
         "input": None,
         "pdb_id": None,
         "cluster_identity": None,
@@ -43,6 +45,20 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def test_normalize_argv_for_subcommands_infers_analyze():
+    normalized = cli._normalize_argv_for_subcommands(
+        ["--input", "input.cif", "--output-dir", "out"]
+    )
+    assert normalized[0] == "analyze"
+
+
+def test_normalize_argv_for_subcommands_infers_cluster():
+    normalized = cli._normalize_argv_for_subcommands(
+        ["--cluster-identity", "30", "--output-dir", "out"]
+    )
+    assert normalized[0] == "cluster"
+
+
 def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
     out_path = tmp_path / "1ABC.cif"
     out_path.write_text("dummy", encoding="utf-8")
@@ -53,7 +69,7 @@ def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
         lambda pdb_id, output_dir, overwrite=False, timeout=60.0, retries=0, retry_delay=1.0: out_path,
     )
 
-    args = _make_args(tmp_path, pdb_id="1abc")
+    args = _make_args(tmp_path, command="analyze", pdb_id="1abc")
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", out_path)]
 
@@ -68,7 +84,7 @@ def test_resolve_input_structures_for_pdb_id_dry_run_skips_download(
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not download")),
     )
 
-    args = _make_args(tmp_path, pdb_id="1abc", dry_run=True)
+    args = _make_args(tmp_path, command="analyze", pdb_id="1abc", dry_run=True)
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
 
@@ -107,7 +123,7 @@ def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Pa
 
     monkeypatch.setattr(rcsb, "download_structure_cif", _download)
 
-    args = _make_args(tmp_path, cluster_identity=30)
+    args = _make_args(tmp_path, command="cluster", cluster_identity=30)
 
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert len(resolved) == 2
@@ -152,7 +168,7 @@ def test_resolve_cluster_identity_default_method_filter_excludes_nmr(
 
     monkeypatch.setattr(rcsb, "download_structure_cif", _download)
 
-    args = _make_args(tmp_path, cluster_identity=30)
+    args = _make_args(tmp_path, command="cluster", cluster_identity=30)
 
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
@@ -194,6 +210,7 @@ def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: P
 
     args = _make_args(
         tmp_path,
+        command="cluster",
         cluster_identity=30,
         cluster_method=["em"],
         cluster_max_resolution=2.5,
@@ -247,6 +264,7 @@ def test_resolve_cluster_identity_uses_metadata_cache(monkeypatch, tmp_path: Pat
 
     args = _make_args(
         tmp_path,
+        command="cluster",
         cluster_identity=30,
         metadata_cache=cache_path,
         jobs=2,
@@ -313,6 +331,7 @@ def test_resolve_cluster_identity_uses_negative_metadata_cache(monkeypatch, tmp_
 
     args = _make_args(
         tmp_path,
+        command="cluster",
         cluster_identity=30,
         metadata_cache=cache_path,
         max_structures=2,
@@ -364,6 +383,7 @@ def test_resolve_cluster_identity_updates_negative_cache_on_permanent_failure(
 
     args = _make_args(
         tmp_path,
+        command="cluster",
         cluster_identity=30,
         metadata_cache=cache_path,
         max_structures=1,
@@ -401,7 +421,7 @@ def test_analyze_structure_file_writes_cif_and_json(tmp_path: Path):
 
 
 def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_path: Path):
-    args = _make_args(tmp_path, jobs=2)
+    args = _make_args(tmp_path, command="analyze", jobs=2)
 
     monkeypatch.setattr(
         cli,
@@ -435,7 +455,7 @@ def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_pa
 
 
 def test_run_cli_dry_run_writes_plan_and_skips_analysis(monkeypatch, tmp_path: Path):
-    args = _make_args(tmp_path, dry_run=True)
+    args = _make_args(tmp_path, command="analyze", dry_run=True)
 
     monkeypatch.setattr(
         cli,
@@ -465,7 +485,12 @@ def test_run_cli_dry_run_writes_plan_and_skips_analysis(monkeypatch, tmp_path: P
 
 def test_run_cli_writes_progress_jsonl_events(monkeypatch, tmp_path: Path):
     progress_path = tmp_path / "run.progress.jsonl"
-    args = _make_args(tmp_path, dry_run=True, progress_jsonl=progress_path)
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        dry_run=True,
+        progress_jsonl=progress_path,
+    )
 
     monkeypatch.setattr(
         cli,
@@ -525,6 +550,7 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
 
     first_args = _make_args(
         tmp_path,
+        command="analyze",
         checkpoint=checkpoint_path,
         jobs=1,
         fail_fast=True,
@@ -557,6 +583,7 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
 
     second_args = _make_args(
         tmp_path,
+        command="analyze",
         checkpoint=checkpoint_path,
         jobs=1,
         resume=True,
@@ -569,7 +596,104 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
     assert summary["num_failed"] == 0
 
 
-def test_cli_main_single_input_writes_summary(monkeypatch, tmp_path: Path):
+def test_cache_subcommand_inspect_and_clear_negative(tmp_path: Path):
+    cache_path = tmp_path / "metadata-cache.json"
+    cache_path.write_text(
+        json.dumps(
+            {
+                "cache_format": 2,
+                "entries": {"1ABC": {"dummy": 1}},
+                "negative_entries": {"2DEF": {"status_code": 404}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    inspect_exit = cli.main(
+        [
+            "cache",
+            "inspect",
+            "--metadata-cache",
+            str(cache_path),
+        ]
+    )
+    assert inspect_exit == 0
+
+    clear_exit = cli.main(
+        [
+            "cache",
+            "clear-negative",
+            "--metadata-cache",
+            str(cache_path),
+        ]
+    )
+    assert clear_exit == 0
+
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert payload["negative_entries"] == {}
+
+
+def test_cli_main_analyze_subcommand_writes_summary(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
+
+    exit_code = cli.main(
+        [
+            "analyze",
+            "--input",
+            str(TEST_PDB),
+            "--output-dir",
+            str(tmp_path),
+            "--overwrite",
+        ]
+    )
+    assert exit_code == 0
+
+    summary_path = tmp_path / "run.summary.json"
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 0
+    assert summary["num_skipped"] == 0
+
+
+def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_cluster_representative_entry_ids",
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
+            "1ABC"
+        ],
+    )
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_entry_metadata",
+        lambda pdb_id, timeout=60.0, retries=0, retry_delay=1.0: {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+    )
+
+    exit_code = cli.main(
+        [
+            "cluster",
+            "--cluster-identity",
+            "30",
+            "--output-dir",
+            str(tmp_path),
+            "--dry-run",
+        ]
+    )
+    assert exit_code == 0
+
+    summary_path = tmp_path / "run.summary.json"
+    assert summary_path.is_file()
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["config"]["command"] == "cluster"
+    assert summary["num_processed"] == 0
+    assert summary["num_planned"] == 1
+
+
+def test_cli_main_legacy_single_input_writes_summary(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
 
     exit_code = cli.main(
@@ -612,6 +736,7 @@ def test_cli_main_resume_skips_existing_output(monkeypatch, tmp_path: Path):
 
     exit_code = cli.main(
         [
+            "analyze",
             "--input",
             str(TEST_PDB),
             "--output-dir",

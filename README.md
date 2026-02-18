@@ -52,32 +52,47 @@ The package now includes a CLI entrypoint: `volumizer`.
 Analyze a local structure file:
 
 ```bash
-volumizer --input my_structure.cif --output-dir out
+volumizer analyze --input my_structure.cif --output-dir out
 ```
 
 Analyze one PDB ID (downloaded from RCSB as CIF):
 
 ```bash
-volumizer --pdb-id 4JPN --output-dir out
+volumizer analyze --pdb-id 4JPN --output-dir out
 ```
 
 Analyze cluster representatives for an identity threshold:
 
 ```bash
-volumizer --cluster-identity 30 --max-structures 25 --output-dir out
+volumizer cluster --cluster-identity 30 --max-structures 25 --output-dir out
 ```
 
 Resume a previous run (skip entries that already have both output files):
 
 ```bash
-volumizer --cluster-identity 30 --max-structures 25 --output-dir out --resume
+volumizer cluster --cluster-identity 30 --max-structures 25 --output-dir out --resume
 ```
 
 Preview selection/filtering without downloading structures or running analysis:
 
 ```bash
-volumizer --cluster-identity 30 --max-structures 25 --output-dir out --dry-run
+volumizer cluster --cluster-identity 30 --max-structures 25 --output-dir out --dry-run
 ```
+
+Inspect metadata cache entries:
+
+```bash
+volumizer cache inspect --metadata-cache out/entry_metadata_cache.json
+```
+
+Clear only negative cache entries (e.g. permanent 404 metadata failures):
+
+```bash
+volumizer cache clear-negative --metadata-cache out/entry_metadata_cache.json
+```
+
+Legacy compatibility:
+- Existing flag-only invocations still work (`volumizer --input ...`, `volumizer --cluster-identity ...`) and are auto-routed to `analyze` or `cluster`.
 
 Cluster filtering defaults:
 - Methods: X-ray + cryo-EM (RCSB method labels `X-RAY DIFFRACTION` and `ELECTRON MICROSCOPY`)

@@ -26,38 +26,7 @@ def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def build_parser() -> argparse.ArgumentParser:
-    """
-    Build CLI argument parser.
-    """
-    parser = argparse.ArgumentParser(
-        prog="volumizer",
-        description=(
-            "Analyze one or more structures and write annotated CIF + JSON outputs."
-        ),
-    )
-
-    source_group = parser.add_mutually_exclusive_group(required=True)
-    source_group.add_argument(
-        "--input",
-        type=Path,
-        help="Path to a local input structure file (.pdb, .cif, .mmtf, etc.).",
-    )
-    source_group.add_argument(
-        "--pdb-id",
-        type=str,
-        help="Single PDB ID to download from RCSB and analyze.",
-    )
-    source_group.add_argument(
-        "--cluster-identity",
-        type=int,
-        choices=sorted(rcsb.VALID_CLUSTER_IDENTITIES),
-        help=(
-            "RCSB sequence identity threshold for representative cluster download "
-            "(e.g. 30, 50, 90)."
-        ),
-    )
-
+def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -70,54 +39,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Directory for downloaded RCSB structures (defaults to <output-dir>/downloads).",
     )
-    parser.add_argument(
-        "--max-structures",
-        type=int,
-        default=None,
-        help="Optional cap when using --cluster-identity.",
-    )
-
-    cluster_method_group = parser.add_mutually_exclusive_group()
-    cluster_method_group.add_argument(
-        "--cluster-method",
-        action="append",
-        default=None,
-        metavar="METHOD",
-        help=(
-            "Allowed method filter(s) for --cluster-identity. Repeatable. "
-            "Supported aliases: xray|x-ray, em|cryo-em, nmr, neutron. "
-            "Default: xray + em."
-        ),
-    )
-    cluster_method_group.add_argument(
-        "--cluster-allow-all-methods",
-        action="store_true",
-        help="Disable method filtering when using --cluster-identity.",
-    )
-    parser.add_argument(
-        "--cluster-max-resolution",
-        type=float,
-        default=None,
-        help=(
-            "Optional max best-resolution (Angstrom) filter for --cluster-identity. "
-            "Entries missing resolution are excluded when this is set."
-        ),
-    )
-    parser.add_argument(
-        "--metadata-cache",
-        type=Path,
-        default=None,
-        help=(
-            "Path for cluster entry-metadata cache JSON "
-            f"(default: <output-dir>/{DEFAULT_METADATA_CACHE_FILENAME})."
-        ),
-    )
-    parser.add_argument(
-        "--no-metadata-cache",
-        action="store_true",
-        help="Disable metadata-cache read/write for --cluster-identity runs.",
-    )
-
     parser.add_argument(
         "--resolution",
         type=float,
@@ -181,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
     write_group.add_argument(
         "--resume",
         action="store_true",
-        help="Skip structures that already have both output files.",
+        help="Skip already completed structures (by checkpoint and/or output files).",
     )
 
     checkpoint_group = parser.add_mutually_exclusive_group()
@@ -220,7 +141,177 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stop on first structure-level processing failure.",
     )
 
+
+def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--cluster-identity",
+        type=int,
+        required=True,
+        choices=sorted(rcsb.VALID_CLUSTER_IDENTITIES),
+        help=(
+            "RCSB sequence identity threshold for representative cluster download "
+            "(e.g. 30, 50, 90)."
+        ),
+    )
+    parser.add_argument(
+        "--max-structures",
+        type=int,
+        default=None,
+        help="Optional cap for selected cluster representatives.",
+    )
+
+    cluster_method_group = parser.add_mutually_exclusive_group()
+    cluster_method_group.add_argument(
+        "--cluster-method",
+        action="append",
+        default=None,
+        metavar="METHOD",
+        help=(
+            "Allowed method filter(s). Repeatable. "
+            "Supported aliases: xray|x-ray, em|cryo-em, nmr, neutron. "
+            "Default: xray + em."
+        ),
+    )
+    cluster_method_group.add_argument(
+        "--cluster-allow-all-methods",
+        action="store_true",
+        help="Disable method filtering for cluster selection.",
+    )
+    parser.add_argument(
+        "--cluster-max-resolution",
+        type=float,
+        default=None,
+        help=(
+            "Optional max best-resolution (Angstrom) filter. "
+            "Entries missing resolution are excluded when set."
+        ),
+    )
+    parser.add_argument(
+        "--metadata-cache",
+        type=Path,
+        default=None,
+        help=(
+            "Path for cluster entry-metadata cache JSON "
+            f"(default: <output-dir>/{DEFAULT_METADATA_CACHE_FILENAME})."
+        ),
+    )
+    parser.add_argument(
+        "--no-metadata-cache",
+        action="store_true",
+        help="Disable metadata-cache read/write for cluster runs.",
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """
+    Build CLI argument parser.
+    """
+    parser = argparse.ArgumentParser(
+        prog="volumizer",
+        description=(
+            "Analyze one or more structures and write annotated CIF + JSON outputs."
+        ),
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Analyze a local structure file or one PDB ID.",
+    )
+    analyze_source_group = analyze_parser.add_mutually_exclusive_group(required=True)
+    analyze_source_group.add_argument(
+        "--input",
+        type=Path,
+        help="Path to a local input structure file (.pdb, .cif, .mmtf, etc.).",
+    )
+    analyze_source_group.add_argument(
+        "--pdb-id",
+        type=str,
+        help="Single PDB ID to download from RCSB and analyze.",
+    )
+    _add_common_analysis_args(analyze_parser)
+    analyze_parser.set_defaults(
+        command="analyze",
+        cluster_identity=None,
+        max_structures=None,
+        cluster_method=None,
+        cluster_allow_all_methods=False,
+        cluster_max_resolution=None,
+        metadata_cache=None,
+        no_metadata_cache=False,
+    )
+
+    cluster_parser = subparsers.add_parser(
+        "cluster",
+        help="Select and analyze cluster representatives from RCSB.",
+    )
+    _add_cluster_args(cluster_parser)
+    _add_common_analysis_args(cluster_parser)
+    cluster_parser.set_defaults(
+        command="cluster",
+        input=None,
+        pdb_id=None,
+    )
+
+    cache_parser = subparsers.add_parser(
+        "cache",
+        help="Inspect or mutate metadata cache files.",
+    )
+    cache_subparsers = cache_parser.add_subparsers(dest="cache_command")
+    cache_subparsers.required = True
+
+    cache_inspect_parser = cache_subparsers.add_parser(
+        "inspect",
+        help="Print metadata cache summary.",
+    )
+    cache_inspect_parser.add_argument(
+        "--metadata-cache",
+        type=Path,
+        required=True,
+        help="Path to metadata cache JSON.",
+    )
+
+    cache_clear_negative_parser = cache_subparsers.add_parser(
+        "clear-negative",
+        help="Remove negative metadata-cache entries in place.",
+    )
+    cache_clear_negative_parser.add_argument(
+        "--metadata-cache",
+        type=Path,
+        required=True,
+        help="Path to metadata cache JSON.",
+    )
+
     return parser
+
+
+def _normalize_argv_for_subcommands(argv_list: list[str]) -> list[str]:
+    if len(argv_list) == 0:
+        return argv_list
+
+    known_subcommands = {"analyze", "cluster", "cache", "-h", "--help"}
+    first = argv_list[0]
+    if first in known_subcommands:
+        return argv_list
+
+    if first.startswith("-"):
+        cluster_markers = {
+            "--cluster-identity",
+            "--cluster-method",
+            "--cluster-allow-all-methods",
+            "--cluster-max-resolution",
+            "--metadata-cache",
+            "--no-metadata-cache",
+        }
+        inferred_command = (
+            "cluster"
+            if any(marker in argv_list for marker in cluster_markers)
+            else "analyze"
+        )
+        return [inferred_command, *argv_list]
+
+    return argv_list
 
 
 def _sanitize_label(label: str) -> str:
@@ -345,6 +436,7 @@ def _make_checkpoint_signature(
     metadata_cache_path: Path | None,
 ) -> dict:
     return {
+        "command": args.command,
         "input": str(args.input) if args.input is not None else None,
         "pdb_id": args.pdb_id,
         "cluster_identity": args.cluster_identity,
@@ -1122,9 +1214,14 @@ def _plan_dry_run(
     planned_now = 0
 
     for source_label, input_path in structures:
+        if args.resume and tracker.has_result(source_label):
+            print(
+                f"skipping {source_label}: already completed in checkpoint (--resume)",
+                file=sys.stderr,
+            )
+            continue
+
         if args.resume and _has_complete_outputs(output_dir, source_label):
-            if tracker.has_result(source_label):
-                continue
             print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
             tracker.mark_skipped(
                 _build_resume_skip_entry(
@@ -1159,9 +1256,14 @@ def _analyze_structures(
 ) -> int:
     pending_structures: list[tuple[str, Path]] = []
     for source_label, input_path in structures:
+        if args.resume and tracker.has_result(source_label):
+            print(
+                f"skipping {source_label}: already completed in checkpoint (--resume)",
+                file=sys.stderr,
+            )
+            continue
+
         if args.resume and _has_complete_outputs(output_dir, source_label):
-            if tracker.has_result(source_label):
-                continue
             print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
             tracker.mark_skipped(
                 _build_resume_skip_entry(
@@ -1171,6 +1273,7 @@ def _analyze_structures(
                 )
             )
             continue
+
         pending_structures.append((source_label, input_path))
 
     analysis_workers = int(args.jobs)
@@ -1266,28 +1369,45 @@ def _analyze_structures(
     return analysis_workers
 
 
-def run_cli(args: argparse.Namespace) -> int:
-    """
-    Execute CLI command and return process status code.
-    """
+def _run_cache_command(args: argparse.Namespace) -> int:
+    cache_path = Path(args.metadata_cache)
+
+    if args.cache_command == "inspect":
+        entries, negative_entries = _load_metadata_cache(cache_path)
+        payload = {
+            "metadata_cache": str(cache_path),
+            "exists": cache_path.is_file(),
+            "entries": len(entries),
+            "negative_entries": len(negative_entries),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if args.cache_command == "clear-negative":
+        entries, negative_entries = _load_metadata_cache(cache_path)
+        removed = len(negative_entries)
+        if removed > 0:
+            _save_metadata_cache(
+                cache_path,
+                entries=entries,
+                negative_entries={},
+            )
+        print(
+            f"cleared {removed} negative cache entr{'y' if removed == 1 else 'ies'}: {cache_path}",
+            file=sys.stderr,
+        )
+        return 0
+
+    raise ValueError(f"Unknown cache command: {args.cache_command}")
+
+
+def _run_analysis_command(args: argparse.Namespace) -> int:
     if args.jobs < 1:
         raise ValueError("--jobs must be >= 1.")
     if args.retries < 0:
         raise ValueError("--retries must be >= 0.")
     if args.retry_delay < 0:
         raise ValueError("--retry-delay must be >= 0.")
-
-    if args.cluster_identity is None:
-        if args.cluster_method is not None:
-            raise ValueError("--cluster-method requires --cluster-identity.")
-        if args.cluster_allow_all_methods:
-            raise ValueError("--cluster-allow-all-methods requires --cluster-identity.")
-        if args.cluster_max_resolution is not None:
-            raise ValueError("--cluster-max-resolution requires --cluster-identity.")
-        if args.metadata_cache is not None:
-            raise ValueError("--metadata-cache requires --cluster-identity.")
-        if args.no_metadata_cache:
-            raise ValueError("--no-metadata-cache requires --cluster-identity.")
 
     if args.backend is not None:
         os.environ[native_backend.BACKEND_ENV] = args.backend
@@ -1306,7 +1426,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
     cluster_method_filters = None
     metadata_cache_path = None
-    if args.cluster_identity is not None:
+    if args.command == "cluster":
         cluster_method_filters = _resolve_cluster_method_filters(args)
         metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
 
@@ -1337,6 +1457,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
     summary = {
         "config": {
+            "command": args.command,
             "input": str(args.input) if args.input is not None else None,
             "pdb_id": args.pdb_id,
             "cluster_identity": args.cluster_identity,
@@ -1384,9 +1505,24 @@ def run_cli(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def run_cli(args: argparse.Namespace) -> int:
+    """
+    Execute CLI command and return process status code.
+    """
+    if args.command == "cache":
+        return _run_cache_command(args)
+    if args.command in {"analyze", "cluster"}:
+        return _run_analysis_command(args)
+    raise ValueError("No subcommand selected. Use: analyze, cluster, or cache.")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    normalized_argv = _normalize_argv_for_subcommands(raw_argv)
+
+    args = parser.parse_args(normalized_argv)
     try:
         return run_cli(args)
     except ValueError as error:

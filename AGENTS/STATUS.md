@@ -1,4 +1,4 @@
-# Migration Status Snapshot (2026-02-16)
+# Migration Status Snapshot (2026-02-18)
 
 ## Completed
 
@@ -22,7 +22,7 @@
 - Backend comparison benchmark report published in `AGENTS/PERFORMANCE_REPORT.md`.
 - Native optimization pass completed (batch fib expansion + neighbor-kernel rewrite) with updated benchmarks published.
 - Native CI workflow added for parity tests and lightweight performance regression checks.
-- CLI entrypoint added for local files, PDB-ID download, and cluster-representative runs with CIF + JSON outputs.
+- CLI subcommand interface added (`analyze`, `cluster`, `cache`) for local files, PDB-ID download, cluster-representative runs, and metadata-cache inspection/maintenance while keeping legacy flag-only invocation compatibility.
 - CLI resume mode and initial cluster selection filters added (default X-ray/cryo-EM method filter with optional method and resolution filters).
 - CLI parallel worker support added (`--jobs`) with network retry controls and entry-metadata caching for large cluster runs.
 - CLI dry-run mode added (`--dry-run`) plus negative metadata caching for permanent metadata failures (e.g. 404) to avoid repeat lookups.
