@@ -73,6 +73,12 @@ Resume a previous run (skip entries that already have both output files):
 volumizer --cluster-identity 30 --max-structures 25 --output-dir out --resume
 ```
 
+Preview selection/filtering without downloading structures or running analysis:
+
+```bash
+volumizer --cluster-identity 30 --max-structures 25 --output-dir out --dry-run
+```
+
 Cluster filtering defaults:
 - Methods: X-ray + cryo-EM (RCSB method labels `X-RAY DIFFRACTION` and `ELECTRON MICROSCOPY`)
 - Override with `--cluster-method` (repeatable), e.g. `--cluster-method xray --cluster-method neutron`
@@ -81,6 +87,7 @@ Cluster filtering defaults:
 - Parallel workers for metadata/download + analysis with `--jobs`, e.g. `--jobs 8`
 - Retry transient network errors with `--retries` and `--retry-delay`
 - Cluster metadata cache defaults to `<output-dir>/entry_metadata_cache.json`; override with `--metadata-cache` or disable with `--no-metadata-cache`
+- Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs
 
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms

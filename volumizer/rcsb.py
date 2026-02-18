@@ -18,6 +18,7 @@ RCSB_CLUSTER_URL_TEMPLATE = (
 RCSB_ENTRY_URL_TEMPLATE = "https://data.rcsb.org/rest/v1/core/entry/{pdb_id}"
 
 VALID_CLUSTER_IDENTITIES = frozenset([30, 40, 50, 70, 90, 95, 100])
+TERMINAL_HTTP_STATUS_CODES = frozenset([400, 401, 403, 404])
 
 EXPERIMENTAL_METHOD_FILTERS = {
     "xray": frozenset(["X-RAY DIFFRACTION"]),
@@ -28,6 +29,27 @@ EXPERIMENTAL_METHOD_FILTERS = {
 
 VALID_CLUSTER_METHOD_FILTERS = frozenset(EXPERIMENTAL_METHOD_FILTERS.keys())
 DEFAULT_CLUSTER_METHOD_FILTERS = ("xray", "em")
+
+
+class RCSBFetchError(RuntimeError):
+    """
+    Structured fetch failure for RCSB network calls.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        url: str,
+        status_code: int | None = None,
+        reason: str | None = None,
+        permanent: bool = False,
+    ):
+        super().__init__(message)
+        self.url = url
+        self.status_code = status_code
+        self.reason = reason
+        self.permanent = bool(permanent)
 
 
 def normalize_pdb_id(pdb_id: str) -> str:
@@ -88,21 +110,33 @@ def _download_bytes(
             with urlopen(url, timeout=timeout) as response:
                 return response.read()
         except HTTPError as error:
-            is_terminal = error.code in {400, 401, 403, 404}
+            status_code = int(error.code)
+            is_terminal = status_code in TERMINAL_HTTP_STATUS_CODES
             if attempt >= max_retries or is_terminal:
-                raise RuntimeError(
-                    f"HTTP error while fetching {url}: {error.code}"
+                raise RCSBFetchError(
+                    f"HTTP error while fetching {url}: {status_code}",
+                    url=url,
+                    status_code=status_code,
+                    reason=error.reason,
+                    permanent=is_terminal,
                 ) from error
         except URLError as error:
             if attempt >= max_retries:
-                raise RuntimeError(
-                    f"Network error while fetching {url}: {error.reason}"
+                raise RCSBFetchError(
+                    f"Network error while fetching {url}: {error.reason}",
+                    url=url,
+                    reason=str(error.reason),
+                    permanent=False,
                 ) from error
 
         if base_delay > 0:
             time.sleep(base_delay * (2**attempt))
 
-    raise RuntimeError(f"Failed to fetch {url}")
+    raise RCSBFetchError(
+        f"Failed to fetch {url}",
+        url=url,
+        permanent=False,
+    )
 
 
 def download_structure_cif(

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Sequence
 
@@ -16,6 +17,7 @@ from volumizer import native_backend, pdb, rcsb, utils, volumizer
 
 
 DEFAULT_METADATA_CACHE_FILENAME = "entry_metadata_cache.json"
+METADATA_CACHE_FORMAT_VERSION = 2
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -177,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Resolve and filter structure inputs, then write run summary without "
+            "downloading structure files or running volume analysis."
+        ),
+    )
+    parser.add_argument(
         "--fail-fast",
         action="store_true",
         help="Stop on first structure-level processing failure.",
@@ -236,6 +246,23 @@ def _build_resume_skip_entry(
     }
 
 
+def _build_dry_run_plan_entry(
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+) -> dict:
+    structure_output_path, annotation_output_path = _output_paths_for_label(
+        output_dir,
+        source_label,
+    )
+    return {
+        "source": source_label,
+        "input_path": str(input_path),
+        "structure_output": str(structure_output_path),
+        "annotation_output": str(annotation_output_path),
+    }
+
+
 def _resolve_cluster_method_filters(args: argparse.Namespace) -> list[str] | None:
     if args.cluster_allow_all_methods:
         return None
@@ -264,48 +291,119 @@ def _resolve_metadata_cache_path(
     return output_dir / DEFAULT_METADATA_CACHE_FILENAME
 
 
-def _load_metadata_cache(cache_path: Path | None) -> dict[str, dict]:
+def _load_metadata_cache(cache_path: Path | None) -> tuple[dict[str, dict], dict[str, dict]]:
     if cache_path is None or not cache_path.is_file():
-        return {}
+        return {}, {}
 
     try:
         raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {}
+        return {}, {}
 
     if not isinstance(raw_payload, dict):
-        return {}
+        return {}, {}
 
-    cache: dict[str, dict] = {}
-    for key, value in raw_payload.items():
+    if "entries" in raw_payload or "negative_entries" in raw_payload:
+        raw_entries = raw_payload.get("entries")
+        raw_negative_entries = raw_payload.get("negative_entries")
+    else:
+        # Backward compatibility: older cache format stored only positive entries.
+        raw_entries = raw_payload
+        raw_negative_entries = {}
+
+    if not isinstance(raw_entries, dict):
+        raw_entries = {}
+    if not isinstance(raw_negative_entries, dict):
+        raw_negative_entries = {}
+
+    entries: dict[str, dict] = {}
+    negative_entries: dict[str, dict] = {}
+
+    for key, value in raw_entries.items():
         if not isinstance(key, str) or not isinstance(value, dict):
             continue
         try:
             normalized_key = rcsb.normalize_pdb_id(key)
         except ValueError:
             continue
-        cache[normalized_key] = value
+        entries[normalized_key] = value
 
-    return cache
+    for key, value in raw_negative_entries.items():
+        if not isinstance(key, str) or not isinstance(value, dict):
+            continue
+        try:
+            normalized_key = rcsb.normalize_pdb_id(key)
+        except ValueError:
+            continue
+        negative_entries[normalized_key] = value
+
+    return entries, negative_entries
 
 
-def _save_metadata_cache(cache_path: Path, cache_payload: dict[str, dict]) -> None:
+def _save_metadata_cache(
+    cache_path: Path,
+    entries: dict[str, dict],
+    negative_entries: dict[str, dict],
+) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "cache_format": METADATA_CACHE_FORMAT_VERSION,
+        "entries": dict(sorted(entries.items())),
+        "negative_entries": dict(sorted(negative_entries.items())),
+    }
     cache_path.write_text(
-        json.dumps(dict(sorted(cache_payload.items())), indent=2),
+        json.dumps(payload, indent=2),
         encoding="utf-8",
     )
+
+
+def _extract_status_code_from_error_message(error: Exception) -> int | None:
+    match = re.search(r"\b([1-5][0-9]{2})\b", str(error))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _is_permanent_metadata_error(error: Exception) -> tuple[bool, int | None]:
+    if isinstance(error, rcsb.RCSBFetchError):
+        status_code = error.status_code
+        is_permanent = bool(error.permanent)
+        if status_code in rcsb.TERMINAL_HTTP_STATUS_CODES:
+            is_permanent = True
+        return is_permanent, status_code
+
+    status_code = _extract_status_code_from_error_message(error)
+    if status_code in rcsb.TERMINAL_HTTP_STATUS_CODES:
+        return True, status_code
+
+    return False, status_code
+
+
+def _build_negative_cache_entry(
+    error: Exception,
+    status_code: int | None,
+) -> dict:
+    return {
+        "reason": "permanent_metadata_error",
+        "status_code": status_code,
+        "error": str(error),
+    }
 
 
 def _fetch_metadata_for_ids(
     representative_ids: list[str],
     args: argparse.Namespace,
-) -> tuple[dict[str, dict], int]:
+    negative_entries: dict[str, dict],
+) -> tuple[dict[str, dict], int, int]:
     fetched: dict[str, dict] = {}
     errors = 0
+    negative_updates = 0
 
     if len(representative_ids) == 0:
-        return fetched, errors
+        return fetched, errors, negative_updates
 
     if args.jobs <= 1:
         for representative_id in representative_ids:
@@ -318,13 +416,20 @@ def _fetch_metadata_for_ids(
                 )
             except Exception as error:
                 errors += 1
+                is_permanent, status_code = _is_permanent_metadata_error(error)
+                if is_permanent:
+                    negative_entries[representative_id] = _build_negative_cache_entry(
+                        error,
+                        status_code,
+                    )
+                    negative_updates += 1
                 print(
                     f"metadata error for {representative_id}: {error}",
                     file=sys.stderr,
                 )
                 if args.fail_fast:
                     raise
-        return fetched, errors
+        return fetched, errors, negative_updates
 
     max_workers = min(args.jobs, len(representative_ids))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -345,6 +450,13 @@ def _fetch_metadata_for_ids(
                 fetched[representative_id] = future.result()
             except Exception as error:
                 errors += 1
+                is_permanent, status_code = _is_permanent_metadata_error(error)
+                if is_permanent:
+                    negative_entries[representative_id] = _build_negative_cache_entry(
+                        error,
+                        status_code,
+                    )
+                    negative_updates += 1
                 print(
                     f"metadata error for {representative_id}: {error}",
                     file=sys.stderr,
@@ -352,7 +464,7 @@ def _fetch_metadata_for_ids(
                 if args.fail_fast:
                     raise
 
-    return fetched, errors
+    return fetched, errors, negative_updates
 
 
 def _download_cluster_structures(
@@ -441,6 +553,9 @@ def resolve_input_structures(
         if args.resume and _has_complete_outputs(output_dir, source_label):
             return [(source_label, download_dir / f"{normalized_id}.cif")]
 
+        if args.dry_run:
+            return [(source_label, download_dir / f"{normalized_id}.cif")]
+
         structure_path = rcsb.download_structure_cif(
             normalized_id,
             output_dir=download_dir,
@@ -454,7 +569,7 @@ def resolve_input_structures(
     if args.cluster_identity is not None:
         cluster_method_filters = _resolve_cluster_method_filters(args)
         metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
-        metadata_cache = _load_metadata_cache(metadata_cache_path)
+        metadata_entries, negative_entries = _load_metadata_cache(metadata_cache_path)
 
         representative_ids = rcsb.fetch_cluster_representative_entry_ids(
             identity=args.cluster_identity,
@@ -480,8 +595,10 @@ def resolve_input_structures(
         filtered_missing_resolution = 0
         metadata_errors = 0
         cache_hits = 0
+        negative_cache_hits = 0
         cache_misses = 0
         cache_updates = 0
+        negative_cache_updates = 0
 
         batch_size = max(1, int(args.jobs))
         for batch_start in range(0, len(representative_ids), batch_size):
@@ -493,19 +610,35 @@ def resolve_input_structures(
             missing_ids: list[str] = []
 
             for representative_id in batch_ids:
-                cached_metadata = metadata_cache.get(representative_id)
+                cached_metadata = metadata_entries.get(representative_id)
                 if isinstance(cached_metadata, dict):
                     batch_metadata[representative_id] = cached_metadata
                     cache_hits += 1
-                else:
-                    cache_misses += 1
-                    missing_ids.append(representative_id)
+                    continue
 
-            fetched_metadata, batch_errors = _fetch_metadata_for_ids(missing_ids, args)
+                cached_negative = negative_entries.get(representative_id)
+                if isinstance(cached_negative, dict):
+                    negative_cache_hits += 1
+                    continue
+
+                cache_misses += 1
+                missing_ids.append(representative_id)
+
+            (
+                fetched_metadata,
+                batch_errors,
+                batch_negative_updates,
+            ) = _fetch_metadata_for_ids(
+                missing_ids,
+                args,
+                negative_entries,
+            )
             metadata_errors += batch_errors
+            negative_cache_updates += batch_negative_updates
+
             for representative_id, metadata in fetched_metadata.items():
                 batch_metadata[representative_id] = metadata
-                metadata_cache[representative_id] = metadata
+                metadata_entries[representative_id] = metadata
                 cache_updates += 1
 
             for representative_id in batch_ids:
@@ -533,8 +666,14 @@ def resolve_input_structures(
 
                 selected_ids.append(representative_id)
 
-        if metadata_cache_path is not None and cache_updates > 0:
-            _save_metadata_cache(metadata_cache_path, metadata_cache)
+        if metadata_cache_path is not None and (
+            cache_updates > 0 or negative_cache_updates > 0
+        ):
+            _save_metadata_cache(
+                metadata_cache_path,
+                entries=metadata_entries,
+                negative_entries=negative_entries,
+            )
 
         if len(selected_ids) == 0:
             raise RuntimeError(
@@ -558,14 +697,22 @@ def resolve_input_structures(
             f"methods={method_label}, "
             f"max_resolution={args.cluster_max_resolution}, "
             f"cache_hits={cache_hits}, "
+            f"negative_cache_hits={negative_cache_hits}, "
             f"cache_misses={cache_misses}, "
             f"cache_updates={cache_updates}, "
+            f"negative_cache_updates={negative_cache_updates}, "
             f"filtered_by_method={filtered_by_method}, "
             f"filtered_by_resolution={filtered_by_resolution}, "
             f"missing_resolution={filtered_missing_resolution}, "
             f"metadata_errors={metadata_errors}",
             file=sys.stderr,
         )
+
+        if args.dry_run:
+            return [
+                (_sanitize_label(representative_id), download_dir / f"{representative_id}.cif")
+                for representative_id in selected_ids
+            ]
 
         downloaded_paths = _download_cluster_structures(
             selected_ids,
@@ -661,6 +808,43 @@ def analyze_structure_file(
         "largest_type": payload["largest_type"],
         "largest_volume": payload["largest_volume"],
     }
+
+
+def _plan_dry_run(
+    structures: list[tuple[str, Path]],
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> tuple[list[dict], list[dict]]:
+    planned: list[dict] = []
+    skipped: list[dict] = []
+
+    for source_label, input_path in structures:
+        if args.resume and _has_complete_outputs(output_dir, source_label):
+            print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
+            skipped.append(
+                _build_resume_skip_entry(
+                    source_label=source_label,
+                    input_path=input_path,
+                    output_dir=output_dir,
+                )
+            )
+            continue
+
+        planned.append(
+            _build_dry_run_plan_entry(
+                source_label=source_label,
+                input_path=input_path,
+                output_dir=output_dir,
+            )
+        )
+
+    if len(planned) > 0:
+        print(
+            f"dry-run selected {len(planned)} structure(s); no downloads/analysis executed.",
+            file=sys.stderr,
+        )
+
+    return planned, skipped
 
 
 def _analyze_structures(
@@ -814,11 +998,18 @@ def run_cli(args: argparse.Namespace) -> int:
 
     structures = resolve_input_structures(args, download_dir, output_dir)
 
-    results, errors, skipped, analysis_workers = _analyze_structures(
-        structures,
-        args,
-        output_dir,
-    )
+    planned: list[dict] = []
+    if args.dry_run:
+        planned, skipped = _plan_dry_run(structures, args, output_dir)
+        results: list[dict] = []
+        errors: list[dict] = []
+        analysis_workers = 0
+    else:
+        results, errors, skipped, analysis_workers = _analyze_structures(
+            structures,
+            args,
+            output_dir,
+        )
 
     cluster_method_filters = None
     metadata_cache_path = None
@@ -851,13 +1042,16 @@ def run_cli(args: argparse.Namespace) -> int:
             "retry_delay": args.retry_delay,
             "overwrite": args.overwrite,
             "resume": args.resume,
+            "dry_run": args.dry_run,
         },
         "num_processed": len(results),
         "num_failed": len(errors),
         "num_skipped": len(skipped),
+        "num_planned": len(planned),
         "results": results,
         "errors": errors,
         "skipped": skipped,
+        "planned": planned,
     }
 
     summary_path = output_dir / "run.summary.json"

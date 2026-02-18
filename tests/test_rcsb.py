@@ -97,7 +97,7 @@ def test_download_bytes_does_not_retry_terminal_http_error(monkeypatch):
 
     monkeypatch.setattr(rcsb, "urlopen", _fake_urlopen)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(rcsb.RCSBFetchError) as error_info:
         rcsb._download_bytes(
             "https://example.org/missing",
             retries=5,
@@ -105,6 +105,8 @@ def test_download_bytes_does_not_retry_terminal_http_error(monkeypatch):
         )
 
     assert attempts["count"] == 1
+    assert error_info.value.status_code == 404
+    assert error_info.value.permanent is True
 
 
 def test_parse_cluster_representative_entry_ids_filters_non_pdb_and_dedupes():
