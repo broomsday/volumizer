@@ -22,6 +22,8 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "output_dir": tmp_path,
         "download_dir": None,
         "max_structures": None,
+        "num_shards": None,
+        "shard_index": None,
         "write_manifest": None,
         "cluster_method": None,
         "cluster_allow_all_methods": False,
@@ -302,6 +304,96 @@ def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Pa
     assert len(resolved) == 2
     assert resolved[0][0] == "1abc"
     assert resolved[1][0] == "2def"
+
+
+def test_resolve_cluster_identity_applies_deterministic_shard(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_cluster_representative_entry_ids",
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
+            "1ABC",
+            "2DEF",
+            "3GHI",
+            "4JKL",
+        ],
+    )
+
+    metadata_by_id = {
+        "1ABC": {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+        "2DEF": {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+        "3GHI": {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+        "4JKL": {
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+    }
+    fetch_calls = []
+
+    def _fetch(pdb_id, timeout=60.0, retries=0, retry_delay=1.0):
+        fetch_calls.append(pdb_id)
+        return metadata_by_id[pdb_id]
+
+    monkeypatch.setattr(rcsb, "fetch_entry_metadata", _fetch)
+
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        num_shards=2,
+        shard_index=1,
+        dry_run=True,
+    )
+
+    resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
+    assert resolved == [
+        ("2def", tmp_path / "2DEF.cif"),
+        ("4jkl", tmp_path / "4JKL.cif"),
+    ]
+    assert fetch_calls == ["2DEF", "4JKL"]
+
+
+def test_run_cli_cluster_shard_requires_both_flags(tmp_path: Path):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        num_shards=2,
+        shard_index=None,
+    )
+
+    try:
+        cli.run_cli(args)
+        assert False, "expected ValueError"
+    except ValueError as error:
+        assert "Use --num-shards and --shard-index together." in str(error)
+
+
+def test_run_cli_cluster_shard_index_bounds_checked(tmp_path: Path):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        num_shards=2,
+        shard_index=2,
+    )
+
+    try:
+        cli.run_cli(args)
+        assert False, "expected ValueError"
+    except ValueError as error:
+        assert "--shard-index must be < --num-shards." in str(error)
 
 
 def test_resolve_cluster_identity_default_method_filter_excludes_nmr(

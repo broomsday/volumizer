@@ -103,6 +103,12 @@ Enable periodic human-readable progress + ETA updates:
 volumizer cluster --cluster-identity 30 --max-structures 100 --output-dir out --jobs 8 --progress-interval 15
 ```
 
+Deterministically shard a large cluster run across workers (example: shard 1 of 4):
+
+```bash
+volumizer cluster --cluster-identity 30 --output-dir out --num-shards 4 --shard-index 1
+```
+
 Inspect metadata cache entries:
 
 ```bash
@@ -124,6 +130,7 @@ Cluster filtering defaults:
 - Disable method filtering with `--cluster-allow-all-methods`
 - Optional resolution gate with `--cluster-max-resolution`, e.g. `--cluster-max-resolution 3.0`
 - Parallel workers for metadata/download + analysis with `--jobs`, e.g. `--jobs 8`
+- Deterministic run partitioning with `--num-shards <N> --shard-index <K>` to split representative lists across machines/jobs
 - Retry transient network errors with `--retries` and `--retry-delay`
 - Cluster metadata cache defaults to `<output-dir>/entry_metadata_cache.json`; override with `--metadata-cache` or disable with `--no-metadata-cache`
 - Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs

@@ -218,6 +218,18 @@ def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
         help="Optional cap for selected cluster representatives.",
     )
     parser.add_argument(
+        "--num-shards",
+        type=int,
+        default=None,
+        help="Optional number of deterministic cluster shards.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=None,
+        help="0-based shard index to process when --num-shards is set.",
+    )
+    parser.add_argument(
         "--write-manifest",
         type=Path,
         default=None,
@@ -327,6 +339,8 @@ def build_parser() -> argparse.ArgumentParser:
         command="analyze",
         cluster_identity=None,
         max_structures=None,
+        num_shards=None,
+        shard_index=None,
         cluster_method=None,
         cluster_allow_all_methods=False,
         cluster_max_resolution=None,
@@ -395,6 +409,8 @@ def _normalize_argv_for_subcommands(argv_list: list[str]) -> list[str]:
         cluster_markers = {
             "--cluster-identity",
             "--max-structures",
+            "--num-shards",
+            "--shard-index",
             "--cluster-method",
             "--cluster-allow-all-methods",
             "--cluster-max-resolution",
@@ -707,6 +723,8 @@ def _write_cluster_manifest(
         "selection": {
             "cluster_identity": args.cluster_identity,
             "max_structures": args.max_structures,
+            "num_shards": args.num_shards,
+            "shard_index": args.shard_index,
             "cluster_method_filters": cluster_method_filters,
             "cluster_allow_all_methods": args.cluster_allow_all_methods,
             "cluster_max_resolution": args.cluster_max_resolution,
@@ -769,6 +787,21 @@ def _resolve_progress_jsonl_path(args: argparse.Namespace) -> Path | None:
     return Path(args.progress_jsonl)
 
 
+def _apply_cluster_shard(
+    representative_ids: list[str],
+    num_shards: int | None,
+    shard_index: int | None,
+) -> list[str]:
+    if num_shards is None or shard_index is None:
+        return representative_ids
+
+    return [
+        representative_id
+        for index, representative_id in enumerate(representative_ids)
+        if (index % num_shards) == shard_index
+    ]
+
+
 def _make_checkpoint_signature(
     args: argparse.Namespace,
     output_dir: Path,
@@ -787,6 +820,8 @@ def _make_checkpoint_signature(
         "from_summary_only": args.only if args.from_summary is not None else None,
         "cluster_identity": args.cluster_identity,
         "max_structures": args.max_structures,
+        "num_shards": args.num_shards,
+        "shard_index": args.shard_index,
         "cluster_method_filters": cluster_method_filters,
         "cluster_allow_all_methods": args.cluster_allow_all_methods,
         "cluster_max_resolution": args.cluster_max_resolution,
@@ -1473,9 +1508,35 @@ def resolve_input_structures(
             retries=args.retries,
             retry_delay=args.retry_delay,
         )
-        if len(representative_ids) == 0:
+        total_representative_ids = len(representative_ids)
+        if total_representative_ids == 0:
             raise RuntimeError(
                 f"No representative PDB IDs found for cluster identity {args.cluster_identity}."
+            )
+
+        representative_ids = _apply_cluster_shard(
+            representative_ids,
+            args.num_shards,
+            args.shard_index,
+        )
+        if args.num_shards is not None:
+            print(
+                (
+                    "cluster shard selection: "
+                    f"shard_index={args.shard_index}, "
+                    f"num_shards={args.num_shards}, "
+                    f"shard_representatives={len(representative_ids)}, "
+                    f"total_representatives={total_representative_ids}"
+                ),
+                file=sys.stderr,
+            )
+        if len(representative_ids) == 0:
+            raise RuntimeError(
+                "No representative PDB IDs in selected shard. "
+                f"identity={args.cluster_identity}, "
+                f"shard_index={args.shard_index}, "
+                f"num_shards={args.num_shards}, "
+                f"total_representatives={total_representative_ids}."
             )
 
         target_selection = len(representative_ids)
@@ -1624,6 +1685,8 @@ def resolve_input_structures(
             "cluster selection summary: "
             f"selected={len(selected_ids)}, "
             f"examined={examined_count}, "
+            f"shard_index={args.shard_index}, "
+            f"num_shards={args.num_shards}, "
             f"methods={method_label}, "
             f"max_resolution={args.cluster_max_resolution}, "
             f"cache_hits={cache_hits}, "
@@ -2005,6 +2068,19 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
     if args.progress_interval < 0:
         raise ValueError("--progress-interval must be >= 0.")
 
+    if args.command == "cluster":
+        has_num_shards = args.num_shards is not None
+        has_shard_index = args.shard_index is not None
+        if has_num_shards != has_shard_index:
+            raise ValueError("Use --num-shards and --shard-index together.")
+        if has_num_shards:
+            if args.num_shards < 1:
+                raise ValueError("--num-shards must be >= 1.")
+            if args.shard_index < 0:
+                raise ValueError("--shard-index must be >= 0.")
+            if args.shard_index >= args.num_shards:
+                raise ValueError("--shard-index must be < --num-shards.")
+
     if args.backend is not None:
         os.environ[native_backend.BACKEND_ENV] = args.backend
         native_backend.clear_backend_cache()
@@ -2063,6 +2139,8 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "from_summary_only": args.only if args.from_summary is not None else None,
             "cluster_identity": args.cluster_identity,
             "max_structures": args.max_structures,
+            "num_shards": args.num_shards,
+            "shard_index": args.shard_index,
             "cluster_method_filters": cluster_method_filters,
             "cluster_allow_all_methods": args.cluster_allow_all_methods,
             "cluster_max_resolution": args.cluster_max_resolution,
