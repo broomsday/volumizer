@@ -31,6 +31,7 @@
 - CLI summary replay added: analyze runs can replay prior run subsets via `--from-summary <run.summary.json> --only failed|skipped|planned|all` (default `failed`).
 - CLI periodic progress/ETA output added via `--progress-interval` (default 30 seconds, disable with `<= 0`).
 - CLI cluster sharding added via `--num-shards` + `--shard-index` for deterministic distributed processing of large representative lists.
+- CLI failure export added via `--failures-manifest`, producing replayable analyze-manifest files from structure-level errors.
 
 ## Remaining
 

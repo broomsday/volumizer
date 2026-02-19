@@ -25,6 +25,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "num_shards": None,
         "shard_index": None,
         "write_manifest": None,
+        "failures_manifest": None,
         "cluster_method": None,
         "cluster_allow_all_methods": False,
         "cluster_max_resolution": None,
@@ -799,6 +800,61 @@ def test_run_cli_progress_interval_zero_disables_periodic_progress(
 
     stderr = capsys.readouterr().err
     assert "analysis progress:" not in stderr
+
+
+def test_run_cli_writes_failures_manifest(monkeypatch, tmp_path: Path):
+    failures_manifest = tmp_path / "failed.manifest.json"
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        jobs=1,
+        failures_manifest=failures_manifest,
+    )
+
+    first_input = tmp_path / "first.cif"
+    second_input = tmp_path / "second.cif"
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", first_input),
+            ("second", second_input),
+        ],
+    )
+
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+        if source_label == "first":
+            raise RuntimeError("boom")
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 1
+    assert failures_manifest.is_file()
+
+    payload = json.loads(failures_manifest.read_text(encoding="utf-8"))
+    assert payload["manifest_format"] == 1
+    assert payload["source_command"] == "analyze"
+    assert payload["num_failed"] == 1
+    assert payload["structures"] == [
+        {
+            "source": "first",
+            "input_path": str(first_input.resolve()),
+        }
+    ]
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["config"]["failures_manifest"] == str(failures_manifest)
 
 
 def test_run_cli_dry_run_writes_plan_and_skips_analysis(monkeypatch, tmp_path: Path):

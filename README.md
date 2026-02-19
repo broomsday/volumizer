@@ -97,6 +97,18 @@ Replay only failed structures from a previous summary:
 volumizer analyze --from-summary out/run.summary.json --only failed --output-dir out-retry
 ```
 
+Emit a replayable manifest for failures during a run:
+
+```bash
+volumizer cluster --cluster-identity 30 --output-dir out --failures-manifest out/failed.manifest.json
+```
+
+Retry only those failures later:
+
+```bash
+volumizer analyze --manifest out/failed.manifest.json --output-dir out-retry
+```
+
 Enable periodic human-readable progress + ETA updates:
 
 ```bash
@@ -140,6 +152,7 @@ Cluster filtering defaults:
 - Cluster runs can emit selected/rejected structure manifests with `--write-manifest <path>`
 - Analyze runs can replay any manifest with `--manifest <path>` (entries support `pdb_id` and/or `input_path`)
 - Analyze runs can also replay structures from a prior `run.summary.json` using `--from-summary <path> --only failed|skipped|planned|all`
+- Any run can emit a failed-entry manifest via `--failures-manifest <path>` for direct retry with `analyze --manifest <path>`
 
 CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms

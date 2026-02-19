@@ -177,6 +177,15 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         help="Optional JSONL path for structured per-event progress output.",
     )
     parser.add_argument(
+        "--failures-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Optional manifest path for failed structures; output is "
+            "replayable with `analyze --manifest`."
+        ),
+    )
+    parser.add_argument(
         "--progress-interval",
         type=float,
         default=30.0,
@@ -755,6 +764,50 @@ def _write_cluster_manifest(
     print(f"wrote manifest: {manifest_path}", file=sys.stderr)
 
 
+def _write_failures_manifest(
+    manifest_path: Path,
+    command: str,
+    errors: list[dict],
+    summary_path: Path | None = None,
+) -> None:
+    structures: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for entry in errors:
+        raw_source = entry.get("source")
+        raw_input_path = entry.get("input_path")
+        if not isinstance(raw_source, str) or not isinstance(raw_input_path, str):
+            continue
+
+        source_label = _sanitize_label(raw_source)
+        normalized_input_path = str(Path(raw_input_path).resolve(strict=False))
+        dedupe_key = (source_label, normalized_input_path)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        structures.append(
+            {
+                "source": source_label,
+                "input_path": normalized_input_path,
+            }
+        )
+
+    payload = {
+        "manifest_format": MANIFEST_FORMAT_VERSION,
+        "created_at": _utc_timestamp(),
+        "source_command": command,
+        "source_summary": str(summary_path) if summary_path is not None else None,
+        "num_failed": len(structures),
+        "structures": structures,
+    }
+    _save_manifest(manifest_path, payload)
+    print(
+        f"wrote failures manifest: {manifest_path} (failures={len(structures)})",
+        file=sys.stderr,
+    )
+
+
 def _resolve_metadata_cache_path(
     args: argparse.Namespace,
     output_dir: Path,
@@ -827,6 +880,9 @@ def _make_checkpoint_signature(
         "cluster_max_resolution": args.cluster_max_resolution,
         "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
         "write_manifest": str(args.write_manifest) if args.write_manifest is not None else None,
+        "failures_manifest": (
+            str(args.failures_manifest) if args.failures_manifest is not None else None
+        ),
         "output_dir": str(output_dir),
         "download_dir": str(download_dir),
         "resolution": args.resolution,
@@ -2149,6 +2205,9 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "write_manifest": (
                 str(args.write_manifest) if args.write_manifest is not None else None
             ),
+            "failures_manifest": (
+                str(args.failures_manifest) if args.failures_manifest is not None else None
+            ),
             "checkpoint": str(checkpoint_path) if checkpoint_path else None,
             "no_checkpoint": args.no_checkpoint,
             "progress_jsonl": str(progress_jsonl_path) if progress_jsonl_path else None,
@@ -2182,6 +2241,14 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
     summary_path = output_dir / "run.summary.json"
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"wrote summary: {summary_path}", file=sys.stderr)
+
+    if args.failures_manifest is not None:
+        _write_failures_manifest(
+            manifest_path=Path(args.failures_manifest),
+            command=args.command,
+            errors=tracker.errors,
+            summary_path=summary_path,
+        )
 
     exit_code = 1 if len(tracker.errors) > 0 else 0
     tracker.mark_run_complete(exit_code)
