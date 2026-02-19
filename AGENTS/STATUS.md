@@ -1,4 +1,4 @@
-# Migration Status Snapshot (2026-02-18)
+# Migration Status Snapshot (2026-02-19)
 
 ## Completed
 
@@ -37,4 +37,4 @@
 
 - Reduce Python loop/dataframe overhead around native kernels where possible.
 - Finalize native packaging/wheel strategy and default backend policy.
-- Continue CLI UX hardening: richer progress/ETA output semantics and additional selection controls beyond the current baseline.
+- Continue CLI UX hardening: add validation subcommands and stronger runtime safety controls for very large jobs.

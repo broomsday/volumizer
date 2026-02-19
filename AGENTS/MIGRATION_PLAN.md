@@ -1,23 +1,30 @@
 # Volumizer Migration Plan (Python -> Rust/C Core)
 
-## 0. Current Status (2026-02-16)
+## 0. Current Status (2026-02-19)
 
 Phase status:
 - `Phase 0` (baseline + guardrails): completed.
 - `Phase 1` (native scaffold + FFI contract): completed.
-- `Phase 2` (fib sphere native path): completed for kernel + integration, including first batch-optimization pass.
+- `Phase 2` (fib sphere native path): completed for kernel + integration, including batch-optimization pass.
 - `Phase 3` (neighbor/BFS native kernels): completed for kernel + integration.
-- `Phase 4` (native classification): partially completed.
+- `Phase 4` (native classification): mostly completed.
+- `Phase 5` (packaging + UX): in progress.
 
-Completed in Phase 4:
+Completed in/through Phase 4:
 - Native `classify_buried_components` is implemented in Rust.
 - Native exposed/buried solvent split kernel is implemented in Rust.
 - Python dispatch can consume native classifier output.
 - End-to-end parity scaffolding for native vs Python pipeline is in place.
 
-Remaining in Phase 4:
-- Remove remaining Python orchestration loops from classification path where feasible.
-- Benchmark native backend thoroughly and tune hotspots.
+CLI/UX progress in Phase 5:
+- Subcommand CLI (`analyze`, `cluster`, `cache`) is implemented and documented.
+- Resume/checkpoint/progress JSONL and periodic progress/ETA output are implemented.
+- Cluster method/resolution filtering, metadata cache, negative cache, deterministic sharding, manifest write/replay, summary replay, and failures-manifest export are implemented.
+
+Remaining priorities:
+- Continue reducing Python orchestration overhead around native kernels where feasible.
+- Finalize wheel packaging/default backend policy and release ergonomics.
+- Add CLI validation/safety features for long-running large jobs.
 
 ## 1. Objective
 

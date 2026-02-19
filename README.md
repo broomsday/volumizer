@@ -142,7 +142,7 @@ Cluster filtering defaults:
 - Disable method filtering with `--cluster-allow-all-methods`
 - Optional resolution gate with `--cluster-max-resolution`, e.g. `--cluster-max-resolution 3.0`
 - Parallel workers for metadata/download + analysis with `--jobs`, e.g. `--jobs 8`
-- Deterministic run partitioning with `--num-shards <N> --shard-index <K>` to split representative lists across machines/jobs
+- Deterministic run partitioning with `--num-shards <N> --shard-index <K>` to split representative lists across machines/jobs (`0 <= K < N`; both flags required)
 - Retry transient network errors with `--retries` and `--retry-delay`
 - Cluster metadata cache defaults to `<output-dir>/entry_metadata_cache.json`; override with `--metadata-cache` or disable with `--no-metadata-cache`
 - Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs
@@ -158,6 +158,7 @@ CLI outputs:
 - `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms
 - `<label>.annotation.json`: web-friendly volume data payload
 - `run.summary.json`: run configuration and per-structure status
+- `<path from --failures-manifest>` (optional): replayable manifest containing failed structure inputs
 
 Using the test file `tests/pdbs/4jpn.pdb` try out the following:
 
