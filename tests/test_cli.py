@@ -31,6 +31,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "checkpoint": None,
         "no_checkpoint": False,
         "progress_jsonl": None,
+        "progress_interval": 30.0,
         "resolution": 3.0,
         "min_voxels": 2,
         "min_volume": None,
@@ -624,6 +625,88 @@ def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_pa
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["num_processed"] == 2
     assert summary["num_failed"] == 0
+
+
+def test_run_cli_parallel_jobs_emits_periodic_progress(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        jobs=2,
+        progress_interval=0.001,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    stderr = capsys.readouterr().err
+    assert "analysis progress:" in stderr
+    assert "eta=" in stderr
+
+
+def test_run_cli_progress_interval_zero_disables_periodic_progress(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        jobs=1,
+        progress_interval=0.0,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("single", tmp_path / "single.cif"),
+        ],
+    )
+
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    stderr = capsys.readouterr().err
+    assert "analysis progress:" not in stderr
 
 
 def test_run_cli_dry_run_writes_plan_and_skips_analysis(monkeypatch, tmp_path: Path):

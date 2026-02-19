@@ -97,6 +97,12 @@ Replay only failed structures from a previous summary:
 volumizer analyze --from-summary out/run.summary.json --only failed --output-dir out-retry
 ```
 
+Enable periodic human-readable progress + ETA updates:
+
+```bash
+volumizer cluster --cluster-identity 30 --max-structures 100 --output-dir out --jobs 8 --progress-interval 15
+```
+
 Inspect metadata cache entries:
 
 ```bash
@@ -123,6 +129,7 @@ Cluster filtering defaults:
 - Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs
 - Checkpointing defaults to `<output-dir>/run.checkpoint.json`; override with `--checkpoint` or disable with `--no-checkpoint`
 - Structured progress events can be written with `--progress-jsonl <path>` (JSON Lines format)
+- Human-readable progress + ETA updates are emitted every `--progress-interval` seconds (default 30, set `<= 0` to disable)
 - Cluster runs can emit selected/rejected structure manifests with `--write-manifest <path>`
 - Analyze runs can replay any manifest with `--manifest <path>` (entries support `pdb_id` and/or `input_path`)
 - Analyze runs can also replay structures from a prior `run.summary.json` using `--from-summary <path> --only failed|skipped|planned|all`

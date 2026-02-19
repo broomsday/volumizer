@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Sequence
 
 from volumizer import native_backend, pdb, rcsb, utils, volumizer
@@ -25,6 +26,53 @@ MANIFEST_FORMAT_VERSION = 1
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _format_eta_seconds(eta_seconds: float | None) -> str:
+    if eta_seconds is None or eta_seconds < 0:
+        return "unknown"
+
+    total_seconds = int(round(eta_seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _emit_stage_progress(
+    *,
+    stage: str,
+    completed: int,
+    total: int,
+    failed: int,
+    started_at: float,
+    last_emitted_at: float,
+    interval: float,
+    force: bool = False,
+) -> float:
+    if interval <= 0:
+        return last_emitted_at
+
+    now = time.monotonic()
+    if not force and (now - last_emitted_at) < interval:
+        return last_emitted_at
+
+    elapsed = max(0.0, now - started_at)
+    rate = completed / elapsed if elapsed > 0 else 0.0
+    remaining = max(0, total - completed)
+    eta_seconds = (remaining / rate) if rate > 0 else None
+    percent = (100.0 * completed / total) if total > 0 else 100.0
+
+    print(
+        (
+            f"{stage} progress: {completed}/{total} ({percent:.1f}%), "
+            f"failed={failed}, rate={rate:.2f}/s, "
+            f"eta={_format_eta_seconds(eta_seconds)}"
+        ),
+        file=sys.stderr,
+    )
+    return now
 
 
 def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
@@ -127,6 +175,15 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help="Optional JSONL path for structured per-event progress output.",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=30.0,
+        help=(
+            "Seconds between human-readable progress/ETA updates "
+            "(default: 30, set <= 0 to disable)."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -742,6 +799,7 @@ def _make_checkpoint_signature(
         "min_volume": args.min_volume,
         "backend": args.backend,
         "keep_non_protein": args.keep_non_protein,
+        "progress_interval": args.progress_interval,
         "dry_run": args.dry_run,
     }
 
@@ -1088,8 +1146,14 @@ def _fetch_metadata_for_ids(
     negative_updates = 0
     error_entries: list[dict] = []
 
-    if len(representative_ids) == 0:
+    total_ids = len(representative_ids)
+    if total_ids == 0:
         return fetched, errors, negative_updates, error_entries
+
+    progress_interval = float(args.progress_interval)
+    processed = 0
+    progress_started_at = time.monotonic()
+    last_progress_emit = progress_started_at
 
     if args.jobs <= 1:
         for representative_id in representative_ids:
@@ -1122,11 +1186,44 @@ def _fetch_metadata_for_ids(
                     f"metadata error for {representative_id}: {error}",
                     file=sys.stderr,
                 )
+                processed += 1
+                last_progress_emit = _emit_stage_progress(
+                    stage="metadata",
+                    completed=processed,
+                    total=total_ids,
+                    failed=errors,
+                    started_at=progress_started_at,
+                    last_emitted_at=last_progress_emit,
+                    interval=progress_interval,
+                )
                 if args.fail_fast:
                     raise
+                continue
+
+            processed += 1
+            last_progress_emit = _emit_stage_progress(
+                stage="metadata",
+                completed=processed,
+                total=total_ids,
+                failed=errors,
+                started_at=progress_started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
+            )
+
+        _emit_stage_progress(
+            stage="metadata",
+            completed=processed,
+            total=total_ids,
+            failed=errors,
+            started_at=progress_started_at,
+            last_emitted_at=last_progress_emit,
+            interval=progress_interval,
+            force=True,
+        )
         return fetched, errors, negative_updates, error_entries
 
-    max_workers = min(args.jobs, len(representative_ids))
+    max_workers = min(args.jobs, total_ids)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_id = {
             executor.submit(
@@ -1165,9 +1262,41 @@ def _fetch_metadata_for_ids(
                     f"metadata error for {representative_id}: {error}",
                     file=sys.stderr,
                 )
+                processed += 1
+                last_progress_emit = _emit_stage_progress(
+                    stage="metadata",
+                    completed=processed,
+                    total=total_ids,
+                    failed=errors,
+                    started_at=progress_started_at,
+                    last_emitted_at=last_progress_emit,
+                    interval=progress_interval,
+                )
                 if args.fail_fast:
                     raise
+                continue
 
+            processed += 1
+            last_progress_emit = _emit_stage_progress(
+                stage="metadata",
+                completed=processed,
+                total=total_ids,
+                failed=errors,
+                started_at=progress_started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
+            )
+
+    _emit_stage_progress(
+        stage="metadata",
+        completed=processed,
+        total=total_ids,
+        failed=errors,
+        started_at=progress_started_at,
+        last_emitted_at=last_progress_emit,
+        interval=progress_interval,
+        force=True,
+    )
     return fetched, errors, negative_updates, error_entries
 
 
@@ -1188,11 +1317,16 @@ def _download_cluster_structures(
         return {}
 
     downloaded_paths: dict[str, Path] = {}
+    progress_interval = float(args.progress_interval)
+    total_downloads = len(ids_to_download)
+    completed = 0
+    progress_started_at = time.monotonic()
+    last_progress_emit = progress_started_at
 
     if args.jobs <= 1:
         for index, representative_id in enumerate(ids_to_download, start=1):
             print(
-                f"[{index}/{len(ids_to_download)}] downloading {representative_id}...",
+                f"[{index}/{total_downloads}] downloading {representative_id}...",
                 file=sys.stderr,
             )
             downloaded_paths[representative_id] = rcsb.download_structure_cif(
@@ -1203,13 +1337,34 @@ def _download_cluster_structures(
                 retries=args.retries,
                 retry_delay=args.retry_delay,
             )
+            completed += 1
+            last_progress_emit = _emit_stage_progress(
+                stage="download",
+                completed=completed,
+                total=total_downloads,
+                failed=0,
+                started_at=progress_started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
+            )
+
+        _emit_stage_progress(
+            stage="download",
+            completed=completed,
+            total=total_downloads,
+            failed=0,
+            started_at=progress_started_at,
+            last_emitted_at=last_progress_emit,
+            interval=progress_interval,
+            force=True,
+        )
         return downloaded_paths
 
     print(
-        f"downloading {len(ids_to_download)} structures with {args.jobs} workers...",
+        f"downloading {total_downloads} structures with {args.jobs} workers...",
         file=sys.stderr,
     )
-    with ThreadPoolExecutor(max_workers=args.jobs) as executor:
+    with ThreadPoolExecutor(max_workers=min(args.jobs, total_downloads)) as executor:
         future_to_id = {
             executor.submit(
                 rcsb.download_structure_cif,
@@ -1223,16 +1378,30 @@ def _download_cluster_structures(
             for representative_id in ids_to_download
         }
 
-        completed = 0
         for future in as_completed(future_to_id):
             representative_id = future_to_id[future]
             downloaded_paths[representative_id] = future.result()
             completed += 1
-            print(
-                f"[{completed}/{len(ids_to_download)}] downloaded {representative_id}",
-                file=sys.stderr,
+            last_progress_emit = _emit_stage_progress(
+                stage="download",
+                completed=completed,
+                total=total_downloads,
+                failed=0,
+                started_at=progress_started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
             )
 
+    _emit_stage_progress(
+        stage="download",
+        completed=completed,
+        total=total_downloads,
+        failed=0,
+        started_at=progress_started_at,
+        last_emitted_at=last_progress_emit,
+        interval=progress_interval,
+        force=True,
+    )
     return downloaded_paths
 
 
@@ -1653,7 +1822,14 @@ def _analyze_structures(
     if len(pending_structures) == 0:
         return analysis_workers
 
+    total_pending = len(pending_structures)
+    progress_interval = float(args.progress_interval)
+    progress_started_at = time.monotonic()
+    last_progress_emit = progress_started_at
+
     if analysis_workers <= 1:
+        completed = 0
+        failed = 0
         for source_label, input_path in pending_structures:
             tracker.mark_started(source_label, input_path)
             print(f"analyzing {source_label}: {input_path}", file=sys.stderr)
@@ -1669,6 +1845,7 @@ def _analyze_structures(
                     )
                 )
             except Exception as error:  # pragma: no cover - exercised via CLI integration tests
+                failed += 1
                 error_entry = {
                     "source": source_label,
                     "input_path": str(input_path),
@@ -1676,13 +1853,45 @@ def _analyze_structures(
                 }
                 tracker.mark_error(error_entry)
                 print(f"error for {source_label}: {error}", file=sys.stderr)
+                completed += 1
+                last_progress_emit = _emit_stage_progress(
+                    stage="analysis",
+                    completed=completed,
+                    total=total_pending,
+                    failed=failed,
+                    started_at=progress_started_at,
+                    last_emitted_at=last_progress_emit,
+                    interval=progress_interval,
+                )
                 if args.fail_fast:
                     break
+                continue
 
+            completed += 1
+            last_progress_emit = _emit_stage_progress(
+                stage="analysis",
+                completed=completed,
+                total=total_pending,
+                failed=failed,
+                started_at=progress_started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
+            )
+
+        _emit_stage_progress(
+            stage="analysis",
+            completed=completed,
+            total=total_pending,
+            failed=failed,
+            started_at=progress_started_at,
+            last_emitted_at=last_progress_emit,
+            interval=progress_interval,
+            force=True,
+        )
         return analysis_workers
 
     print(
-        f"analyzing {len(pending_structures)} structures with {analysis_workers} workers...",
+        f"analyzing {total_pending} structures with {analysis_workers} workers...",
         file=sys.stderr,
     )
     with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
@@ -1705,28 +1914,47 @@ def _analyze_structures(
         ordered_results: dict[int, dict] = {}
         ordered_errors: dict[int, dict] = {}
         completed = 0
+        failed = 0
 
         for future in as_completed(future_to_context):
             index, source_label, input_path = future_to_context[future]
-            completed += 1
             try:
                 ordered_results[index] = future.result()
-                print(
-                    f"[{completed}/{len(pending_structures)}] completed {source_label}",
-                    file=sys.stderr,
-                )
             except Exception as error:  # pragma: no cover - exercised via CLI integration tests
+                failed += 1
                 ordered_errors[index] = {
                     "source": source_label,
                     "input_path": str(input_path),
                     "error": str(error),
                 }
                 print(
-                    f"[{completed}/{len(pending_structures)}] error for {source_label}: {error}",
+                    f"error for {source_label}: {error}",
                     file=sys.stderr,
                 )
 
-    for index in range(len(pending_structures)):
+            completed += 1
+            last_progress_emit = _emit_stage_progress(
+                stage="analysis",
+                completed=completed,
+                total=total_pending,
+                failed=failed,
+                started_at=progress_started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
+            )
+
+    _emit_stage_progress(
+        stage="analysis",
+        completed=completed,
+        total=total_pending,
+        failed=failed,
+        started_at=progress_started_at,
+        last_emitted_at=last_progress_emit,
+        interval=progress_interval,
+        force=True,
+    )
+
+    for index in range(total_pending):
         if index in ordered_results:
             tracker.mark_result(ordered_results[index])
         elif index in ordered_errors:
@@ -1774,6 +2002,8 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
         raise ValueError("--retries must be >= 0.")
     if args.retry_delay < 0:
         raise ValueError("--retry-delay must be >= 0.")
+    if args.progress_interval < 0:
+        raise ValueError("--progress-interval must be >= 0.")
 
     if args.backend is not None:
         os.environ[native_backend.BACKEND_ENV] = args.backend
@@ -1844,6 +2074,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "checkpoint": str(checkpoint_path) if checkpoint_path else None,
             "no_checkpoint": args.no_checkpoint,
             "progress_jsonl": str(progress_jsonl_path) if progress_jsonl_path else None,
+            "progress_interval": args.progress_interval,
             "output_dir": str(output_dir),
             "download_dir": str(download_dir),
             "resolution": args.resolution,

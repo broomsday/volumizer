@@ -62,7 +62,7 @@ Built in `volumizer/pdb.py`:
 ## 5. Codebase Map
 
 - `volumizer/volumizer.py`: high-level API (`volumize_pdb`, `volumize_structure`, save helpers)
-- `volumizer/cli.py`: CLI parser/orchestration (`analyze`, `cluster`, `cache` subcommands, checkpoint/resume, progress logging, metadata cache controls, manifest write/replay, summary subset replay)
+- `volumizer/cli.py`: CLI parser/orchestration (`analyze`, `cluster`, `cache` subcommands, checkpoint/resume, progress logging (JSONL + periodic ETA), metadata cache controls, manifest write/replay, summary subset replay)
 - `volumizer/voxel.py`: voxel generation, burial/exposure split, BFS agglomeration, type assignment, geometric metrics
 - `volumizer/fib_sphere.py`: atom shell point generation
 - `volumizer/pdb.py`: structure I/O, cleanup, PDB formatting, annotation structure assembly
@@ -135,7 +135,7 @@ Likely architecture for next iteration:
 
 Current user interface includes both Python function calls and a subcommand CLI (`volumizer analyze|cluster|cache`) for file/PDB-ID/cluster inputs with CIF + JSON outputs plus metadata-cache inspection/maintenance. Legacy flag-only invocation is still auto-routed for compatibility. For broader adoption:
 
-1. Continue CLI UX hardening: richer progress/ETA semantics, better failure summaries, and additional cluster selection controls beyond the current baseline (`analyze`/`cluster`/`cache`, resume, method/resolution filters, jobs/retries, metadata cache + negative cache, dry-run, checkpoint, progress JSONL, manifest write/replay, summary subset replay).
+1. Continue CLI UX hardening: richer progress/ETA semantics, better failure summaries, and additional cluster selection controls beyond the current baseline (`analyze`/`cluster`/`cache`, resume, method/resolution filters, jobs/retries, metadata cache + negative cache, dry-run, checkpoint, progress JSONL + progress interval, manifest write/replay, summary subset replay).
 2. Improve install ergonomics for native acceleration (prebuilt wheels or optional Rust extension build).
 3. Add user-facing docs focused on:
    - quick start from raw PDB/CIF
