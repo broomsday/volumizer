@@ -24,6 +24,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+
 @dataclass(frozen=True)
 class BenchmarkCase:
     category: str
@@ -72,6 +73,22 @@ def import_runtime_modules():
         ) from error
 
 
+def _normalize_stage_timings(
+    stage_timings: dict[str, float], elapsed_seconds: float
+) -> tuple[dict[str, float], float]:
+    """
+    Round stage timings and include an explicit residual for uninstrumented time.
+    """
+    normalized = {
+        stage: round(float(seconds), 6)
+        for stage, seconds in sorted(stage_timings.items())
+    }
+    stage_sum = float(sum(normalized.values()))
+    residual = max(0.0, float(elapsed_seconds) - stage_sum)
+    normalized["untracked"] = round(residual, 6)
+    return normalized, round(stage_sum, 6)
+
+
 def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
     """
     Run one volumizer benchmark case and return result metadata.
@@ -79,8 +96,12 @@ def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
     utils, volumizer = import_runtime_modules()
     utils.set_resolution(resolution)
 
+    stage_timings: dict[str, float] = {}
     start = time.perf_counter()
-    annotation_df, _, _ = volumizer.volumize_pdb(case.path)
+    annotation_df, _, _ = volumizer.volumize_pdb(
+        case.path,
+        stage_timings=stage_timings,
+    )
     elapsed_seconds = time.perf_counter() - start
 
     if utils.using_native():
@@ -96,6 +117,11 @@ def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
         largest_type = str(annotation_df.iloc[0]["type"])
         largest_volume = float(annotation_df.iloc[0]["volume"])
 
+    normalized_stage_timings, tracked_stage_seconds = _normalize_stage_timings(
+        stage_timings,
+        elapsed_seconds,
+    )
+
     return {
         "category": case.category,
         "case_name": case.name,
@@ -103,6 +129,8 @@ def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
         "resolution": resolution,
         "backend": backend,
         "elapsed_seconds": round(elapsed_seconds, 6),
+        "tracked_stage_seconds": tracked_stage_seconds,
+        "stage_timings_seconds": normalized_stage_timings,
         "max_rss_kb": max_rss_kb(),
         "num_detected_volumes": int(len(annotation_df)),
         "largest_type": largest_type,
@@ -125,15 +153,37 @@ def summarize(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         category, case_name, path = key
         runs = grouped[key]
         elapsed_values = [float(r["elapsed_seconds"]) for r in runs]
+        mean_seconds = sum(elapsed_values) / len(elapsed_values)
         rss_values = [float(r["max_rss_kb"]) for r in runs if r["max_rss_kb"] is not None]
         last = runs[-1]
+
+        stage_names = sorted(
+            {
+                stage
+                for run in runs
+                for stage in run.get("stage_timings_seconds", {}).keys()
+            }
+        )
+        stage_mean_seconds: dict[str, float] = {}
+        for stage in stage_names:
+            stage_mean_seconds[stage] = round(
+                sum(float(run.get("stage_timings_seconds", {}).get(stage, 0.0)) for run in runs)
+                / len(runs),
+                6,
+            )
+
+        stage_mean_percent_of_total: dict[str, float] = {}
+        if mean_seconds > 0:
+            for stage, value in stage_mean_seconds.items():
+                stage_mean_percent_of_total[stage] = round((value / mean_seconds) * 100.0, 3)
+
         summary_rows.append(
             {
                 "category": category,
                 "case_name": case_name,
                 "path": path,
                 "runs": len(runs),
-                "mean_seconds": round(sum(elapsed_values) / len(elapsed_values), 6),
+                "mean_seconds": round(mean_seconds, 6),
                 "min_seconds": round(min(elapsed_values), 6),
                 "max_seconds": round(max(elapsed_values), 6),
                 "max_rss_mb": round((max(rss_values) / 1024.0), 3) if rss_values else None,
@@ -141,6 +191,8 @@ def summarize(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "largest_type": last["largest_type"],
                 "largest_volume": last["largest_volume"],
                 "num_detected_volumes": last["num_detected_volumes"],
+                "stage_mean_seconds": stage_mean_seconds,
+                "stage_mean_percent_of_total": stage_mean_percent_of_total,
             }
         )
 
@@ -173,6 +225,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional path to write raw and summarized benchmark results as JSON.",
     )
+    parser.add_argument(
+        "--print-stage-breakdown",
+        action="store_true",
+        help="Print per-case top stage-time contributors.",
+    )
+    parser.add_argument(
+        "--stage-top-n",
+        type=int,
+        default=5,
+        help="How many stages to show per case when printing stage breakdown.",
+    )
 
     # Internal mode for per-case subprocess execution.
     parser.add_argument("--single-case", action="store_true", help=argparse.SUPPRESS)
@@ -203,11 +266,38 @@ def print_summary(summary_rows: list[dict[str, Any]]) -> None:
         )
 
 
+def print_stage_breakdown(summary_rows: list[dict[str, Any]], stage_top_n: int) -> None:
+    """
+    Emit a per-case breakdown of top stage contributors.
+    """
+    safe_top_n = max(1, int(stage_top_n))
+    print("\ncase stage mean_s pct_total")
+    for row in summary_rows:
+        stage_percent = row.get("stage_mean_percent_of_total", {})
+        stage_seconds = row.get("stage_mean_seconds", {})
+        ordered = sorted(
+            stage_seconds.keys(),
+            key=lambda stage_name: float(stage_seconds.get(stage_name, 0.0)),
+            reverse=True,
+        )[:safe_top_n]
+
+        for stage_name in ordered:
+            print(
+                f"{row['case_name']} {stage_name} "
+                f"{float(stage_seconds.get(stage_name, 0.0)):.6f} "
+                f"{float(stage_percent.get(stage_name, 0.0)):.3f}"
+            )
+
+
 def main() -> int:
     args = parse_args()
 
     if args.repeats < 1:
         print("--repeats must be >= 1", file=sys.stderr)
+        return 2
+
+    if args.stage_top_n < 1:
+        print("--stage-top-n must be >= 1", file=sys.stderr)
         return 2
 
     if args.single_case:
@@ -284,6 +374,8 @@ def main() -> int:
 
     summary_rows = summarize(all_results)
     print_summary(summary_rows)
+    if args.print_stage_breakdown:
+        print_stage_breakdown(summary_rows, args.stage_top_n)
 
     if args.output_json is not None:
         output = {

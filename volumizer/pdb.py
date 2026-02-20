@@ -177,31 +177,46 @@ def make_atom_line(
 def volume_to_structure(
     voxel_type: str,
     voxel_group_index: int,
-    voxel_indices: set[int],
-    surface_indices: set[int],
+    voxel_indices: set[int] | np.ndarray,
+    surface_indices: set[int] | np.ndarray,
     voxel_grid_centers: np.ndarray,
 ) -> bts.AtomArray:
     """
-    Convert one volume into a set of atoms in a biotite AtomArray
+    Convert one volume into a set of atoms in a biotite AtomArray.
     """
-    volume_structure = bts.AtomArray(len(voxel_indices))
-    for i, voxel_index in enumerate(voxel_indices):
-        if voxel_index in surface_indices:
-            b_factor = 50.0
-        else:
-            b_factor = 0.0
+    if isinstance(voxel_indices, set):
+        voxel_index_array = np.fromiter(
+            voxel_indices,
+            dtype=np.int64,
+            count=len(voxel_indices),
+        )
+    else:
+        voxel_index_array = np.asarray(voxel_indices, dtype=np.int64).reshape(-1)
 
+    num_voxels = int(voxel_index_array.size)
+    volume_structure = bts.AtomArray(num_voxels)
+
+    if isinstance(surface_indices, set):
+        surface_index_set = surface_indices
+    else:
+        surface_index_set = set(np.asarray(surface_indices, dtype=np.int64).tolist())
+
+    for i, voxel_index in enumerate(voxel_index_array):
+        b_factor = 50.0 if int(voxel_index) in surface_index_set else 0.0
         volume_structure[i] = bts.Atom(
-            voxel_grid_centers[voxel_index], atom_id=voxel_index, b_factor=b_factor
+            voxel_grid_centers[int(voxel_index)],
+            atom_id=int(voxel_index),
+            b_factor=b_factor,
         )
 
-    volume_structure.atom_name = [VOXEL_TYPE_ATOM_MAP[voxel_type]] * len(voxel_indices)
-    volume_structure.res_name = [voxel_type] * len(voxel_indices)
-    volume_structure.res_id = [voxel_group_index] * len(voxel_indices)
-    volume_structure.chain_id = [VOXEL_TYPE_CHAIN_MAP[voxel_type]] * len(voxel_indices)
-    volume_structure.element = [VOXEL_TYPE_ELEMENT_MAP[voxel_type]] * len(voxel_indices)
+    volume_structure.atom_name = [VOXEL_TYPE_ATOM_MAP[voxel_type]] * num_voxels
+    volume_structure.res_name = [voxel_type] * num_voxels
+    volume_structure.res_id = [voxel_group_index] * num_voxels
+    volume_structure.chain_id = [VOXEL_TYPE_CHAIN_MAP[voxel_type]] * num_voxels
+    volume_structure.element = [VOXEL_TYPE_ELEMENT_MAP[voxel_type]] * num_voxels
 
     return volume_structure
+
 
 
 def volumes_to_structure(

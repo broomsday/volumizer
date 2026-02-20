@@ -5,6 +5,7 @@ Functions to manipulate and analyze voxels.
 
 from copy import deepcopy
 import ctypes
+from time import perf_counter
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,7 @@ import pandas as pd
 from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
-from volumizer import utils, align, native_backend
+from volumizer import utils, native_backend
 from volumizer.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
 from volumizer.types import VoxelGroup
 from volumizer.paths import C_CODE_DIR
@@ -30,6 +31,22 @@ NATIVE_COMPONENT_TYPE_CODE_MAP = {
     3: "pore",
     4: "hub",
 }
+
+
+def _accumulate_stage_timing(
+    stage_timings: dict[str, float] | None,
+    stage_name: str,
+    elapsed_seconds: float,
+) -> None:
+    """
+    Accumulate elapsed time under a stage key when profiling is enabled.
+    """
+    if stage_timings is None:
+        return
+
+    stage_timings[stage_name] = stage_timings.get(stage_name, 0.0) + float(
+        elapsed_seconds
+    )
 
 
 def coords_to_point_cloud(coords: pd.DataFrame) -> PyntCloud:
@@ -196,27 +213,30 @@ def _build_exposed_and_buried_voxel_groups(
     """
     Build typed voxel groups for exposed/buried solvent subsets.
     """
-    buried_voxel_indices = compute_voxel_indices(buried_voxels, voxel_grid_dimensions)
-    exposed_voxel_indices = compute_voxel_indices(exposed_voxels, voxel_grid_dimensions)
+    exposed_arrays = (
+        np.asarray(exposed_voxels[0]),
+        np.asarray(exposed_voxels[1]),
+        np.asarray(exposed_voxels[2]),
+    )
+    buried_arrays = (
+        np.asarray(buried_voxels[0]),
+        np.asarray(buried_voxels[1]),
+        np.asarray(buried_voxels[2]),
+    )
+
+    buried_voxel_indices = compute_voxel_indices(buried_arrays, voxel_grid_dimensions)
+    exposed_voxel_indices = compute_voxel_indices(exposed_arrays, voxel_grid_dimensions)
 
     return (
         VoxelGroup(
-            voxels=(
-                np.array(exposed_voxels[0]),
-                np.array(exposed_voxels[1]),
-                np.array(exposed_voxels[2]),
-            ),
+            voxels=exposed_arrays,
             indices=exposed_voxel_indices,
             num_voxels=len(exposed_voxel_indices),
             voxel_type="exposed",
             volume=compute_voxel_group_volume(len(exposed_voxel_indices)),
         ),
         VoxelGroup(
-            voxels=(
-                np.array(buried_voxels[0]),
-                np.array(buried_voxels[1]),
-                np.array(buried_voxels[2]),
-            ),
+            voxels=buried_arrays,
             indices=buried_voxel_indices,
             num_voxels=len(buried_voxel_indices),
             voxel_type="buried",
@@ -264,19 +284,10 @@ def get_exposed_and_buried_voxels_python(
             exposed_voxels[2].append(query_voxel[2])
 
     return _build_exposed_and_buried_voxel_groups(
-        (
-            np.array(exposed_voxels[0]),
-            np.array(exposed_voxels[1]),
-            np.array(exposed_voxels[2]),
-        ),
-        (
-            np.array(buried_voxels[0]),
-            np.array(buried_voxels[1]),
-            np.array(buried_voxels[2]),
-        ),
+        exposed_voxels,
+        buried_voxels,
         voxel_grid_dimensions,
     )
-
 
 def get_exposed_and_buried_voxels_native(
     solvent_voxels: VoxelGroup,
@@ -297,8 +308,8 @@ def get_exposed_and_buried_voxels_native(
             "Native backend does not provide `get_exposed_and_buried_voxel_indices`."
         )
 
-    solvent_array = np.stack(solvent_voxels.voxels, axis=1).astype(np.int32, copy=False)
-    protein_array = np.stack(protein_voxels.voxels, axis=1).astype(np.int32, copy=False)
+    solvent_array = _voxel_tuple_to_native_array(solvent_voxels.voxels)
+    protein_array = _voxel_tuple_to_native_array(protein_voxels.voxels)
     native_output = native_module.get_exposed_and_buried_voxel_indices(
         solvent_array,
         protein_array,
@@ -429,8 +440,8 @@ def get_neighbor_voxels_native(
             "Native backend requested but `volumizer_native` is not importable."
         )
 
-    query_array = np.stack(query_voxels, axis=1).astype(np.int32, copy=False)
-    reference_array = np.stack(reference_voxels, axis=1).astype(np.int32, copy=False)
+    query_array = _voxel_tuple_to_native_array(query_voxels)
+    reference_array = _voxel_tuple_to_native_array(reference_voxels)
     neighbor_indices = np.asarray(
         native_module.get_neighbor_voxel_indices(query_array, reference_array),
         dtype=np.int64,
@@ -469,14 +480,15 @@ def get_first_shell_exposed_voxels(
             exposed_voxels.voxels, buried_voxels.voxels
         )
 
-    first_shell_indices = compute_voxel_indices(first_shell_voxels, voxel_grid.x_y_z)
+    first_shell_arrays = (
+        np.asarray(first_shell_voxels[0]),
+        np.asarray(first_shell_voxels[1]),
+        np.asarray(first_shell_voxels[2]),
+    )
+    first_shell_indices = compute_voxel_indices(first_shell_arrays, voxel_grid.x_y_z)
 
     return VoxelGroup(
-        voxels=(
-            np.array(first_shell_voxels[0]),
-            np.array(first_shell_voxels[1]),
-            np.array(first_shell_voxels[2]),
-        ),
+        voxels=first_shell_arrays,
         indices=first_shell_indices,
         num_voxels=len(first_shell_indices),
         voxel_type="exposed",
@@ -520,22 +532,46 @@ def get_single_voxel(
     )
 
 
+def _voxel_tuple_to_native_array(voxels: tuple[np.ndarray, ...]) -> np.ndarray:
+    """
+    Convert `(x,y,z)` voxel arrays into contiguous int32 `(N,3)` for native kernels.
+    """
+    num_voxels = len(voxels[0])
+    native_voxels = np.empty((num_voxels, 3), dtype=np.int32)
+    if num_voxels == 0:
+        return native_voxels
+
+    native_voxels[:, 0] = voxels[0]
+    native_voxels[:, 1] = voxels[1]
+    native_voxels[:, 2] = voxels[2]
+    return native_voxels
+
+
+def _compute_voxel_indices_array(
+    voxels: tuple[np.ndarray, ...], grid_dimensions: np.ndarray
+) -> np.ndarray:
+    """
+    Given a 3D array of voxels, compute flat 1D voxel-grid indices.
+    """
+    if len(voxels[0]) == 0:
+        return np.array([], dtype=np.int64)
+
+    grid_dimension_1_2 = int(grid_dimensions[1]) * int(grid_dimensions[2])
+    grid_dimension_2 = int(grid_dimensions[2])
+    x_coords = np.asarray(voxels[0], dtype=np.int64)
+    y_coords = np.asarray(voxels[1], dtype=np.int64)
+    z_coords = np.asarray(voxels[2], dtype=np.int64)
+
+    return x_coords * grid_dimension_1_2 + y_coords * grid_dimension_2 + z_coords
+
+
 def compute_voxel_indices(
     voxels: tuple[np.ndarray, ...], grid_dimensions: np.ndarray
 ) -> set[int]:
     """
     Given a 3D array of voxels, compute the 1D set of their indices.
     """
-    grid_dimension_1_2 = grid_dimensions[1] * grid_dimensions[2]
-
-    return {
-        (
-            voxels[0][i] * grid_dimension_1_2
-            + voxels[1][i] * grid_dimensions[2]
-            + voxels[2][i]
-        )
-        for i in range(len(voxels[0]))
-    }
+    return set(_compute_voxel_indices_array(voxels, grid_dimensions).tolist())
 
 
 def compute_voxel_group_volume(num_voxels: int) -> float:
@@ -620,8 +656,12 @@ def breadth_first_search_native(
             "Native backend requested but `volumizer_native` is not importable."
         )
 
-    voxel_array = np.stack(voxels, axis=1).astype(np.int32, copy=False)
-    searchable_index_array = np.array(list(searchable_indices), dtype=np.int32)
+    voxel_array = _voxel_tuple_to_native_array(voxels)
+    searchable_index_array = np.fromiter(
+        searchable_indices,
+        dtype=np.int32,
+        count=len(searchable_indices),
+    )
     neighbor_indices = native_module.bfs_component_indices(
         voxel_array, searchable_index_array
     )
@@ -733,16 +773,55 @@ def get_agglomerated_type(
     return direct_surface_indices.union(neighbor_surface_indices), "pocket"
 
 
+def _get_voxel_group_center_from_indices(
+    voxel_indices: np.ndarray,
+    voxel_grid: VoxelGrid,
+) -> np.ndarray:
+    """
+    Compute the center of geometry for flat voxel-grid indices.
+    """
+    if voxel_indices.size == 0:
+        return np.array([0.0, 0.0, 0.0])
+
+    voxel_coords = np.asarray(voxel_grid.voxel_centers[voxel_indices], dtype=float)
+    return np.mean(voxel_coords, axis=0)
+
+
+def _get_voxel_group_axial_lengths_from_indices(
+    voxel_indices: np.ndarray,
+    voxel_grid: VoxelGrid,
+) -> list[float]:
+    """
+    Compute principal-axis lengths for flat voxel-grid indices.
+    """
+    if voxel_indices.size < 3:
+        return [0, 0, 0]
+
+    voxel_coords = np.asarray(voxel_grid.voxel_centers[voxel_indices], dtype=np.float64)
+    centered_coords = voxel_coords - np.mean(voxel_coords, axis=0)
+
+    covariance = centered_coords.T @ centered_coords
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    axis_order = np.argsort(eigenvalues)[::-1]
+    principal_axes = eigenvectors[:, axis_order]
+
+    aligned_coords = centered_coords @ principal_axes
+    axial_lengths = np.round(np.ptp(aligned_coords, axis=0), 3)
+    return sorted(axial_lengths.tolist(), reverse=True)
+
+
 def get_voxel_group_center(
     voxel_indices: set[int], voxel_grid: VoxelGrid
 ) -> np.ndarray:
     """
     Compute the center of geometry for the voxel group.
     """
-    voxel_coords = np.array(
-        [voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices]
+    voxel_index_array = np.fromiter(
+        voxel_indices,
+        dtype=np.int64,
+        count=len(voxel_indices),
     )
-    return np.mean(voxel_coords, axis=0)
+    return _get_voxel_group_center_from_indices(voxel_index_array, voxel_grid)
 
 
 def get_voxel_group_axial_lengths(
@@ -751,28 +830,12 @@ def get_voxel_group_axial_lengths(
     """
     Align the voxel group to it's principal axes, then compute the maximum length along each axis.
     """
-    voxel_coords = np.array(
-        [voxel_grid.voxel_centers[voxel_index] for voxel_index in voxel_indices]
+    voxel_index_array = np.fromiter(
+        voxel_indices,
+        dtype=np.int64,
+        count=len(voxel_indices),
     )
-    if len(voxel_coords) < 3:
-        return [0, 0, 0]
-
-    # rotation, translation = align.get_principal_axis_alignment_translation_rotation(voxel_coords)
-    voxel_coords = align.align_structure(voxel_coords)
-
-    # compute the maximum length across each axis
-    xs = [voxel_coord[0] for voxel_coord in voxel_coords]
-    ys = [voxel_coord[1] for voxel_coord in voxel_coords]
-    zs = [voxel_coord[2] for voxel_coord in voxel_coords]
-
-    return sorted(
-        [
-            round(max(xs) - min(xs), 3),
-            round(max(ys) - min(ys), 3),
-            round(max(zs) - min(zs), 3),
-        ],
-        reverse=True,
-    )
+    return _get_voxel_group_axial_lengths_from_indices(voxel_index_array, voxel_grid)
 
 
 def _extract_component_voxels(
@@ -802,38 +865,69 @@ def _build_voxel_group_from_component_indices(
     component_indices: np.ndarray,
     surface_component_indices: np.ndarray,
     agglomerated_type: str,
+    buried_flat_indices: np.ndarray | None = None,
 ) -> VoxelGroup:
     """
     Construct a VoxelGroup from native component-index outputs.
     """
-    volume_voxels = _extract_component_voxels(buried_voxels, component_indices)
-    surface_voxels = _extract_component_voxels(
-        buried_voxels, surface_component_indices
-    )
+    component_indices = np.asarray(component_indices, dtype=np.int64)
+    surface_component_indices = np.asarray(surface_component_indices, dtype=np.int64)
 
-    volume_indices = compute_voxel_indices(volume_voxels, voxel_grid.x_y_z)
-    surface_indices = compute_voxel_indices(surface_voxels, voxel_grid.x_y_z)
-    if len(volume_indices) == 0:
+    volume_voxels = _extract_component_voxels(buried_voxels, component_indices)
+
+    if buried_flat_indices is None:
+        surface_voxels = _extract_component_voxels(
+            buried_voxels, surface_component_indices
+        )
+        volume_index_values = compute_voxel_indices(volume_voxels, voxel_grid.x_y_z)
+        surface_indices = compute_voxel_indices(surface_voxels, voxel_grid.x_y_z)
+        voxel_index_array = np.fromiter(
+            volume_index_values,
+            dtype=np.int64,
+            count=len(volume_index_values),
+        )
+        volume_indices: set[int] | np.ndarray = volume_index_values
+    else:
+        voxel_index_array = np.asarray(
+            buried_flat_indices[component_indices],
+            dtype=np.int64,
+        )
+        surface_index_array = np.asarray(
+            buried_flat_indices[surface_component_indices],
+            dtype=np.int64,
+        )
+        # Keep component indices as a NumPy array to avoid large set materialization overhead.
+        volume_indices = voxel_index_array
+        surface_indices = surface_index_array
+
+    if voxel_index_array.size == 0:
         center = np.array([0.0, 0.0, 0.0])
         axial_lengths = [0.0, 0.0, 0.0]
     else:
-        center = get_voxel_group_center(volume_indices, voxel_grid)
-        axial_lengths = get_voxel_group_axial_lengths(volume_indices, voxel_grid)
+        center = _get_voxel_group_center_from_indices(voxel_index_array, voxel_grid)
+        axial_lengths = _get_voxel_group_axial_lengths_from_indices(
+            voxel_index_array,
+            voxel_grid,
+        )
 
+    num_voxels = int(len(voxel_index_array))
     return VoxelGroup(
         voxels=volume_voxels,
         indices=volume_indices,
         surface_indices=surface_indices,
-        num_voxels=len(volume_indices),
+        num_voxels=num_voxels,
         voxel_type=agglomerated_type,
-        volume=compute_voxel_group_volume(len(volume_indices)),
+        volume=compute_voxel_group_volume(num_voxels),
         center=center,
         axial_lengths=axial_lengths,
     )
 
 
 def classify_buried_components_native(
-    buried_voxels: VoxelGroup, exposed_voxels: VoxelGroup, voxel_grid: VoxelGrid
+    buried_voxels: VoxelGroup,
+    exposed_voxels: VoxelGroup,
+    voxel_grid: VoxelGrid,
+    stage_timings: dict[str, float] | None = None,
 ) -> tuple[
     dict[int, VoxelGroup],
     dict[int, VoxelGroup],
@@ -852,10 +946,15 @@ def classify_buried_components_native(
             "Native backend does not provide `classify_buried_components`."
         )
 
-    buried_array = np.stack(buried_voxels.voxels, axis=1).astype(np.int32, copy=False)
-    exposed_array = np.stack(exposed_voxels.voxels, axis=1).astype(np.int32, copy=False)
-    grid_dimensions = np.array(voxel_grid.x_y_z, dtype=np.int32)
+    total_start = perf_counter() if stage_timings is not None else 0.0
+    kernel_seconds = 0.0
+    mapping_seconds = 0.0
 
+    buried_array = _voxel_tuple_to_native_array(buried_voxels.voxels)
+    exposed_array = _voxel_tuple_to_native_array(exposed_voxels.voxels)
+    grid_dimensions = np.asarray(voxel_grid.x_y_z, dtype=np.int32)
+
+    kernel_start = perf_counter() if stage_timings is not None else 0.0
     native_output = native_module.classify_buried_components(
         buried_array,
         exposed_array,
@@ -863,10 +962,20 @@ def classify_buried_components_native(
         int(MIN_NUM_VOXELS),
         float(utils.VOXEL_SIZE),
     )
+    if stage_timings is not None:
+        kernel_seconds = perf_counter() - kernel_start
+        _accumulate_stage_timing(
+            stage_timings,
+            "classify_components_native_kernel",
+            kernel_seconds,
+        )
+
     if not isinstance(native_output, dict):
         raise RuntimeError(
             "Unexpected native classifier output, expected dict with flattened arrays."
         )
+
+    mapping_start = perf_counter() if stage_timings is not None else 0.0
 
     component_type_codes = np.asarray(
         native_output["component_type_codes"], dtype=np.int64
@@ -890,6 +999,10 @@ def classify_buried_components_native(
             "Native classifier output has inconsistent component offsets."
         )
 
+    buried_flat_indices = _compute_voxel_indices_array(
+        buried_voxels.voxels, voxel_grid.x_y_z
+    )
+
     hubs, pores, pockets, cavities, occluded = {}, {}, {}, {}, {}
     counters = {"hub": 0, "pore": 0, "pocket": 0, "cavity": 0, "occluded": 0}
     bucket_map = {
@@ -905,8 +1018,14 @@ def classify_buried_components_native(
         if agglomerated_type is None:
             raise RuntimeError(f"Unknown native component type code: {type_code}")
 
-        volume_slice = slice(component_offsets[component_id], component_offsets[component_id + 1])
-        surface_slice = slice(surface_offsets[component_id], surface_offsets[component_id + 1])
+        volume_slice = slice(
+            component_offsets[component_id],
+            component_offsets[component_id + 1],
+        )
+        surface_slice = slice(
+            surface_offsets[component_id],
+            surface_offsets[component_id + 1],
+        )
         component_indices = voxel_indices_flat[volume_slice]
         surface_component_indices = surface_indices_flat[surface_slice]
 
@@ -916,12 +1035,29 @@ def classify_buried_components_native(
             component_indices,
             surface_component_indices,
             agglomerated_type,
+            buried_flat_indices=buried_flat_indices,
         )
 
         bucket = bucket_map[agglomerated_type]
         type_index = counters[agglomerated_type]
         bucket[type_index] = voxel_group
         counters[agglomerated_type] += 1
+
+    if stage_timings is not None:
+        mapping_seconds = perf_counter() - mapping_start
+        _accumulate_stage_timing(
+            stage_timings,
+            "classify_components_native_mapping",
+            mapping_seconds,
+        )
+
+        other_seconds = (perf_counter() - total_start) - kernel_seconds - mapping_seconds
+        if other_seconds > 0:
+            _accumulate_stage_timing(
+                stage_timings,
+                "classify_components_native_other",
+                other_seconds,
+            )
 
     return hubs, pores, pockets, cavities, occluded
 
@@ -931,6 +1067,7 @@ def get_pores_pockets_cavities_occluded(
     exposed_voxels: VoxelGroup,
     voxel_grid: VoxelGrid,
     backend: str | None = None,
+    stage_timings: dict[str, float] | None = None,
 ) -> tuple[
     dict[int, VoxelGroup],
     dict[int, VoxelGroup],
@@ -947,9 +1084,20 @@ def get_pores_pockets_cavities_occluded(
         if native_module is not None and hasattr(
             native_module, "classify_buried_components"
         ):
+            if stage_timings is None:
+                return classify_buried_components_native(
+                    buried_voxels,
+                    exposed_voxels,
+                    voxel_grid,
+                )
             return classify_buried_components_native(
-                buried_voxels, exposed_voxels, voxel_grid
+                buried_voxels,
+                exposed_voxels,
+                voxel_grid,
+                stage_timings=stage_timings,
             )
+
+    python_start = perf_counter() if stage_timings is not None else 0.0
 
     buried_indices = set(range(buried_voxels.voxels[0].size))
     agglomerated_indices = set()
@@ -1037,4 +1185,13 @@ def get_pores_pockets_cavities_occluded(
             occluded[occluded_id] = voxel_group
             occluded_id += 1
 
+    if stage_timings is not None:
+        _accumulate_stage_timing(
+            stage_timings,
+            "classify_components_python",
+            perf_counter() - python_start,
+        )
+
     return hubs, pores, pockets, cavities, occluded
+
+
