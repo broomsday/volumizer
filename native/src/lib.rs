@@ -489,6 +489,100 @@ fn get_first_shell_exposed_indices<'py>(
 }
 
 #[pyfunction]
+fn get_first_shell_exposed_selection<'py>(
+    py: Python<'py>,
+    exposed_x: PyReadonlyArray1<'_, i64>,
+    exposed_y: PyReadonlyArray1<'_, i64>,
+    exposed_z: PyReadonlyArray1<'_, i64>,
+    buried_x: PyReadonlyArray1<'_, i64>,
+    buried_y: PyReadonlyArray1<'_, i64>,
+    buried_z: PyReadonlyArray1<'_, i64>,
+    grid_dimensions: PyReadonlyArray1<'_, i32>,
+) -> PyResult<PyObject> {
+    let exposed_x_view = exposed_x.as_slice()?;
+    let exposed_y_view = exposed_y.as_slice()?;
+    let exposed_z_view = exposed_z.as_slice()?;
+    let buried_x_view = buried_x.as_slice()?;
+    let buried_y_view = buried_y.as_slice()?;
+    let buried_z_view = buried_z.as_slice()?;
+
+    if exposed_x_view.len() != exposed_y_view.len() || exposed_x_view.len() != exposed_z_view.len()
+    {
+        return Err(PyValueError::new_err(format!(
+            "exposed axis arrays must have matching lengths, got x={}, y={}, z={}",
+            exposed_x_view.len(),
+            exposed_y_view.len(),
+            exposed_z_view.len()
+        )));
+    }
+    if buried_x_view.len() != buried_y_view.len() || buried_x_view.len() != buried_z_view.len() {
+        return Err(PyValueError::new_err(format!(
+            "buried axis arrays must have matching lengths, got x={}, y={}, z={}",
+            buried_x_view.len(),
+            buried_y_view.len(),
+            buried_z_view.len()
+        )));
+    }
+
+    if exposed_x_view.len() > i32::MAX as usize {
+        return Err(PyValueError::new_err(
+            "exposed voxel count exceeds supported index range",
+        ));
+    }
+
+    let grid_dims = validate_grid_dimensions(&grid_dimensions)?;
+    let stride_yz = i64::from(grid_dims[1]) * i64::from(grid_dims[2]);
+    let stride_z = i64::from(grid_dims[2]);
+    let max_x = i64::from(grid_dims[0] - 1);
+    let max_y = i64::from(grid_dims[1] - 1);
+    let max_z = i64::from(grid_dims[2] - 1);
+
+    let mut buried_flat_set: HashSet<i64> =
+        HashSet::with_capacity(buried_x_view.len().saturating_mul(2));
+    for buried_index in 0..buried_x_view.len() {
+        let x = buried_x_view[buried_index];
+        let y = buried_y_view[buried_index];
+        let z = buried_z_view[buried_index];
+
+        let flat = x * stride_yz + y * stride_z + z;
+        buried_flat_set.insert(flat);
+    }
+
+    let mut neighbor_indices: Vec<i32> = Vec::new();
+    let mut flat_indices: Vec<i64> = Vec::new();
+    for exposed_index in 0..exposed_x_view.len() {
+        let x = exposed_x_view[exposed_index];
+        let y = exposed_y_view[exposed_index];
+        let z = exposed_z_view[exposed_index];
+
+        let flat = x * stride_yz + y * stride_z + z;
+
+        let neighbors_buried = (x > 0 && buried_flat_set.contains(&(flat - stride_yz)))
+            || (x < max_x && buried_flat_set.contains(&(flat + stride_yz)))
+            || (y > 0 && buried_flat_set.contains(&(flat - stride_z)))
+            || (y < max_y && buried_flat_set.contains(&(flat + stride_z)))
+            || (z > 0 && buried_flat_set.contains(&(flat - 1)))
+            || (z < max_z && buried_flat_set.contains(&(flat + 1)));
+
+        if neighbors_buried {
+            neighbor_indices.push(exposed_index as i32);
+            flat_indices.push(flat);
+        }
+    }
+
+    let result = PyDict::new_bound(py);
+    result.set_item(
+        "neighbor_indices",
+        Array1::from(neighbor_indices).into_pyarray_bound(py),
+    )?;
+    result.set_item(
+        "flat_indices",
+        Array1::from(flat_indices).into_pyarray_bound(py),
+    )?;
+    Ok(result.into())
+}
+
+#[pyfunction]
 fn bfs_component_indices<'py>(
     py: Python<'py>,
     voxels: PyReadonlyArray2<'_, i32>,
@@ -869,6 +963,7 @@ fn volumizer_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<(
     module.add_function(wrap_pyfunction!(fibonacci_sphere_points_batch, module)?)?;
     module.add_function(wrap_pyfunction!(get_neighbor_voxel_indices, module)?)?;
     module.add_function(wrap_pyfunction!(get_first_shell_exposed_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(get_first_shell_exposed_selection, module)?)?;
     module.add_function(wrap_pyfunction!(bfs_component_indices, module)?)?;
     module.add_function(wrap_pyfunction!(
         get_exposed_and_buried_voxel_indices,

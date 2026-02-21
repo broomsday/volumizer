@@ -467,6 +467,7 @@ def get_first_shell_exposed_voxels(
     Subset exposed voxels into only those neighboring one or more buried voxels.
     """
     requested_backend = backend if backend is not None else utils.get_active_backend()
+    first_shell_indices: set[int] | None = None
 
     if requested_backend == "native":
         native_module = native_backend.get_native_module_for_mode("native")
@@ -475,7 +476,35 @@ def get_first_shell_exposed_voxels(
                 "Native backend requested but `volumizer_native` is not importable."
             )
 
-        if hasattr(native_module, "get_first_shell_exposed_indices"):
+        if hasattr(native_module, "get_first_shell_exposed_selection"):
+            grid_dimensions = np.asarray(voxel_grid.x_y_z, dtype=np.int32)
+            native_output = native_module.get_first_shell_exposed_selection(
+                np.asarray(exposed_voxels.voxels[0], dtype=np.int64),
+                np.asarray(exposed_voxels.voxels[1], dtype=np.int64),
+                np.asarray(exposed_voxels.voxels[2], dtype=np.int64),
+                np.asarray(buried_voxels.voxels[0], dtype=np.int64),
+                np.asarray(buried_voxels.voxels[1], dtype=np.int64),
+                np.asarray(buried_voxels.voxels[2], dtype=np.int64),
+                grid_dimensions,
+            )
+            if not isinstance(native_output, dict):
+                raise RuntimeError(
+                    "Unexpected native first-shell output, expected dict with index arrays."
+                )
+
+            first_shell_neighbor_indices = np.asarray(
+                native_output["neighbor_indices"],
+                dtype=np.int64,
+            )
+            first_shell_arrays = (
+                exposed_voxels.voxels[0][first_shell_neighbor_indices],
+                exposed_voxels.voxels[1][first_shell_neighbor_indices],
+                exposed_voxels.voxels[2][first_shell_neighbor_indices],
+            )
+            first_shell_indices = set(
+                np.asarray(native_output["flat_indices"], dtype=np.int64).tolist()
+            )
+        elif hasattr(native_module, "get_first_shell_exposed_indices"):
             exposed_array = _voxel_tuple_to_native_array(exposed_voxels.voxels)
             buried_array = _voxel_tuple_to_native_array(buried_voxels.voxels)
             grid_dimensions = np.asarray(voxel_grid.x_y_z, dtype=np.int32)
@@ -519,7 +548,9 @@ def get_first_shell_exposed_voxels(
             np.asarray(first_shell_voxels[1]),
             np.asarray(first_shell_voxels[2]),
         )
-    first_shell_indices = compute_voxel_indices(first_shell_arrays, voxel_grid.x_y_z)
+
+    if first_shell_indices is None:
+        first_shell_indices = compute_voxel_indices(first_shell_arrays, voxel_grid.x_y_z)
 
     return VoxelGroup(
         voxels=first_shell_arrays,

@@ -44,20 +44,7 @@ def test_get_neighbor_voxels_native_uses_native_module(monkeypatch):
     assert np.array_equal(computed[2], np.array([100, 300]))
 
 
-def test_get_first_shell_exposed_voxels_native_prefers_specialized_kernel(monkeypatch):
-    class FakeNativeModule:
-        @staticmethod
-        def get_first_shell_exposed_indices(exposed, buried, grid_dimensions):
-            assert exposed.shape == (3, 3)
-            assert buried.shape == (2, 3)
-            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
-            return np.array([0, 2], dtype=np.int32)
-
-    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
-    monkeypatch.setattr(
-        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
-    )
-
+def _make_first_shell_test_inputs() -> tuple[VoxelGroup, VoxelGroup]:
     exposed_voxels = VoxelGroup(
         voxels=(np.array([1, 2, 3]), np.array([1, 1, 1]), np.array([1, 1, 1])),
         indices=set([21, 37, 53]),
@@ -72,6 +59,73 @@ def test_get_first_shell_exposed_voxels_native_prefers_specialized_kernel(monkey
         voxel_type="buried",
         volume=16.0,
     )
+
+    return exposed_voxels, buried_voxels
+
+
+def test_get_first_shell_exposed_voxels_native_prefers_specialized_selection(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def get_first_shell_exposed_selection(
+            exposed_x,
+            exposed_y,
+            exposed_z,
+            buried_x,
+            buried_y,
+            buried_z,
+            grid_dimensions,
+        ):
+            assert exposed_x.dtype == np.int64
+            assert exposed_y.dtype == np.int64
+            assert exposed_z.dtype == np.int64
+            assert buried_x.dtype == np.int64
+            assert buried_y.dtype == np.int64
+            assert buried_z.dtype == np.int64
+            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            return {
+                "neighbor_indices": np.array([0, 2], dtype=np.int32),
+                "flat_indices": np.array([21, 53], dtype=np.int64),
+            }
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+
+    exposed_voxels, buried_voxels = _make_first_shell_test_inputs()
+
+    class DummyGrid:
+        x_y_z = np.array([4, 4, 4], dtype=int)
+
+    first_shell = voxel.get_first_shell_exposed_voxels(
+        exposed_voxels,
+        buried_voxels,
+        DummyGrid(),
+        backend="native",
+    )
+
+    assert first_shell.num_voxels == 2
+    assert np.array_equal(first_shell.voxels[0], np.array([1, 3]))
+    assert np.array_equal(first_shell.voxels[1], np.array([1, 1]))
+    assert np.array_equal(first_shell.voxels[2], np.array([1, 1]))
+    assert first_shell.indices == set([21, 53])
+
+
+def test_get_first_shell_exposed_voxels_native_falls_back_to_legacy_kernel(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def get_first_shell_exposed_indices(exposed, buried, grid_dimensions):
+            assert exposed.shape == (3, 3)
+            assert buried.shape == (2, 3)
+            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            return np.array([0, 2], dtype=np.int32)
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+
+    exposed_voxels, buried_voxels = _make_first_shell_test_inputs()
 
     class DummyGrid:
         x_y_z = np.array([4, 4, 4], dtype=int)
