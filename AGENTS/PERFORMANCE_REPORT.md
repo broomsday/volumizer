@@ -563,3 +563,50 @@ Next highest-ROI work is now:
 2. `get_first_shell_exposed_voxels`
 3. `add_extra_points`
 4. `get_exposed_and_buried_voxels`
+
+## 19. Native Orchestration Optimization Pass: Add-Extra-Points Path Simplification (2026-02-21)
+
+Scope:
+- Goal: reduce `add_extra_points` overhead in the native backend integration path.
+- Change summary:
+  - Replaced pandas `groupby(...).to_numpy(...)` extraction with low-overhead factorized element grouping.
+  - Replaced block-list + concatenate assembly with a single preallocated output fill path for generated points/elements.
+  - Kept backward compatibility with older native artifacts by preserving single-point-kernel fallback when batch API is unavailable.
+  - Added explicit fallback test coverage in `tests/test_native_backend.py`.
+
+Artifacts used for before/after comparison (`group=all`, `repeats=3`):
+- Before:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v6b.json`
+- After:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v7b.json`
+- Focused confirmation runs:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.medium.r3.v7.json`
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.large.r3.v7.json`
+
+### 19.1 Medium/Large Delta (All-Cases v6b -> v7b)
+
+| case | mean_s_before | mean_s_after | total_improvement | add_extra_points_before_s | add_extra_points_after_s | add_extra_points_improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 0.210683 | 0.208742 | 0.92% | 0.020765 | 0.017141 | 17.45% |
+| 4jpp_assembly | 0.329129 | 0.312369 | 5.09% | 0.030825 | 0.025657 | 16.77% |
+
+### 19.2 Stage Distribution Shift
+
+From `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v6b.json` -> `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v7b.json`:
+
+- `4jpn`
+  - `add_extra_points`: `0.020765s` (`9.856%`) -> `0.017141s` (`8.212%`)
+- `4jpp_assembly`
+  - `add_extra_points`: `0.030825s` (`9.366%`) -> `0.025657s` (`8.214%`)
+
+Interpretation:
+- `add_extra_points` is no longer a near-10% runtime stage on medium/large.
+- `load_structure` remains the dominant non-kernel stage and should be the primary next target.
+
+### 19.3 Updated Optimization Priority
+
+Next highest-ROI work is now:
+1. `load_structure`
+2. `classify_components_native_kernel` internals (`classify_component_type` + BFS substage)
+3. `get_first_shell_exposed_voxels`
+4. `get_exposed_and_buried_voxels`

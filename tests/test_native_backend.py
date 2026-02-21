@@ -141,3 +141,46 @@ def test_add_extra_points_native_uses_batch_kernel_when_available(monkeypatch):
     )
 
     assert len(out_df) == len(coords) + 4
+
+
+def test_add_extra_points_native_falls_back_to_single_kernel_without_batch(monkeypatch):
+    class FakeNativeModule:
+        call_count = 0
+
+        @staticmethod
+        def fibonacci_sphere_points(radius, x, y, z, samples):
+            FakeNativeModule.call_count += 1
+            return np.repeat(np.array([[x, y, z]], dtype=float), samples, axis=0)
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+    monkeypatch.setattr(
+        fib_sphere,
+        "estimate_fibonacci_sphere_samples",
+        lambda radius, voxel_size: 2,
+    )
+    monkeypatch.setattr(
+        fib_sphere,
+        "get_fibonacci_sphere_radii",
+        lambda element, voxel_size: [1.0],
+    )
+
+    coords = pd.DataFrame.from_dict(
+        {
+            "x": [0.0, 1.0],
+            "y": [0.5, 1.5],
+            "z": [1.0, 2.0],
+            "element": ["C", "C"],
+        }
+    )
+    out_df = fib_sphere.add_extra_points(
+        coords,
+        voxel_size=2.0,
+        performant=True,
+        backend="native",
+    )
+
+    assert len(out_df) == len(coords) + 4
+    assert FakeNativeModule.call_count == 2

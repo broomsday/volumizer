@@ -164,56 +164,72 @@ def add_extra_points_native(
         )
 
     voxel_size = float(voxel_size)
-    grouped_centers = {
-        element: group.loc[:, ["x", "y", "z"]].to_numpy(dtype=np.float32, copy=False)
-        for element, group in coords.groupby("element", sort=False)
-    }
-
     supports_batch = hasattr(native_module, "fibonacci_sphere_points_batch")
-    extra_point_blocks = []
-    extra_element_blocks = []
-    for element, centers in grouped_centers.items():
-        radii = get_fibonacci_sphere_radii(element, voxel_size)
+
+    element_values = coords["element"].to_numpy(copy=False)
+    element_labels, unique_elements = pd.factorize(element_values, sort=False)
+    centers_all = coords.loc[:, ["x", "y", "z"]].to_numpy(dtype=np.float32, copy=False)
+
+    grouped_centers: list[tuple[str, np.ndarray]] = []
+    for label, element in enumerate(unique_elements):
+        centers = centers_all[element_labels == label]
         if centers.shape[0] == 0:
             continue
+        grouped_centers.append((str(element), centers))
 
+    expansion_plan: list[tuple[str, np.ndarray, float, int, int]] = []
+    total_extra_points = 0
+    for element, centers in grouped_centers:
+        radii = get_fibonacci_sphere_radii(element, voxel_size)
         for radius in radii:
             num_samples = int(estimate_fibonacci_sphere_samples(radius, voxel_size))
-            if supports_batch:
-                points = native_module.fibonacci_sphere_points_batch(
-                    float(radius),
-                    centers,
-                    num_samples,
-                )
-                points = np.asarray(points, dtype=np.float32)
-            else:
-                # Backward compatibility for older native artifacts without batch API.
-                points = np.empty((centers.shape[0] * num_samples, 3), dtype=np.float32)
-                for center_index, center in enumerate(centers):
-                    start = center_index * num_samples
-                    end = start + num_samples
-                    points[start:end] = np.asarray(
-                        native_module.fibonacci_sphere_points(
-                            float(radius),
-                            float(center[0]),
-                            float(center[1]),
-                            float(center[2]),
-                            num_samples,
-                        ),
-                        dtype=np.float32,
-                    )
-
-            if points.size == 0:
+            num_points = int(centers.shape[0]) * num_samples
+            if num_points == 0:
                 continue
 
-            extra_point_blocks.append(points)
-            extra_element_blocks.append(np.full(points.shape[0], element, dtype=object))
+            expansion_plan.append(
+                (element, centers, float(radius), num_samples, num_points)
+            )
+            total_extra_points += num_points
 
-    if len(extra_point_blocks) == 0:
+    if total_extra_points == 0:
         return coords
 
-    stacked_points = np.concatenate(extra_point_blocks, axis=0)
-    stacked_elements = np.concatenate(extra_element_blocks, axis=0)
+    stacked_points = np.empty((total_extra_points, 3), dtype=np.float32)
+    stacked_elements = np.empty(total_extra_points, dtype=object)
+
+    cursor = 0
+    for element, centers, radius, num_samples, num_points in expansion_plan:
+        if supports_batch:
+            points = np.asarray(
+                native_module.fibonacci_sphere_points_batch(radius, centers, num_samples),
+                dtype=np.float32,
+            )
+        else:
+            # Backward compatibility for older native artifacts without batch API.
+            points = np.empty((num_points, 3), dtype=np.float32)
+            for center_index, center in enumerate(centers):
+                start = center_index * num_samples
+                end = start + num_samples
+                points[start:end] = np.asarray(
+                    native_module.fibonacci_sphere_points(
+                        radius,
+                        float(center[0]),
+                        float(center[1]),
+                        float(center[2]),
+                        num_samples,
+                    ),
+                    dtype=np.float32,
+                )
+
+        if points.shape != (num_points, 3):
+            points = points.reshape((num_points, 3))
+
+        next_cursor = cursor + num_points
+        stacked_points[cursor:next_cursor] = points
+        stacked_elements[cursor:next_cursor] = element
+        cursor = next_cursor
+
     extra_coords = pd.DataFrame.from_dict(
         {
             "x": stacked_points[:, 0],
