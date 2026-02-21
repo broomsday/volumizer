@@ -44,6 +44,52 @@ def test_get_neighbor_voxels_native_uses_native_module(monkeypatch):
     assert np.array_equal(computed[2], np.array([100, 300]))
 
 
+def test_get_first_shell_exposed_voxels_native_prefers_specialized_kernel(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def get_first_shell_exposed_indices(exposed, buried, grid_dimensions):
+            assert exposed.shape == (3, 3)
+            assert buried.shape == (2, 3)
+            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            return np.array([0, 2], dtype=np.int32)
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+
+    exposed_voxels = VoxelGroup(
+        voxels=(np.array([1, 2, 3]), np.array([1, 1, 1]), np.array([1, 1, 1])),
+        indices=set([21, 37, 53]),
+        num_voxels=3,
+        voxel_type="exposed",
+        volume=24.0,
+    )
+    buried_voxels = VoxelGroup(
+        voxels=(np.array([0, 3]), np.array([1, 1]), np.array([1, 1])),
+        indices=set([5, 53]),
+        num_voxels=2,
+        voxel_type="buried",
+        volume=16.0,
+    )
+
+    class DummyGrid:
+        x_y_z = np.array([4, 4, 4], dtype=int)
+
+    first_shell = voxel.get_first_shell_exposed_voxels(
+        exposed_voxels,
+        buried_voxels,
+        DummyGrid(),
+        backend="native",
+    )
+
+    assert first_shell.num_voxels == 2
+    assert np.array_equal(first_shell.voxels[0], np.array([1, 3]))
+    assert np.array_equal(first_shell.voxels[1], np.array([1, 1]))
+    assert np.array_equal(first_shell.voxels[2], np.array([1, 1]))
+    assert first_shell.indices == set([21, 53])
+
+
 def test_get_exposed_and_buried_voxels_native_uses_native_module(monkeypatch):
     class FakeNativeModule:
         @staticmethod
@@ -252,6 +298,53 @@ def test_classify_buried_components_native_maps_native_output(monkeypatch):
     assert len(pockets) == 1
     assert pockets[0].voxel_type == "pocket"
     assert pockets[0].num_voxels == 2
+
+
+def test_classify_buried_components_native_records_kernel_substage_timings(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def classify_buried_components(
+            buried_array, exposed_array, grid_dimensions, min_num_voxels, voxel_size
+        ):
+            assert buried_array.shape == (2, 3)
+            assert exposed_array.shape == (0, 3)
+            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            return {
+                "component_type_codes": np.array([2], dtype=np.int32),
+                "component_offsets": np.array([0, 2], dtype=np.int32),
+                "surface_offsets": np.array([0, 1], dtype=np.int32),
+                "component_voxel_indices_flat": np.array([0, 1], dtype=np.int32),
+                "component_surface_indices_flat": np.array([0], dtype=np.int32),
+                "kernel_stage_timings_seconds": {
+                    "bfs_component_expansion": 0.123,
+                    "classify_component_type": 0.045,
+                },
+            }
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+
+    buried_voxels, exposed_voxels = _make_test_buried_and_exposed_voxels()
+    dummy_grid = _make_dummy_voxel_grid()
+    stage_timings = {}
+
+    voxel.classify_buried_components_native(
+        buried_voxels,
+        exposed_voxels,
+        dummy_grid,
+        stage_timings=stage_timings,
+    )
+
+    assert stage_timings["classify_components_native_kernel"] > 0.0
+    assert stage_timings["classify_components_native_mapping"] > 0.0
+    assert stage_timings["classify_components_native_kernel_bfs_component_expansion"] == pytest.approx(
+        0.123
+    )
+    assert stage_timings["classify_components_native_kernel_classify_component_type"] == pytest.approx(
+        0.045
+    )
 
 
 def test_get_pores_dispatches_to_native_classifier(monkeypatch):

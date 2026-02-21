@@ -467,24 +467,58 @@ def get_first_shell_exposed_voxels(
     Subset exposed voxels into only those neighboring one or more buried voxels.
     """
     requested_backend = backend if backend is not None else utils.get_active_backend()
+
     if requested_backend == "native":
-        first_shell_voxels = get_neighbor_voxels_native(
-            exposed_voxels.voxels, buried_voxels.voxels
-        )
+        native_module = native_backend.get_native_module_for_mode("native")
+        if native_module is None:
+            raise RuntimeError(
+                "Native backend requested but `volumizer_native` is not importable."
+            )
+
+        if hasattr(native_module, "get_first_shell_exposed_indices"):
+            exposed_array = _voxel_tuple_to_native_array(exposed_voxels.voxels)
+            buried_array = _voxel_tuple_to_native_array(buried_voxels.voxels)
+            grid_dimensions = np.asarray(voxel_grid.x_y_z, dtype=np.int32)
+            first_shell_neighbor_indices = np.asarray(
+                native_module.get_first_shell_exposed_indices(
+                    exposed_array,
+                    buried_array,
+                    grid_dimensions,
+                ),
+                dtype=np.int64,
+            )
+            first_shell_arrays = (
+                exposed_voxels.voxels[0][first_shell_neighbor_indices],
+                exposed_voxels.voxels[1][first_shell_neighbor_indices],
+                exposed_voxels.voxels[2][first_shell_neighbor_indices],
+            )
+        else:
+            first_shell_voxels = get_neighbor_voxels_native(
+                exposed_voxels.voxels, buried_voxels.voxels
+            )
+            first_shell_arrays = (
+                np.asarray(first_shell_voxels[0]),
+                np.asarray(first_shell_voxels[1]),
+                np.asarray(first_shell_voxels[2]),
+            )
     elif performant:
         first_shell_voxels = get_neighbor_voxels_c(
             exposed_voxels.voxels, buried_voxels.voxels
+        )
+        first_shell_arrays = (
+            np.asarray(first_shell_voxels[0]),
+            np.asarray(first_shell_voxels[1]),
+            np.asarray(first_shell_voxels[2]),
         )
     else:
         first_shell_voxels = get_neighbor_voxels_python(
             exposed_voxels.voxels, buried_voxels.voxels
         )
-
-    first_shell_arrays = (
-        np.asarray(first_shell_voxels[0]),
-        np.asarray(first_shell_voxels[1]),
-        np.asarray(first_shell_voxels[2]),
-    )
+        first_shell_arrays = (
+            np.asarray(first_shell_voxels[0]),
+            np.asarray(first_shell_voxels[1]),
+            np.asarray(first_shell_voxels[2]),
+        )
     first_shell_indices = compute_voxel_indices(first_shell_arrays, voxel_grid.x_y_z)
 
     return VoxelGroup(
@@ -974,6 +1008,22 @@ def classify_buried_components_native(
         raise RuntimeError(
             "Unexpected native classifier output, expected dict with flattened arrays."
         )
+
+    if stage_timings is not None:
+        kernel_stage_timings = native_output.get("kernel_stage_timings_seconds")
+        if isinstance(kernel_stage_timings, dict):
+            for substage_name, substage_seconds in kernel_stage_timings.items():
+                try:
+                    parsed_seconds = float(substage_seconds)
+                except (TypeError, ValueError):
+                    continue
+                if parsed_seconds <= 0.0:
+                    continue
+                _accumulate_stage_timing(
+                    stage_timings,
+                    f"classify_components_native_kernel_{substage_name}",
+                    parsed_seconds,
+                )
 
     mapping_start = perf_counter() if stage_timings is not None else 0.0
 

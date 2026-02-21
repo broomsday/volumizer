@@ -5,8 +5,9 @@ use numpy::{
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::i32;
+use std::time::Instant;
 
 const NATIVE_CONTRACT_VERSION: u32 = 1;
 const OCCLUDED_DIMENSION_LIMIT: i32 = 4;
@@ -203,7 +204,59 @@ fn validate_voxel_in_grid(
     Ok(())
 }
 
-fn bfs_component_from_set(voxels: &[[i32; 3]], searchable_indices: &HashSet<i32>) -> Vec<i32> {
+fn bfs_component_with_lookup(
+    buried_voxels: &[[i32; 3]],
+    coordinate_to_index: &HashMap<[i32; 3], i32>,
+    remaining_flags: &mut [bool],
+    start_index: i32,
+) -> Vec<i32> {
+    if start_index < 0 || start_index as usize >= remaining_flags.len() {
+        return Vec::new();
+    }
+
+    let start_usize = start_index as usize;
+    if !remaining_flags[start_usize] {
+        return Vec::new();
+    }
+
+    remaining_flags[start_usize] = false;
+    let mut queue: VecDeque<i32> = VecDeque::new();
+    queue.push_back(start_index);
+
+    let mut component_indices: Vec<i32> = vec![start_index];
+
+    while let Some(current_index) = queue.pop_front() {
+        let current_voxel = buried_voxels[current_index as usize];
+        let neighbor_candidates = [
+            [current_voxel[0] - 1, current_voxel[1], current_voxel[2]],
+            [current_voxel[0] + 1, current_voxel[1], current_voxel[2]],
+            [current_voxel[0], current_voxel[1] - 1, current_voxel[2]],
+            [current_voxel[0], current_voxel[1] + 1, current_voxel[2]],
+            [current_voxel[0], current_voxel[1], current_voxel[2] - 1],
+            [current_voxel[0], current_voxel[1], current_voxel[2] + 1],
+        ];
+
+        for neighbor_voxel in neighbor_candidates.iter() {
+            if let Some(neighbor_index) = coordinate_to_index.get(neighbor_voxel) {
+                let neighbor_usize = *neighbor_index as usize;
+                if remaining_flags[neighbor_usize] {
+                    remaining_flags[neighbor_usize] = false;
+                    queue.push_back(*neighbor_index);
+                    component_indices.push(*neighbor_index);
+                }
+            }
+        }
+    }
+
+    component_indices.sort_unstable();
+    component_indices
+}
+
+fn bfs_component_from_subset_with_lookup(
+    buried_voxels: &[[i32; 3]],
+    coordinate_to_index: &HashMap<[i32; 3], i32>,
+    searchable_indices: &HashSet<i32>,
+) -> Vec<i32> {
     if searchable_indices.is_empty() {
         return Vec::new();
     }
@@ -218,26 +271,37 @@ fn bfs_component_from_set(voxels: &[[i32; 3]], searchable_indices: &HashSet<i32>
     let mut component_indices: Vec<i32> = vec![start_index];
 
     while let Some(current_index) = queue.pop_front() {
-        let current_voxel = voxels[current_index as usize];
+        let current_voxel = buried_voxels[current_index as usize];
+        let neighbor_candidates = [
+            [current_voxel[0] - 1, current_voxel[1], current_voxel[2]],
+            [current_voxel[0] + 1, current_voxel[1], current_voxel[2]],
+            [current_voxel[0], current_voxel[1] - 1, current_voxel[2]],
+            [current_voxel[0], current_voxel[1] + 1, current_voxel[2]],
+            [current_voxel[0], current_voxel[1], current_voxel[2] - 1],
+            [current_voxel[0], current_voxel[1], current_voxel[2] + 1],
+        ];
 
-        let mut newly_found: Vec<i32> = Vec::new();
-        for searched_index in remaining_indices.iter().copied() {
-            let searched_voxel = voxels[searched_index as usize];
-            if is_neighbor_voxel(current_voxel, searched_voxel) {
-                newly_found.push(searched_index);
-            }
-        }
-
-        for found_index in newly_found {
-            if remaining_indices.remove(&found_index) {
-                queue.push_back(found_index);
-                component_indices.push(found_index);
+        for neighbor_voxel in neighbor_candidates.iter() {
+            if let Some(neighbor_index) = coordinate_to_index.get(neighbor_voxel) {
+                if remaining_indices.remove(neighbor_index) {
+                    queue.push_back(*neighbor_index);
+                    component_indices.push(*neighbor_index);
+                }
             }
         }
     }
 
     component_indices.sort_unstable();
     component_indices
+}
+
+fn has_neighbor_in_set(voxel: [i32; 3], coordinate_set: &HashSet<[i32; 3]>) -> bool {
+    coordinate_set.contains(&[voxel[0] - 1, voxel[1], voxel[2]])
+        || coordinate_set.contains(&[voxel[0] + 1, voxel[1], voxel[2]])
+        || coordinate_set.contains(&[voxel[0], voxel[1] - 1, voxel[2]])
+        || coordinate_set.contains(&[voxel[0], voxel[1] + 1, voxel[2]])
+        || coordinate_set.contains(&[voxel[0], voxel[1], voxel[2] - 1])
+        || coordinate_set.contains(&[voxel[0], voxel[1], voxel[2] + 1])
 }
 
 fn is_edge_voxel(voxel: [i32; 3], grid_dimensions: [i32; 3]) -> bool {
@@ -252,28 +316,29 @@ fn is_edge_voxel(voxel: [i32; 3], grid_dimensions: [i32; 3]) -> bool {
 fn get_agglomerated_type(
     query_indices: &HashSet<i32>,
     buried_voxels: &[[i32; 3]],
-    exposed_voxels: &[[i32; 3]],
+    buried_coordinate_to_index: &HashMap<[i32; 3], i32>,
+    exposed_coordinate_set: &HashSet<[i32; 3]>,
     grid_dimensions: [i32; 3],
 ) -> (Vec<i32>, i8) {
-    let mut direct_surface_indices: HashSet<i32> = HashSet::new();
+    let mut direct_surface_indices: HashSet<i32> = HashSet::with_capacity(query_indices.len());
     for query_index in query_indices.iter().copied() {
         let query_voxel = buried_voxels[query_index as usize];
-        if is_edge_voxel(query_voxel, grid_dimensions) {
+        if is_edge_voxel(query_voxel, grid_dimensions)
+            || has_neighbor_in_set(query_voxel, exposed_coordinate_set)
+        {
             direct_surface_indices.insert(query_index);
-            continue;
-        }
-
-        for exposed_voxel in exposed_voxels.iter().copied() {
-            if is_neighbor_voxel(query_voxel, exposed_voxel) {
-                direct_surface_indices.insert(query_index);
-                break;
-            }
         }
     }
 
     // cavity
     if direct_surface_indices.is_empty() {
         return (Vec::new(), 1);
+    }
+
+    let mut direct_surface_coordinate_set: HashSet<[i32; 3]> =
+        HashSet::with_capacity(direct_surface_indices.len().saturating_mul(2));
+    for surface_index in direct_surface_indices.iter().copied() {
+        direct_surface_coordinate_set.insert(buried_voxels[surface_index as usize]);
     }
 
     let mut neighbor_surface_indices: HashSet<i32> = HashSet::new();
@@ -283,42 +348,9 @@ fn get_agglomerated_type(
         .filter(|idx| !direct_surface_indices.contains(idx))
     {
         let query_voxel = buried_voxels[query_index as usize];
-        for surface_index in direct_surface_indices.iter().copied() {
-            let surface_voxel = buried_voxels[surface_index as usize];
-            if is_neighbor_voxel(surface_voxel, query_voxel) {
-                neighbor_surface_indices.insert(query_index);
-                break;
-            }
+        if has_neighbor_in_set(query_voxel, &direct_surface_coordinate_set) {
+            neighbor_surface_indices.insert(query_index);
         }
-    }
-
-    let mut surface_indices: HashSet<i32> = direct_surface_indices
-        .union(&neighbor_surface_indices)
-        .copied()
-        .collect();
-    let single_surface_indices = bfs_component_from_set(buried_voxels, &surface_indices);
-    if single_surface_indices.len() < surface_indices.len() {
-        for index in single_surface_indices {
-            surface_indices.remove(&index);
-        }
-        let second_surface = bfs_component_from_set(buried_voxels, &surface_indices);
-        if second_surface.len() < surface_indices.len() {
-            let mut sorted_surface_indices: Vec<i32> = direct_surface_indices
-                .union(&neighbor_surface_indices)
-                .copied()
-                .collect();
-            sorted_surface_indices.sort_unstable();
-            // hub
-            return (sorted_surface_indices, 4);
-        }
-
-        let mut sorted_surface_indices: Vec<i32> = direct_surface_indices
-            .union(&neighbor_surface_indices)
-            .copied()
-            .collect();
-        sorted_surface_indices.sort_unstable();
-        // pore
-        return (sorted_surface_indices, 3);
     }
 
     let mut sorted_surface_indices: Vec<i32> = direct_surface_indices
@@ -326,10 +358,39 @@ fn get_agglomerated_type(
         .copied()
         .collect();
     sorted_surface_indices.sort_unstable();
+
+    let mut remaining_surface_indices: HashSet<i32> =
+        sorted_surface_indices.iter().copied().collect();
+
+    let first_surface = bfs_component_from_subset_with_lookup(
+        buried_voxels,
+        buried_coordinate_to_index,
+        &remaining_surface_indices,
+    );
+
+    if first_surface.len() < remaining_surface_indices.len() {
+        for index in first_surface {
+            remaining_surface_indices.remove(&index);
+        }
+
+        let second_surface = bfs_component_from_subset_with_lookup(
+            buried_voxels,
+            buried_coordinate_to_index,
+            &remaining_surface_indices,
+        );
+
+        if second_surface.len() < remaining_surface_indices.len() {
+            // hub
+            return (sorted_surface_indices, 4);
+        }
+
+        // pore
+        return (sorted_surface_indices, 3);
+    }
+
     // pocket
     (sorted_surface_indices, 2)
 }
-
 #[pyfunction]
 fn get_neighbor_voxel_indices<'py>(
     py: Python<'py>,
@@ -371,6 +432,60 @@ fn get_neighbor_voxel_indices<'py>(
     }
 
     Ok(Array1::from(neighbor_indices).into_pyarray_bound(py))
+}
+
+#[pyfunction]
+fn get_first_shell_exposed_indices<'py>(
+    py: Python<'py>,
+    exposed_voxels: PyReadonlyArray2<'_, i32>,
+    buried_voxels: PyReadonlyArray2<'_, i32>,
+    grid_dimensions: PyReadonlyArray1<'_, i32>,
+) -> PyResult<Bound<'py, PyArray1<i32>>> {
+    validate_voxel_array_shape(&exposed_voxels, "exposed_voxels")?;
+    validate_voxel_array_shape(&buried_voxels, "buried_voxels")?;
+    let grid_dims = validate_grid_dimensions(&grid_dimensions)?;
+
+    let exposed = exposed_voxels.as_array();
+    let buried = buried_voxels.as_array();
+
+    let stride_yz = i64::from(grid_dims[1]) * i64::from(grid_dims[2]);
+    let stride_z = i64::from(grid_dims[2]);
+    let max_x = grid_dims[0] - 1;
+    let max_y = grid_dims[1] - 1;
+    let max_z = grid_dims[2] - 1;
+
+    let mut buried_flat_set: HashSet<i64> =
+        HashSet::with_capacity(buried.shape()[0].saturating_mul(2));
+    for buried_index in 0..buried.shape()[0] {
+        let x = buried[[buried_index, 0]];
+        let y = buried[[buried_index, 1]];
+        let z = buried[[buried_index, 2]];
+
+        let flat = i64::from(x) * stride_yz + i64::from(y) * stride_z + i64::from(z);
+        buried_flat_set.insert(flat);
+    }
+
+    let mut first_shell_indices: Vec<i32> = Vec::new();
+    for exposed_index in 0..exposed.shape()[0] {
+        let x = exposed[[exposed_index, 0]];
+        let y = exposed[[exposed_index, 1]];
+        let z = exposed[[exposed_index, 2]];
+
+        let flat = i64::from(x) * stride_yz + i64::from(y) * stride_z + i64::from(z);
+
+        let neighbors_buried = (x > 0 && buried_flat_set.contains(&(flat - stride_yz)))
+            || (x < max_x && buried_flat_set.contains(&(flat + stride_yz)))
+            || (y > 0 && buried_flat_set.contains(&(flat - stride_z)))
+            || (y < max_y && buried_flat_set.contains(&(flat + stride_z)))
+            || (z > 0 && buried_flat_set.contains(&(flat - 1)))
+            || (z < max_z && buried_flat_set.contains(&(flat + 1)));
+
+        if neighbors_buried {
+            first_shell_indices.push(exposed_index as i32);
+        }
+    }
+
+    Ok(Array1::from(first_shell_indices).into_pyarray_bound(py))
 }
 
 #[pyfunction]
@@ -590,6 +705,15 @@ fn classify_buried_components(
     let buried_view = buried_voxels.as_array();
     let exposed_view = exposed_voxels.as_array();
 
+    let mut build_voxel_vectors_seconds = 0.0_f64;
+    let mut build_coordinate_index_lookup_seconds = 0.0_f64;
+    let mut build_remaining_index_set_seconds = 0.0_f64;
+    let mut bfs_component_expansion_seconds = 0.0_f64;
+    let mut merge_component_indices_seconds = 0.0_f64;
+    let mut classify_component_type_seconds = 0.0_f64;
+    let mut flatten_component_output_seconds = 0.0_f64;
+
+    let build_voxel_vectors_start = Instant::now();
     let buried: Vec<[i32; 3]> = (0..buried_view.shape()[0])
         .map(|i| {
             [
@@ -608,10 +732,28 @@ fn classify_buried_components(
             ]
         })
         .collect();
+    build_voxel_vectors_seconds += build_voxel_vectors_start.elapsed().as_secs_f64();
+
+    let coordinate_lookup_start = Instant::now();
+    let mut coordinate_to_index: HashMap<[i32; 3], i32> =
+        HashMap::with_capacity(buried.len().saturating_mul(2));
+    for (index, voxel) in buried.iter().copied().enumerate() {
+        coordinate_to_index.insert(voxel, index as i32);
+    }
+
+    let mut exposed_coordinate_set: HashSet<[i32; 3]> =
+        HashSet::with_capacity(exposed.len().saturating_mul(2));
+    for voxel in exposed.iter().copied() {
+        exposed_coordinate_set.insert(voxel);
+    }
+
+    build_coordinate_index_lookup_seconds += coordinate_lookup_start.elapsed().as_secs_f64();
+
     let grid_dims_array = [grid_dims[0], grid_dims[1], grid_dims[2]];
 
-    let buried_indices: HashSet<i32> = (0..(buried.len() as i32)).collect();
-    let mut agglomerated_indices: HashSet<i32> = HashSet::new();
+    let mut remaining_flags = vec![true; buried.len()];
+    let mut remaining_count = buried.len();
+    let mut next_start_index: usize = 0;
 
     let mut component_type_codes: Vec<i8> = Vec::new();
     let mut component_offsets: Vec<i32> = vec![0];
@@ -619,31 +761,59 @@ fn classify_buried_components(
     let mut component_voxel_indices_flat: Vec<i32> = Vec::new();
     let mut component_surface_indices_flat: Vec<i32> = Vec::new();
 
-    while agglomerated_indices.len() < buried_indices.len() {
-        let remaining_indices: HashSet<i32> = buried_indices
-            .iter()
-            .copied()
-            .filter(|idx| !agglomerated_indices.contains(idx))
-            .collect();
-        let component_indices = bfs_component_from_set(&buried, &remaining_indices);
-        for index in component_indices.iter().copied() {
-            agglomerated_indices.insert(index);
+    while remaining_count > 0 {
+        let remaining_scan_start = Instant::now();
+        while next_start_index < remaining_flags.len() && !remaining_flags[next_start_index] {
+            next_start_index += 1;
+        }
+        build_remaining_index_set_seconds += remaining_scan_start.elapsed().as_secs_f64();
+
+        if next_start_index >= remaining_flags.len() {
+            break;
         }
 
+        let bfs_start = Instant::now();
+        let component_indices = bfs_component_with_lookup(
+            &buried,
+            &coordinate_to_index,
+            &mut remaining_flags,
+            next_start_index as i32,
+        );
+        bfs_component_expansion_seconds += bfs_start.elapsed().as_secs_f64();
+
+        if component_indices.is_empty() {
+            break;
+        }
+
+        let merge_start = Instant::now();
+        remaining_count = remaining_count.saturating_sub(component_indices.len());
+        merge_component_indices_seconds += merge_start.elapsed().as_secs_f64();
+
+        let classify_start = Instant::now();
         let component_index_set: HashSet<i32> = component_indices.iter().copied().collect();
         let (surface_indices, type_code) = if component_indices.len() <= min_num_voxels as usize {
             (Vec::new(), 0_i8) // occluded
         } else {
-            get_agglomerated_type(&component_index_set, &buried, &exposed, grid_dims_array)
+            get_agglomerated_type(
+                &component_index_set,
+                &buried,
+                &coordinate_to_index,
+                &exposed_coordinate_set,
+                grid_dims_array,
+            )
         };
+        classify_component_type_seconds += classify_start.elapsed().as_secs_f64();
 
+        let flatten_start = Instant::now();
         component_type_codes.push(type_code);
         component_voxel_indices_flat.extend(component_indices.iter().copied());
         component_surface_indices_flat.extend(surface_indices.iter().copied());
         component_offsets.push(component_voxel_indices_flat.len() as i32);
         surface_offsets.push(component_surface_indices_flat.len() as i32);
+        flatten_component_output_seconds += flatten_start.elapsed().as_secs_f64();
     }
 
+    let build_python_output_start = Instant::now();
     let result = PyDict::new_bound(py);
     result.set_item(
         "component_type_codes",
@@ -666,9 +836,31 @@ fn classify_buried_components(
         Array1::from(component_surface_indices_flat).into_pyarray_bound(py),
     )?;
 
+    let build_python_output_seconds = build_python_output_start.elapsed().as_secs_f64();
+    let kernel_stage_timings_seconds = PyDict::new_bound(py);
+    kernel_stage_timings_seconds.set_item("build_voxel_vectors", build_voxel_vectors_seconds)?;
+    kernel_stage_timings_seconds.set_item(
+        "build_coordinate_index_lookup",
+        build_coordinate_index_lookup_seconds,
+    )?;
+    kernel_stage_timings_seconds.set_item(
+        "build_remaining_index_set",
+        build_remaining_index_set_seconds,
+    )?;
+    kernel_stage_timings_seconds
+        .set_item("bfs_component_expansion", bfs_component_expansion_seconds)?;
+    kernel_stage_timings_seconds
+        .set_item("merge_component_indices", merge_component_indices_seconds)?;
+    kernel_stage_timings_seconds
+        .set_item("classify_component_type", classify_component_type_seconds)?;
+    kernel_stage_timings_seconds
+        .set_item("flatten_component_output", flatten_component_output_seconds)?;
+    kernel_stage_timings_seconds.set_item("build_python_output", build_python_output_seconds)?;
+
+    result.set_item("kernel_stage_timings_seconds", kernel_stage_timings_seconds)?;
+
     Ok(result.into())
 }
-
 #[pymodule]
 fn volumizer_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(contract_version, module)?)?;
@@ -676,6 +868,7 @@ fn volumizer_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<(
     module.add_function(wrap_pyfunction!(fibonacci_sphere_points, module)?)?;
     module.add_function(wrap_pyfunction!(fibonacci_sphere_points_batch, module)?)?;
     module.add_function(wrap_pyfunction!(get_neighbor_voxel_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(get_first_shell_exposed_indices, module)?)?;
     module.add_function(wrap_pyfunction!(bfs_component_indices, module)?)?;
     module.add_function(wrap_pyfunction!(
         get_exposed_and_buried_voxel_indices,

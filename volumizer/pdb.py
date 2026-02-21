@@ -174,6 +174,20 @@ def make_atom_line(
     return f"ATOM  {atom_index:>5d} {format_atom_name(atom_name)} {res_name} {chain_id}{res_num:>4d}    {coord[0]:>8.3f}{coord[1]:>8.3f}{coord[2]:>8.3f}  1.00{beta:>6.2f}           {element}"
 
 
+def _index_values_to_array(index_values: set[int] | np.ndarray) -> np.ndarray:
+    """
+    Normalize voxel index containers into a flat int64 numpy array.
+    """
+    if isinstance(index_values, set):
+        return np.fromiter(
+            index_values,
+            dtype=np.int64,
+            count=len(index_values),
+        )
+
+    return np.asarray(index_values, dtype=np.int64).reshape(-1)
+
+
 def volume_to_structure(
     voxel_type: str,
     voxel_group_index: int,
@@ -184,39 +198,29 @@ def volume_to_structure(
     """
     Convert one volume into a set of atoms in a biotite AtomArray.
     """
-    if isinstance(voxel_indices, set):
-        voxel_index_array = np.fromiter(
-            voxel_indices,
-            dtype=np.int64,
-            count=len(voxel_indices),
-        )
-    else:
-        voxel_index_array = np.asarray(voxel_indices, dtype=np.int64).reshape(-1)
+    voxel_index_array = _index_values_to_array(voxel_indices)
+    surface_index_array = _index_values_to_array(surface_indices)
 
     num_voxels = int(voxel_index_array.size)
     volume_structure = bts.AtomArray(num_voxels)
 
-    if isinstance(surface_indices, set):
-        surface_index_set = surface_indices
-    else:
-        surface_index_set = set(np.asarray(surface_indices, dtype=np.int64).tolist())
+    is_surface = (
+        np.isin(voxel_index_array, surface_index_array)
+        if surface_index_array.size > 0
+        else np.zeros(num_voxels, dtype=bool)
+    )
 
-    for i, voxel_index in enumerate(voxel_index_array):
-        b_factor = 50.0 if int(voxel_index) in surface_index_set else 0.0
-        volume_structure[i] = bts.Atom(
-            voxel_grid_centers[int(voxel_index)],
-            atom_id=int(voxel_index),
-            b_factor=b_factor,
-        )
+    volume_structure.coord = voxel_grid_centers[voxel_index_array]
+    volume_structure.atom_id = voxel_index_array
+    volume_structure.b_factor = np.where(is_surface, 50.0, 0.0)
 
-    volume_structure.atom_name = [VOXEL_TYPE_ATOM_MAP[voxel_type]] * num_voxels
-    volume_structure.res_name = [voxel_type] * num_voxels
-    volume_structure.res_id = [voxel_group_index] * num_voxels
-    volume_structure.chain_id = [VOXEL_TYPE_CHAIN_MAP[voxel_type]] * num_voxels
-    volume_structure.element = [VOXEL_TYPE_ELEMENT_MAP[voxel_type]] * num_voxels
+    volume_structure.atom_name = np.full(num_voxels, VOXEL_TYPE_ATOM_MAP[voxel_type])
+    volume_structure.res_name = np.full(num_voxels, voxel_type)
+    volume_structure.res_id = np.full(num_voxels, voxel_group_index, dtype=np.int64)
+    volume_structure.chain_id = np.full(num_voxels, VOXEL_TYPE_CHAIN_MAP[voxel_type])
+    volume_structure.element = np.full(num_voxels, VOXEL_TYPE_ELEMENT_MAP[voxel_type])
 
     return volume_structure
-
 
 
 def volumes_to_structure(
@@ -230,48 +234,80 @@ def volumes_to_structure(
     """
     Convert the voxels of all volumes into a set atoms in a biotite AtomArray.
     """
-    volume_structure = bts.AtomArray(0)
+    grouped_volumes = [
+        ("HUB", hubs),
+        ("POR", pores),
+        ("POK", pockets),
+        ("CAV", cavities),
+        ("OCC", occluded),
+    ]
 
-    for i, voxel_group in hubs.items():
-        volume_structure += volume_to_structure(
-            "HUB",
-            i,
-            voxel_group.indices,
-            voxel_group.surface_indices,
-            voxel_grid.voxel_centers,
-        )
-    for i, voxel_group in pores.items():
-        volume_structure += volume_to_structure(
-            "POR",
-            i,
-            voxel_group.indices,
-            voxel_group.surface_indices,
-            voxel_grid.voxel_centers,
-        )
-    for i, voxel_group in pockets.items():
-        volume_structure += volume_to_structure(
-            "POK",
-            i,
-            voxel_group.indices,
-            voxel_group.surface_indices,
-            voxel_grid.voxel_centers,
-        )
-    for i, voxel_group in cavities.items():
-        volume_structure += volume_to_structure(
-            "CAV",
-            i,
-            voxel_group.indices,
-            voxel_group.surface_indices,
-            voxel_grid.voxel_centers,
-        )
-    for i, voxel_group in occluded.items():
-        volume_structure += volume_to_structure(
-            "OCC",
-            i,
-            voxel_group.indices,
-            voxel_group.surface_indices,
-            voxel_grid.voxel_centers,
-        )
+    volume_chunks: list[tuple[str, int, np.ndarray, np.ndarray]] = []
+    total_voxels = 0
+
+    for voxel_type, groups in grouped_volumes:
+        for group_index, voxel_group in groups.items():
+            voxel_index_array = _index_values_to_array(voxel_group.indices)
+            if voxel_index_array.size == 0:
+                continue
+
+            surface_index_array = _index_values_to_array(voxel_group.surface_indices)
+            volume_chunks.append(
+                (
+                    voxel_type,
+                    int(group_index),
+                    voxel_index_array,
+                    surface_index_array,
+                )
+            )
+            total_voxels += int(voxel_index_array.size)
+
+    if total_voxels == 0:
+        return bts.AtomArray(0)
+
+    all_voxel_indices = np.empty(total_voxels, dtype=np.int64)
+    all_b_factors = np.zeros(total_voxels, dtype=np.float64)
+    all_atom_names = np.empty(total_voxels, dtype=object)
+    all_res_names = np.empty(total_voxels, dtype=object)
+    all_res_ids = np.empty(total_voxels, dtype=np.int64)
+    all_chain_ids = np.empty(total_voxels, dtype=object)
+    all_elements = np.empty(total_voxels, dtype=object)
+
+    cursor = 0
+    for (
+        voxel_type,
+        voxel_group_index,
+        voxel_index_array,
+        surface_index_array,
+    ) in volume_chunks:
+        chunk_size = int(voxel_index_array.size)
+        next_cursor = cursor + chunk_size
+
+        all_voxel_indices[cursor:next_cursor] = voxel_index_array
+        if surface_index_array.size > 0:
+            all_b_factors[cursor:next_cursor] = np.where(
+                np.isin(voxel_index_array, surface_index_array),
+                50.0,
+                0.0,
+            )
+
+        all_atom_names[cursor:next_cursor] = VOXEL_TYPE_ATOM_MAP[voxel_type]
+        all_res_names[cursor:next_cursor] = voxel_type
+        all_res_ids[cursor:next_cursor] = voxel_group_index
+        all_chain_ids[cursor:next_cursor] = VOXEL_TYPE_CHAIN_MAP[voxel_type]
+        all_elements[cursor:next_cursor] = VOXEL_TYPE_ELEMENT_MAP[voxel_type]
+
+        cursor = next_cursor
+
+    volume_structure = bts.AtomArray(total_voxels)
+    volume_structure.coord = voxel_grid.voxel_centers[all_voxel_indices]
+    volume_structure.atom_id = all_voxel_indices
+    volume_structure.b_factor = all_b_factors
+    volume_structure.atom_name = all_atom_names
+    volume_structure.res_name = all_res_names
+    volume_structure.res_id = all_res_ids
+    volume_structure.chain_id = all_chain_ids
+    volume_structure.element = all_elements
 
     return volume_structure
 

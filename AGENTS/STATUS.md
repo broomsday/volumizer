@@ -1,4 +1,4 @@
-# Migration Status Snapshot (2026-02-20)
+# Migration Status Snapshot (2026-02-21)
 
 ## Completed
 
@@ -30,6 +30,11 @@
 - Native classification split profiling (kernel vs mapping) completed with artifacts and report sections.
 - Native mapping overhead reduction pass completed (fast axial-length kernel + mapping-path reductions), with medium/large repeat benchmarks showing substantial runtime improvements and mapping near-zero.
 - Native prepare-structure overhead reduction pass completed (equivalent thin-SVD principal-axis alignment in `volumizer/align.py` + alignment parity tests), with medium/large repeat benchmarks showing additional runtime improvements and prepare stage near-zero.
+- Native classifier kernel sub-stage profiling added (Rust-side timing + Python stage integration), with repeat benchmark artifacts identifying BFS and remaining-set rebuild as dominant kernel costs.
+- Native classifier kernel optimization pass completed (lookup-based BFS + remaining-set elimination), with repeat benchmarks showing substantial medium/large runtime and kernel-time reductions.
+- Native classify-type kernel optimization pass completed (hash-lookup adjacency + subset-BFS acceleration), with additional major medium/large runtime and kernel-time reductions.
+- Native first-shell exposed optimization pass completed (specialized native first-shell kernel + Python integration path selection), with medium/large repeats showing ~25-27% first-shell stage reductions and ~2.8-3.0% end-to-end gains.
+- Native volumes-to-structure optimization pass completed (vectorized atom-array assignment + single-allocation group assembly), with medium/large repeats showing ~90-93% `volumes_to_structure` stage reductions and ~11-17% end-to-end gains.
 - Native CI workflow added for parity tests and lightweight performance regression checks.
 - CLI subcommand interface added (`analyze`, `cluster`, `cache`) for local files, PDB-ID download, cluster-representative runs, and metadata-cache inspection/maintenance while keeping legacy flag-only invocation compatibility.
 - CLI resume mode and initial cluster selection filters added (default X-ray/cryo-EM method filter with optional method and resolution filters).
@@ -44,6 +49,6 @@
 
 ## Remaining
 
-- Continue optimization focus on native classifier kernel cost, with stage-profile benchmark deltas and follow-on optimization of newly visible secondary stages.
+- Continue optimization focus on stage-level overhead now dominating runtime: `load_structure`, `get_first_shell_exposed_voxels`, `add_extra_points`, and `get_exposed_and_buried_voxels`; keep residual native-kernel tuning as a secondary track.
 - Finalize native packaging/wheel strategy and default backend policy.
 - Continue CLI UX hardening: add validation subcommands and stronger runtime safety controls for very large jobs.

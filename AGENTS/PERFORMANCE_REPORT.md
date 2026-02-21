@@ -322,3 +322,244 @@ This matches the thin-SVD change: avoiding allocation of large dense `U` matrice
 With both Python mapping and prepare-structure overhead now near-zero on medium/large cases, next highest-ROI work is:
 1. Native classifier kernel optimization (`classify_components_native_kernel`).
 2. Secondary pipeline stages now visible after kernel work (`load_structure`, `get_first_shell_exposed_voxels`, `volumes_to_structure`).
+
+## 14. Native Classifier Kernel Sub-stage Profile (2026-02-20)
+
+Scope:
+- Goal: split `classify_components_native_kernel` into internal native-kernel sub-stages to identify the next highest-ROI optimization target.
+- Change summary:
+  - Added Rust-side timing instrumentation inside `classify_buried_components()` (`native/src/lib.rs`).
+  - Exposed kernel sub-stage timings via optional native output field `kernel_stage_timings_seconds`.
+  - Wired Python mapper to publish these as stage keys prefixed with `classify_components_native_kernel_*` in benchmark output (`volumizer/voxel.py`).
+
+Command used:
+- `VOLUMIZER_BACKEND=native uv run --python 3.11 python scripts/benchmark.py --group all --repeats 3 --resolution 2.0 --print-stage-breakdown --stage-top-n 16 --output-json AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v1.json`
+
+Artifact:
+- `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v1.json`
+
+Note:
+- Kernel sub-stage timers are nested within `classify_components_native_kernel`; parent and child stages intentionally overlap and are not additive totals.
+
+### 14.1 Kernel Internal Distribution (Medium/Large)
+
+| case | total_mean_s | kernel_mean_s | bfs_component_expansion | build_remaining_index_set | classify_component_type |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 1.801400 | 1.570103 | 0.867906s (55.28% kernel / 48.18% total) | 0.449232s (28.61% kernel / 24.94% total) | 0.248960s (15.86% kernel / 13.82% total) |
+| 4jpp_assembly | 4.146573 | 3.807427 | 2.152889s (56.54% kernel / 51.92% total) | 1.163736s (30.56% kernel / 28.07% total) | 0.484113s (12.71% kernel / 11.68% total) |
+
+Lower-impact kernel internals were near-zero in both cases:
+- `merge_component_indices`
+- `flatten_component_output`
+- `build_voxel_vectors`
+- `build_python_output`
+
+### 14.2 Updated Optimization Priority
+
+Based on the kernel sub-stage profile, next highest-ROI work is:
+1. Reduce BFS expansion cost (`bfs_component_expansion`), currently ~55-57% of kernel.
+2. Remove/rework per-iteration `remaining_indices` set rebuild (`build_remaining_index_set`), currently ~29-31% of kernel.
+3. After those, optimize `classify_component_type` (~13-16% of kernel), likely by reducing repeated neighbor/surface checks.
+
+## 15. Native Kernel Optimization Pass: Lookup-BFS + Remaining-Set Elimination (2026-02-20)
+
+Scope:
+- Goal: reduce dominant kernel internals identified in Section 14 (`bfs_component_expansion` + `build_remaining_index_set`).
+- Change summary:
+  - Replaced set-scan BFS expansion with coordinate-lookup BFS (`HashMap<[i32;3], index>` + 6-neighbor probes).
+  - Removed per-iteration rebuild of `remaining_indices` set by switching to persistent `remaining_flags` state with a moving start cursor.
+  - Kept output contract unchanged (`component_type_codes`, offsets, flattened voxel/surface indices), with kernel sub-stage timings still emitted.
+
+Artifacts used for before/after comparison (both native backend, `group=all`, `repeats=3`):
+- Before:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v1.json`
+- After:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v2.json`
+
+### 15.1 Medium/Large Delta
+
+| case | mean_s_before | mean_s_after | total_improvement | kernel_before_s | kernel_after_s | kernel_improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 1.801400 | 0.512000 | 71.58% | 1.570103 | 0.277435 | 82.33% |
+| 4jpp_assembly | 4.146573 | 1.443860 | 65.18% | 3.807427 | 0.914912 | 75.97% |
+
+### 15.2 Kernel Sub-stage Shift
+
+| case | bfs_before_s | bfs_after_s | remaining_set_before_s | remaining_set_after_s | classify_type_before_s | classify_type_after_s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 0.867906 | 0.014302 | 0.449232 | 0.000140 | 0.248960 | 0.259576 |
+| 4jpp_assembly | 2.152889 | 0.042897 | 1.163736 | 0.000317 | 0.484113 | 0.860069 |
+
+Interpretation:
+- The targeted hotspots (`bfs_component_expansion` and `build_remaining_index_set`) were effectively removed as major costs.
+- With those reduced, `classify_component_type` is now the dominant kernel internal stage.
+
+### 15.3 Updated Optimization Priority
+
+Next highest-ROI work is now:
+1. Optimize `classify_component_type` in native kernel (surface/direct-neighbor classification path).
+2. Then optimize newly visible non-kernel stages: `load_structure`, `volumes_to_structure`, `get_first_shell_exposed_voxels`.
+
+Note:
+- Kernel sub-stage timers are nested within `classify_components_native_kernel`; parent and child stages intentionally overlap and are not additive totals.
+
+## 16. Native Kernel Optimization Pass: Classify-Type Lookup Acceleration (2026-02-20)
+
+Scope:
+- Goal: reduce `classify_components_native_kernel_classify_component_type`, which became dominant after Section 15.
+- Change summary:
+  - Reworked classify-type internals to use hash-based 6-neighbor checks instead of repeated full-array scans.
+  - Added exposed-voxel coordinate lookup set and direct-surface coordinate lookup set for constant-time adjacency checks.
+  - Replaced surface-connectivity BFS in classify-type path with lookup-based subset BFS.
+
+Artifacts used for before/after comparison (both native backend, `group=all`, `repeats=3`):
+- Before:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v2.json`
+- After:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v3.json`
+
+### 16.1 Medium/Large Delta
+
+| case | mean_s_before | mean_s_after | total_improvement | kernel_before_s | kernel_after_s | kernel_improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 0.512000 | 0.264769 | 48.29% | 0.277435 | 0.044683 | 83.89% |
+| 4jpp_assembly | 1.443860 | 0.408943 | 71.68% | 0.914912 | 0.069574 | 92.40% |
+
+### 16.2 Classify-Type Sub-stage Delta
+
+| case | classify_type_before_s | classify_type_after_s | bfs_before_s | bfs_after_s |
+| --- | ---: | ---: | ---: | ---: |
+| 4jpn | 0.259576 | 0.026668 | 0.014302 | 0.013968 |
+| 4jpp_assembly | 0.860069 | 0.041268 | 0.042897 | 0.022289 |
+
+Interpretation:
+- `classify_component_type` was reduced by ~`89.73%` (`4jpn`) and ~`95.20%` (`4jpp_assembly`).
+- Kernel is no longer the dominant runtime bucket on medium/large cases.
+
+### 16.3 Current Stage Distribution (Native, repeats=3)
+
+From `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v3.json`:
+
+- `4jpn` (`0.264769s` mean)
+  - `load_structure`: `0.068689s` (`25.943%`)
+  - `classify_components_native_kernel`: `0.044683s` (`16.876%`)
+  - `get_first_shell_exposed_voxels`: `0.043771s` (`16.532%`)
+  - `volumes_to_structure`: `0.042649s` (`16.108%`)
+- `4jpp_assembly` (`0.408943s` mean)
+  - `load_structure`: `0.096397s` (`23.572%`)
+  - `volumes_to_structure`: `0.072414s` (`17.708%`)
+  - `classify_components_native_kernel`: `0.069574s` (`17.013%`)
+  - `get_first_shell_exposed_voxels`: `0.068330s` (`16.709%`)
+
+### 16.4 Updated Optimization Priority
+
+Next highest-ROI work is now:
+1. `load_structure`
+2. `volumes_to_structure`
+3. `get_first_shell_exposed_voxels`
+4. residual native kernel internals (lower priority than the stages above)
+
+Note:
+- Kernel sub-stage timers are nested within `classify_components_native_kernel`; parent and child stages intentionally overlap and are not additive totals.
+
+## 17. Native Orchestration Optimization Pass: First-Shell Specialized Kernel (2026-02-20)
+
+Scope:
+- Goal: reduce `get_first_shell_exposed_voxels`, which emerged as a top non-kernel stage after Section 16.
+- Change summary:
+  - Added native kernel `get_first_shell_exposed_indices` that uses flat-index neighbor checks against a buried-voxel lookup set.
+  - Integrated native path in `voxel.get_first_shell_exposed_voxels()` to use the specialized kernel when available, with fallback to existing neighbor-kernel path.
+  - Exported the new kernel in `volumizer_native` module initialization.
+  - Added native backend test coverage for specialized-kernel selection path.
+
+Artifacts used for before/after comparison (native backend, `group=all`, `repeats=3`):
+- Before:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v3.json`
+- After:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v4.json`
+- Focused confirmation runs:
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.medium.r3.v4.json`
+  - `AGENTS/benchmark.native.stage-profiling.kernel-substages.large.r3.v4.json`
+
+### 17.1 Medium/Large Delta
+
+| case | mean_s_before | mean_s_after | total_improvement | first_shell_before_s | first_shell_after_s | first_shell_improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 0.264769 | 0.257425 | 2.77% | 0.043771 | 0.031951 | 27.00% |
+| 4jpp_assembly | 0.408943 | 0.396828 | 2.96% | 0.068330 | 0.051137 | 25.16% |
+
+### 17.2 Stage Distribution Shift
+
+From `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v3.json` -> `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v4.json`:
+
+- `4jpn`
+  - `get_first_shell_exposed_voxels`: `0.043771s` (`16.532%`) -> `0.031951s` (`12.412%`)
+- `4jpp_assembly`
+  - `get_first_shell_exposed_voxels`: `0.068330s` (`16.709%`) -> `0.051137s` (`12.886%`)
+
+Interpretation:
+- The dedicated native first-shell kernel reduced stage time by ~`25-27%` on medium/large cases.
+- End-to-end medium/large runtime improved by ~`2.8-3.0%` in this pass.
+
+### 17.3 Variance Note (Small Cases)
+
+- In the all-cases `v4` run, `small/pore` showed a high-variance spike (`0.036756s`, `0.063204s`, `0.077627s` across repeats).
+- Focused small-group rerun (`AGENTS/benchmark.native.stage-profiling.kernel-substages.small.r3.v4a.json`) returned stable `pore` timing (`0.033557s` mean) with `get_first_shell_exposed_voxels` at `0.004572s`.
+- Optimization prioritization remains based on medium/large workloads where signal is stable.
+
+### 17.4 Updated Optimization Priority
+
+Next highest-ROI work is now:
+1. `load_structure`
+2. `volumes_to_structure`
+3. `get_exposed_and_buried_voxels` and `add_extra_points` stage-path overhead
+4. residual native kernel internals (`classify_component_type` path) as secondary
+
+## 18. Native Orchestration Optimization Pass: Volumes-to-Structure Vectorization (2026-02-21)
+
+Scope:
+- Goal: reduce `volumes_to_structure`, which remained a major non-kernel stage after Section 17.
+- Change summary:
+  - Replaced per-voxel `bts.Atom(...)` object construction in `volume_to_structure()` with vectorized annotation assignment.
+  - Replaced repeated `AtomArray +=` concatenations in `volumes_to_structure()` with a single-allocation assembly path.
+  - Added focused unit coverage for structure-materialization semantics (`tests/test_pdb.py`).
+
+Artifacts used for before/after comparison:
+- All-cases run (`group=all`, `repeats=3`):
+  - Before: `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v4.json`
+  - After: `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v5.json`
+- Focused confirmation runs:
+  - Before: `AGENTS/benchmark.native.stage-profiling.kernel-substages.medium.r3.v4.json`
+  - After: `AGENTS/benchmark.native.stage-profiling.kernel-substages.medium.r3.v5.json`
+  - Before: `AGENTS/benchmark.native.stage-profiling.kernel-substages.large.r3.v4.json`
+  - After: `AGENTS/benchmark.native.stage-profiling.kernel-substages.large.r3.v5.json`
+
+### 18.1 Medium/Large Delta (Focused Runs)
+
+| case | mean_s_before | mean_s_after | total_improvement | volumes_to_structure_before_s | volumes_to_structure_after_s | volumes_to_structure_improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 0.250541 | 0.222297 | 11.27% | 0.041348 | 0.004048 | 90.21% |
+| 4jpp_assembly | 0.419004 | 0.346630 | 17.27% | 0.080796 | 0.005286 | 93.46% |
+
+### 18.2 Stage Distribution Shift (All-Cases Run)
+
+From `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v4.json` -> `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v5.json`:
+
+- `4jpn`
+  - `volumes_to_structure`: `0.043168s` (`16.769%`) -> `0.003472s` (`1.524%`)
+  - `load_structure` is now dominant at `0.069214s` (`30.384%`)
+- `4jpp_assembly`
+  - `volumes_to_structure`: `0.073073s` (`18.414%`) -> `0.005156s` (`1.529%`)
+  - `load_structure` is now dominant at `0.109200s` (`32.382%`)
+
+Interpretation:
+- Structure materialization overhead was effectively removed as a major runtime bucket.
+- `load_structure` is now the top stage, with `get_first_shell_exposed_voxels`, `add_extra_points`, and `get_exposed_and_buried_voxels` as next candidates.
+
+### 18.3 Updated Optimization Priority
+
+Next highest-ROI work is now:
+1. `load_structure` (evaluate Biotite-bound constraints and viable fast paths)
+2. `get_first_shell_exposed_voxels`
+3. `add_extra_points`
+4. `get_exposed_and_buried_voxels`
