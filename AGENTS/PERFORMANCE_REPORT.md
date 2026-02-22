@@ -660,3 +660,39 @@ Next highest-ROI work is now:
 2. `get_first_shell_exposed_voxels`
 3. `add_extra_points`
 4. native classify-path internals (`classify_component_type`, BFS) as a parallel track
+
+## 21. Load-Structure Planning Update: Assembly Policy + Format Strategy (2026-02-22)
+
+Scope:
+- Goal: define and de-risk the next highest-ROI optimization pass centered on `load_structure`.
+
+Current findings:
+- RCSB CLI input flows already resolve to `.cif` downloads (PDB-ID and cluster paths both call `download_structure_cif`).
+- `load_structure()` currently expands biological assemblies for `.pdb`, `.cif`, and `.mmtf` via format-specific `get_assembly(..., model=1)` calls, then falls back to generic loading when needed.
+- BCIF entry downloads from `models.rcsb.org` are broadly available in practice (spot-check sample: 200 representative IDs, 200 HTTP 200 responses).
+- The next measurable gains are expected to come primarily from assembly-policy control and parse/decode-path tuning, not from kernel changes.
+
+Planned execution steps:
+1. Add explicit assembly policy controls to structure loading:
+   - `biological` (default, preserves current behavior)
+   - `asymmetric` (skip biological expansion)
+   - `auto` (apply strict identity/single-copy shortcut only when assembly expansion is a no-op)
+2. Add load-stage sub-timings to separate:
+   - file decode/parse
+   - assembly extraction/expansion
+   - fallback/error path
+3. Add optional format policy for RCSB downloads (`cif` baseline, BCIF experimental path) with safe fallback behavior.
+4. Run focused benchmarks on medium (`4jpn`) and large assembly (`4jpp_assembly`) cases per mode/format combination.
+5. Keep output-parity and default-behavior tests strict before enabling any policy change by default.
+
+Guardrails:
+- No silent default changes: default remains biological-assembly behavior.
+- Any shortcut in `auto` mode must be provably equivalent to biological expansion for that entry.
+- BCIF adoption should remain opt-in until benchmark + parity data are captured.
+
+### 21.1 Updated Optimization Priority
+
+1. `load_structure` instrumentation + assembly-policy controls
+2. `load_structure` format-policy experiments (`cif` vs BCIF path where applicable)
+3. residual `get_first_shell_exposed_voxels` cleanup
+4. native classify-path residual tuning (`classify_component_type`, BFS)

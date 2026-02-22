@@ -1,6 +1,6 @@
 # Volumizer Migration Plan (Python -> Rust/C Core)
 
-## 0. Current Status (2026-02-19)
+## 0. Current Status (2026-02-22)
 
 Phase status:
 - `Phase 0` (baseline + guardrails): completed.
@@ -22,6 +22,7 @@ CLI/UX progress in Phase 5:
 - Cluster method/resolution filtering, metadata cache, negative cache, deterministic sharding, manifest write/replay, summary replay, and failures-manifest export are implemented.
 
 Remaining priorities:
+- Treat `load_structure` as the primary optimization track (assembly-policy controls, format-policy evaluation, and sub-stage instrumentation).
 - Continue reducing Python orchestration overhead around native kernels where feasible.
 - Finalize wheel packaging/default backend policy and release ergonomics.
 - Add CLI validation/safety features for long-running large jobs.
@@ -66,7 +67,7 @@ Compatibility strategy:
 ## 4. Scope by Layer
 
 Remain Python initially:
-- Structure loading/cleaning (`volumizer/pdb.py`).
+- Structure loading/cleaning (`volumizer/pdb.py`) remains Python-owned, with active optimization work on assembly-aware shortcuts and input-format policy.
 - Output dataframe and PDB annotation formatting.
 - Public API and orchestration layer.
 
@@ -174,7 +175,7 @@ Exit criteria:
 Deliverables:
 - Cross-platform wheel builds (Linux/macOS; Windows if feasible).
 - Removal of manual `src/compile_c_libs.sh` requirement for standard installs.
-- CLI command (example: `volumizer run ...`) with JSON and annotated PDB outputs.
+- CLI command (example: `volumizer run ...`) with JSON and annotated CIF outputs.
 
 Tasks:
 - Add CLI entrypoint with:
@@ -241,6 +242,8 @@ Mitigation:
 
 ## 8. Immediate Next Actions (Current)
 
-1. Validate and tune the new native CI workflow (`.github/workflows/native-ci.yml`) across push/PR runs.
-2. Define packaging plan for native wheels and default-backend policy (`python` vs `auto`).
-3. Add release-oriented docs for native install/fallback behavior.
+1. Implement `load_structure` assembly policy controls (`biological`, `asymmetric`, `auto`) with default-preserving behavior.
+2. Add `load_structure` sub-stage timings and benchmark hooks to isolate parse/decode vs assembly expansion costs.
+3. Prototype BCIF input-path support for RCSB downloads with explicit fallback rules for assembly-heavy paths.
+4. Re-benchmark medium/large fixtures and record format/policy deltas in `AGENTS/PERFORMANCE_REPORT.md`.
+5. Continue packaging and release-track documentation for native install/fallback behavior.

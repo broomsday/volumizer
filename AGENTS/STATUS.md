@@ -1,4 +1,4 @@
-# Migration Status Snapshot (2026-02-21)
+# Migration Status Snapshot (2026-02-22)
 
 ## Completed
 
@@ -48,9 +48,16 @@
 - CLI periodic progress/ETA output added via `--progress-interval` (default 30 seconds, disable with `<= 0`).
 - CLI cluster sharding added via `--num-shards` + `--shard-index` for deterministic distributed processing of large representative lists.
 - CLI failure export added via `--failures-manifest`, producing replayable analyze-manifest files from structure-level errors.
+- RCSB format-path audit completed:
+- PDB-ID and cluster workflows are confirmed to download `.cif` inputs (not `.pdb`).
+- BCIF entry availability at `models.rcsb.org` is validated for sampled representative IDs, enabling a safe format-evaluation track for `load_structure`.
 
 ## Remaining
 
-- Continue optimization focus on stage-level overhead now dominating runtime: `load_structure`, `get_first_shell_exposed_voxels`, and `add_extra_points`; continue native-kernel classify-path tuning as a parallel track.
+- Primary optimization track: `load_structure` end-to-end time reduction with assembly-safe behavior preserved.
+- Implement explicit assembly policy controls (`biological` default, plus `asymmetric`/`auto`) and identity-only shortcutting for `auto`.
+- Add `load_structure` sub-stage timing instrumentation to isolate parse/decode vs assembly expansion costs before format-policy changes.
+- Evaluate BCIF input-path adoption where compatible, with mmCIF fallback retained for assembly-expansion paths.
+- Continue native classify-path kernel tuning as a parallel track after `load_structure` instrumentation is in place.
 - Finalize native packaging/wheel strategy and default backend policy.
 - Continue CLI UX hardening: add validation subcommands and stronger runtime safety controls for very large jobs.

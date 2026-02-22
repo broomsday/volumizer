@@ -53,11 +53,12 @@ Built in `volumizer/utils.py::make_annotation_dataframe()`:
 - sorted by descending volume
 - stores principal-axis lengths as `x`, `y`, `z`
 
-### Annotated PDB-style Structure
+### Annotated Pseudo-Atom Structure (CIF/PDB Output)
 Built in `volumizer/pdb.py`:
 - each voxel is emitted as a pseudo-atom
 - residue name encodes volume type (`HUB`, `POR`, `POK`, `CAV`, `OCC`)
 - B-factor marks direct surface-contact voxels (`50.0` vs `0.0`)
+- CLI output defaults to annotated CIF (`*.annotated.cif`), with PDB/CIF save helpers in `volumizer/pdb.py`.
 
 ## 5. Codebase Map
 
@@ -65,7 +66,7 @@ Built in `volumizer/pdb.py`:
 - `volumizer/cli.py`: CLI parser/orchestration (`analyze`, `cluster`, `cache` subcommands, checkpoint/resume, progress logging (JSONL + periodic ETA), metadata cache controls, manifest write/replay, summary subset replay, deterministic cluster sharding, failures-manifest export)
 - `volumizer/voxel.py`: voxel generation, burial/exposure split, BFS agglomeration, type assignment, geometric metrics
 - `volumizer/fib_sphere.py`: atom shell point generation
-- `volumizer/pdb.py`: structure I/O, cleanup, PDB formatting, annotation structure assembly
+- `volumizer/pdb.py`: structure I/O, cleanup, CIF/PDB formatting, annotation structure assembly
 - `volumizer/utils.py`: runtime configuration and annotation helpers
 - `volumizer/constants.py`: radii, thresholds, voxel/type mappings
 - `src/voxel.c`, `src/fib_sphere.c`: optional accelerated routines called via `ctypes`
