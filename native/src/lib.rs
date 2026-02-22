@@ -781,6 +781,195 @@ fn get_exposed_and_buried_voxel_indices(
 }
 
 #[pyfunction]
+fn get_exposed_and_buried_selection<'py>(
+    py: Python<'py>,
+    solvent_x: PyReadonlyArray1<'_, i64>,
+    solvent_y: PyReadonlyArray1<'_, i64>,
+    solvent_z: PyReadonlyArray1<'_, i64>,
+    protein_x: PyReadonlyArray1<'_, i64>,
+    protein_y: PyReadonlyArray1<'_, i64>,
+    protein_z: PyReadonlyArray1<'_, i64>,
+    grid_dimensions: PyReadonlyArray1<'_, i32>,
+) -> PyResult<PyObject> {
+    let solvent_x_view = solvent_x.as_slice()?;
+    let solvent_y_view = solvent_y.as_slice()?;
+    let solvent_z_view = solvent_z.as_slice()?;
+    let protein_x_view = protein_x.as_slice()?;
+    let protein_y_view = protein_y.as_slice()?;
+    let protein_z_view = protein_z.as_slice()?;
+
+    if solvent_x_view.len() != solvent_y_view.len() || solvent_x_view.len() != solvent_z_view.len()
+    {
+        return Err(PyValueError::new_err(format!(
+            "solvent axis arrays must have matching lengths, got x={}, y={}, z={}",
+            solvent_x_view.len(),
+            solvent_y_view.len(),
+            solvent_z_view.len()
+        )));
+    }
+    if protein_x_view.len() != protein_y_view.len() || protein_x_view.len() != protein_z_view.len()
+    {
+        return Err(PyValueError::new_err(format!(
+            "protein axis arrays must have matching lengths, got x={}, y={}, z={}",
+            protein_x_view.len(),
+            protein_y_view.len(),
+            protein_z_view.len()
+        )));
+    }
+
+    if solvent_x_view.len() > i32::MAX as usize {
+        return Err(PyValueError::new_err(
+            "solvent voxel count exceeds supported index range",
+        ));
+    }
+
+    let grid_dims = validate_grid_dimensions(&grid_dimensions)?;
+    let grid_x = grid_dims[0] as usize;
+    let grid_y = grid_dims[1] as usize;
+    let grid_z = grid_dims[2] as usize;
+    let grid_x_i64 = i64::from(grid_dims[0]);
+    let grid_y_i64 = i64::from(grid_dims[1]);
+    let grid_z_i64 = i64::from(grid_dims[2]);
+
+    let z_array_len = grid_x
+        .checked_mul(grid_y)
+        .ok_or_else(|| PyValueError::new_err("grid_dimensions are too large"))?;
+    let y_array_len = grid_x
+        .checked_mul(grid_z)
+        .ok_or_else(|| PyValueError::new_err("grid_dimensions are too large"))?;
+    let x_array_len = grid_y
+        .checked_mul(grid_z)
+        .ok_or_else(|| PyValueError::new_err("grid_dimensions are too large"))?;
+
+    let mut z_min = vec![i64::MAX; z_array_len];
+    let mut z_max = vec![i64::MIN; z_array_len];
+    let mut y_min = vec![i64::MAX; y_array_len];
+    let mut y_max = vec![i64::MIN; y_array_len];
+    let mut x_min = vec![i64::MAX; x_array_len];
+    let mut x_max = vec![i64::MIN; x_array_len];
+
+    for protein_index in 0..protein_x_view.len() {
+        let x = protein_x_view[protein_index];
+        let y = protein_y_view[protein_index];
+        let z = protein_z_view[protein_index];
+
+        if x < 0 || y < 0 || z < 0 || x >= grid_x_i64 || y >= grid_y_i64 || z >= grid_z_i64 {
+            return Err(PyValueError::new_err(format!(
+                "protein_voxels[{protein_index}] is out of bounds for grid_dimensions {:?}: [{x}, {y}, {z}]",
+                grid_dims
+            )));
+        }
+
+        let x_u = x as usize;
+        let y_u = y as usize;
+        let z_u = z as usize;
+
+        let z_idx = x_u * grid_y + y_u;
+        z_min[z_idx] = z_min[z_idx].min(z);
+        z_max[z_idx] = z_max[z_idx].max(z);
+
+        let y_idx = x_u * grid_z + z_u;
+        y_min[y_idx] = y_min[y_idx].min(y);
+        y_max[y_idx] = y_max[y_idx].max(y);
+
+        let x_idx = y_u * grid_z + z_u;
+        x_min[x_idx] = x_min[x_idx].min(x);
+        x_max[x_idx] = x_max[x_idx].max(x);
+    }
+
+    let stride_yz = i64::from(grid_dims[1]) * i64::from(grid_dims[2]);
+    let stride_z = i64::from(grid_dims[2]);
+
+    let mut exposed_query_indices: Vec<i32> = Vec::new();
+    let mut buried_query_indices: Vec<i32> = Vec::new();
+    let mut exposed_flat_indices: Vec<i64> = Vec::new();
+    let mut buried_flat_indices: Vec<i64> = Vec::new();
+
+    for solvent_index in 0..solvent_x_view.len() {
+        let x = solvent_x_view[solvent_index];
+        let y = solvent_y_view[solvent_index];
+        let z = solvent_z_view[solvent_index];
+
+        if x < 0 || y < 0 || z < 0 || x >= grid_x_i64 || y >= grid_y_i64 || z >= grid_z_i64 {
+            return Err(PyValueError::new_err(format!(
+                "solvent_voxels[{solvent_index}] is out of bounds for grid_dimensions {:?}: [{x}, {y}, {z}]",
+                grid_dims
+            )));
+        }
+
+        let x_u = x as usize;
+        let y_u = y as usize;
+        let z_u = z as usize;
+        let mut occluded_dimensions = [0_i32; 6];
+
+        let z_idx = x_u * grid_y + y_u;
+        if z_min[z_idx] != i64::MAX {
+            if z_min[z_idx] < z {
+                occluded_dimensions[4] = 1;
+            }
+            if z_max[z_idx] > z {
+                occluded_dimensions[5] = 1;
+            }
+        }
+
+        let y_idx = x_u * grid_z + z_u;
+        if y_min[y_idx] != i64::MAX {
+            if y_min[y_idx] < y {
+                occluded_dimensions[2] = 1;
+            }
+            if y_max[y_idx] > y {
+                occluded_dimensions[3] = 1;
+            }
+        }
+
+        let x_idx = y_u * grid_z + z_u;
+        if x_min[x_idx] != i64::MAX {
+            if x_min[x_idx] < x {
+                occluded_dimensions[0] = 1;
+            }
+            if x_max[x_idx] > x {
+                occluded_dimensions[1] = 1;
+            }
+        }
+
+        let num_occluded: i32 = occluded_dimensions.iter().sum();
+        let buried = num_occluded > OCCLUDED_DIMENSION_LIMIT
+            || (num_occluded == OCCLUDED_DIMENSION_LIMIT
+                && ((occluded_dimensions[0] == 0 && occluded_dimensions[1] == 0)
+                    || (occluded_dimensions[2] == 0 && occluded_dimensions[3] == 0)
+                    || (occluded_dimensions[4] == 0 && occluded_dimensions[5] == 0)));
+
+        let flat_index = x * stride_yz + y * stride_z + z;
+        if buried {
+            buried_query_indices.push(solvent_index as i32);
+            buried_flat_indices.push(flat_index);
+        } else {
+            exposed_query_indices.push(solvent_index as i32);
+            exposed_flat_indices.push(flat_index);
+        }
+    }
+
+    let result = PyDict::new_bound(py);
+    result.set_item(
+        "exposed_query_indices",
+        Array1::from(exposed_query_indices).into_pyarray_bound(py),
+    )?;
+    result.set_item(
+        "buried_query_indices",
+        Array1::from(buried_query_indices).into_pyarray_bound(py),
+    )?;
+    result.set_item(
+        "exposed_flat_indices",
+        Array1::from(exposed_flat_indices).into_pyarray_bound(py),
+    )?;
+    result.set_item(
+        "buried_flat_indices",
+        Array1::from(buried_flat_indices).into_pyarray_bound(py),
+    )?;
+    Ok(result.into())
+}
+
+#[pyfunction]
 fn classify_buried_components(
     py: Python<'_>,
     buried_voxels: PyReadonlyArray2<'_, i32>,
@@ -969,6 +1158,7 @@ fn volumizer_native(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<(
         get_exposed_and_buried_voxel_indices,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(get_exposed_and_buried_selection, module)?)?;
     module.add_function(wrap_pyfunction!(classify_buried_components, module)?)?;
     Ok(())
 }

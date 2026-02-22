@@ -209,6 +209,8 @@ def _build_exposed_and_buried_voxel_groups(
     exposed_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
     buried_voxels: tuple[np.ndarray, np.ndarray, np.ndarray],
     voxel_grid_dimensions: np.ndarray,
+    exposed_voxel_indices: set[int] | None = None,
+    buried_voxel_indices: set[int] | None = None,
 ) -> tuple[VoxelGroup, VoxelGroup]:
     """
     Build typed voxel groups for exposed/buried solvent subsets.
@@ -224,8 +226,10 @@ def _build_exposed_and_buried_voxel_groups(
         np.asarray(buried_voxels[2]),
     )
 
-    buried_voxel_indices = compute_voxel_indices(buried_arrays, voxel_grid_dimensions)
-    exposed_voxel_indices = compute_voxel_indices(exposed_arrays, voxel_grid_dimensions)
+    if buried_voxel_indices is None:
+        buried_voxel_indices = compute_voxel_indices(buried_arrays, voxel_grid_dimensions)
+    if exposed_voxel_indices is None:
+        exposed_voxel_indices = compute_voxel_indices(exposed_arrays, voxel_grid_dimensions)
 
     return (
         VoxelGroup(
@@ -303,6 +307,58 @@ def get_exposed_and_buried_voxels_native(
             "Native backend requested but `volumizer_native` is not importable."
         )
 
+    grid_dimensions = np.asarray(voxel_grid_dimensions, dtype=np.int32)
+
+    if hasattr(native_module, "get_exposed_and_buried_selection"):
+        native_output = native_module.get_exposed_and_buried_selection(
+            np.ascontiguousarray(solvent_voxels.voxels[0], dtype=np.int64),
+            np.ascontiguousarray(solvent_voxels.voxels[1], dtype=np.int64),
+            np.ascontiguousarray(solvent_voxels.voxels[2], dtype=np.int64),
+            np.ascontiguousarray(protein_voxels.voxels[0], dtype=np.int64),
+            np.ascontiguousarray(protein_voxels.voxels[1], dtype=np.int64),
+            np.ascontiguousarray(protein_voxels.voxels[2], dtype=np.int64),
+            grid_dimensions,
+        )
+        if not isinstance(native_output, dict):
+            raise RuntimeError(
+                "Unexpected native exposed/buried output, expected dict with selection arrays."
+            )
+
+        exposed_query_indices = np.asarray(
+            native_output["exposed_query_indices"],
+            dtype=np.int64,
+        )
+        buried_query_indices = np.asarray(
+            native_output["buried_query_indices"],
+            dtype=np.int64,
+        )
+
+        exposed_voxel_indices = set(
+            np.asarray(native_output["exposed_flat_indices"], dtype=np.int64).tolist()
+        )
+        buried_voxel_indices = set(
+            np.asarray(native_output["buried_flat_indices"], dtype=np.int64).tolist()
+        )
+
+        exposed_voxels = (
+            solvent_voxels.voxels[0][exposed_query_indices],
+            solvent_voxels.voxels[1][exposed_query_indices],
+            solvent_voxels.voxels[2][exposed_query_indices],
+        )
+        buried_voxels = (
+            solvent_voxels.voxels[0][buried_query_indices],
+            solvent_voxels.voxels[1][buried_query_indices],
+            solvent_voxels.voxels[2][buried_query_indices],
+        )
+
+        return _build_exposed_and_buried_voxel_groups(
+            exposed_voxels,
+            buried_voxels,
+            voxel_grid_dimensions,
+            exposed_voxel_indices=exposed_voxel_indices,
+            buried_voxel_indices=buried_voxel_indices,
+        )
+
     if not hasattr(native_module, "get_exposed_and_buried_voxel_indices"):
         raise RuntimeError(
             "Native backend does not provide `get_exposed_and_buried_voxel_indices`."
@@ -313,7 +369,7 @@ def get_exposed_and_buried_voxels_native(
     native_output = native_module.get_exposed_and_buried_voxel_indices(
         solvent_array,
         protein_array,
-        np.asarray(voxel_grid_dimensions, dtype=np.int32),
+        grid_dimensions,
     )
     if not isinstance(native_output, dict):
         raise RuntimeError(
@@ -351,8 +407,9 @@ def get_exposed_and_buried_voxels(
     requested_backend = backend if backend is not None else utils.get_active_backend()
     if requested_backend == "native":
         native_module = native_backend.get_native_module_for_mode("native")
-        if native_module is not None and hasattr(
-            native_module, "get_exposed_and_buried_voxel_indices"
+        if native_module is not None and (
+            hasattr(native_module, "get_exposed_and_buried_selection")
+            or hasattr(native_module, "get_exposed_and_buried_voxel_indices")
         ):
             return get_exposed_and_buried_voxels_native(
                 solvent_voxels, protein_voxels, voxel_grid_dimensions
@@ -479,12 +536,12 @@ def get_first_shell_exposed_voxels(
         if hasattr(native_module, "get_first_shell_exposed_selection"):
             grid_dimensions = np.asarray(voxel_grid.x_y_z, dtype=np.int32)
             native_output = native_module.get_first_shell_exposed_selection(
-                np.asarray(exposed_voxels.voxels[0], dtype=np.int64),
-                np.asarray(exposed_voxels.voxels[1], dtype=np.int64),
-                np.asarray(exposed_voxels.voxels[2], dtype=np.int64),
-                np.asarray(buried_voxels.voxels[0], dtype=np.int64),
-                np.asarray(buried_voxels.voxels[1], dtype=np.int64),
-                np.asarray(buried_voxels.voxels[2], dtype=np.int64),
+                np.ascontiguousarray(exposed_voxels.voxels[0], dtype=np.int64),
+                np.ascontiguousarray(exposed_voxels.voxels[1], dtype=np.int64),
+                np.ascontiguousarray(exposed_voxels.voxels[2], dtype=np.int64),
+                np.ascontiguousarray(buried_voxels.voxels[0], dtype=np.int64),
+                np.ascontiguousarray(buried_voxels.voxels[1], dtype=np.int64),
+                np.ascontiguousarray(buried_voxels.voxels[2], dtype=np.int64),
                 grid_dimensions,
             )
             if not isinstance(native_output, dict):

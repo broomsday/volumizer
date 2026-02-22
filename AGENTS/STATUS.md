@@ -36,6 +36,7 @@
 - Native first-shell exposed optimization pass completed (specialized native first-shell kernel + Python integration path selection), with medium/large repeats showing ~25-27% first-shell stage reductions and ~2.8-3.0% end-to-end gains.
 - Native volumes-to-structure optimization pass completed (vectorized atom-array assignment + single-allocation group assembly), with medium/large repeats showing ~90-93% `volumes_to_structure` stage reductions and ~11-17% end-to-end gains.
 - Native add-extra-points optimization pass completed (factorized element grouping + preallocated output assembly in native integration path), with medium/large repeats showing ~16-17% `add_extra_points` stage reductions and up to ~5% end-to-end gains.
+- Native exposed/buried split optimization pass completed (low-copy selection API + precomputed flat-index output), with medium/large repeats showing ~30-32% `get_exposed_and_buried_voxels` stage reductions and ~2.7-2.8% end-to-end gains.
 - Native CI workflow added for parity tests and lightweight performance regression checks.
 - CLI subcommand interface added (`analyze`, `cluster`, `cache`) for local files, PDB-ID download, cluster-representative runs, and metadata-cache inspection/maintenance while keeping legacy flag-only invocation compatibility.
 - CLI resume mode and initial cluster selection filters added (default X-ray/cryo-EM method filter with optional method and resolution filters).
@@ -50,6 +51,6 @@
 
 ## Remaining
 
-- Continue optimization focus on stage-level overhead now dominating runtime: `load_structure`, `get_first_shell_exposed_voxels`, and `get_exposed_and_buried_voxels`; continue native-kernel classify-path tuning as a parallel track.
+- Continue optimization focus on stage-level overhead now dominating runtime: `load_structure`, `get_first_shell_exposed_voxels`, and `add_extra_points`; continue native-kernel classify-path tuning as a parallel track.
 - Finalize native packaging/wheel strategy and default backend policy.
 - Continue CLI UX hardening: add validation subcommands and stronger runtime safety controls for very large jobs.

@@ -144,7 +144,74 @@ def test_get_first_shell_exposed_voxels_native_falls_back_to_legacy_kernel(monke
     assert first_shell.indices == set([21, 53])
 
 
-def test_get_exposed_and_buried_voxels_native_uses_native_module(monkeypatch):
+def _make_exposed_buried_split_test_inputs() -> tuple[VoxelGroup, VoxelGroup]:
+    solvent_voxels = VoxelGroup(
+        voxels=(np.array([0, 1, 2]), np.array([0, 1, 2]), np.array([1, 1, 1])),
+        indices=set([1, 21, 41]),
+        num_voxels=3,
+        voxel_type="solvent",
+        volume=24.0,
+    )
+    protein_voxels = VoxelGroup(
+        voxels=(np.array([1, 2]), np.array([0, 3]), np.array([0, 3])),
+        indices=set([16, 47]),
+        num_voxels=2,
+        voxel_type="protein",
+        volume=16.0,
+    )
+
+    return solvent_voxels, protein_voxels
+
+
+def test_get_exposed_and_buried_voxels_native_prefers_specialized_selection(monkeypatch):
+    class FakeNativeModule:
+        @staticmethod
+        def get_exposed_and_buried_selection(
+            solvent_x,
+            solvent_y,
+            solvent_z,
+            protein_x,
+            protein_y,
+            protein_z,
+            grid_dimensions,
+        ):
+            assert solvent_x.dtype == np.int64
+            assert solvent_y.dtype == np.int64
+            assert solvent_z.dtype == np.int64
+            assert protein_x.dtype == np.int64
+            assert protein_y.dtype == np.int64
+            assert protein_z.dtype == np.int64
+            assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            return {
+                "exposed_query_indices": np.array([0, 2], dtype=np.int32),
+                "buried_query_indices": np.array([1], dtype=np.int32),
+                "exposed_flat_indices": np.array([1, 41], dtype=np.int64),
+                "buried_flat_indices": np.array([21], dtype=np.int64),
+            }
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(
+        native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
+    )
+
+    solvent_voxels, protein_voxels = _make_exposed_buried_split_test_inputs()
+
+    exposed, buried = voxel.get_exposed_and_buried_voxels(
+        solvent_voxels,
+        protein_voxels,
+        np.array([4, 4, 4], dtype=np.int32),
+        backend="native",
+    )
+
+    assert exposed.num_voxels == 2
+    assert buried.num_voxels == 1
+    assert exposed.indices == set([1, 41])
+    assert buried.indices == set([21])
+    assert np.array_equal(exposed.voxels[0], np.array([0, 2]))
+    assert np.array_equal(buried.voxels[0], np.array([1]))
+
+
+def test_get_exposed_and_buried_voxels_native_falls_back_to_legacy_kernel(monkeypatch):
     class FakeNativeModule:
         @staticmethod
         def get_exposed_and_buried_voxel_indices(solvent, protein, grid_dimensions):
@@ -161,20 +228,7 @@ def test_get_exposed_and_buried_voxels_native_uses_native_module(monkeypatch):
         native_backend.importlib, "import_module", lambda module_name: FakeNativeModule
     )
 
-    solvent_voxels = VoxelGroup(
-        voxels=(np.array([0, 1, 2]), np.array([0, 1, 2]), np.array([1, 1, 1])),
-        indices=set([1, 21, 41]),
-        num_voxels=3,
-        voxel_type="solvent",
-        volume=24.0,
-    )
-    protein_voxels = VoxelGroup(
-        voxels=(np.array([1, 2]), np.array([0, 3]), np.array([0, 3])),
-        indices=set([16, 47]),
-        num_voxels=2,
-        voxel_type="protein",
-        volume=16.0,
-    )
+    solvent_voxels, protein_voxels = _make_exposed_buried_split_test_inputs()
 
     exposed, buried = voxel.get_exposed_and_buried_voxels(
         solvent_voxels,

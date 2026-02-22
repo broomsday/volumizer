@@ -610,3 +610,53 @@ Next highest-ROI work is now:
 2. `classify_components_native_kernel` internals (`classify_component_type` + BFS substage)
 3. `get_first_shell_exposed_voxels`
 4. `get_exposed_and_buried_voxels`
+
+## 20. Native Orchestration Optimization Pass: Exposed/Buried Selection API (2026-02-21)
+
+Scope:
+- Goal: reduce Python orchestration overhead in `get_exposed_and_buried_voxels`.
+- Change summary:
+  - Added native API `get_exposed_and_buried_selection` that accepts axis arrays directly and returns:
+    - query-selection indices for exposed/buried subsets
+    - precomputed flat voxel indices for exposed/buried subsets
+  - Integrated Python native path to prefer this API when available, with fallback to legacy `get_exposed_and_buried_voxel_indices`.
+  - Extended voxel-group builder to accept precomputed index sets and skip redundant flat-index recomputation.
+  - Added native backend tests for specialized-path selection and legacy fallback behavior.
+
+Artifacts used for before/after comparison:
+- All-cases run (`group=all`, `repeats=3`):
+  - Before: `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v7b.json`
+  - After: `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v8.json`
+- Focused confirmation runs:
+  - Before: `AGENTS/benchmark.native.stage-profiling.kernel-substages.medium.r3.v7.json`
+  - After: `AGENTS/benchmark.native.stage-profiling.kernel-substages.medium.r3.v8.json`
+  - Before: `AGENTS/benchmark.native.stage-profiling.kernel-substages.large.r3.v7.json`
+  - After: `AGENTS/benchmark.native.stage-profiling.kernel-substages.large.r3.v8.json`
+
+### 20.1 Medium/Large Delta (Focused Runs)
+
+| case | mean_s_before | mean_s_after | total_improvement | exposed_buried_before_s | exposed_buried_after_s | exposed_buried_improvement |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4jpn | 0.206486 | 0.200669 | 2.82% | 0.016265 | 0.011305 | 30.49% |
+| 4jpp_assembly | 0.313347 | 0.304833 | 2.72% | 0.025824 | 0.017506 | 32.21% |
+
+### 20.2 Stage Distribution Shift
+
+From `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v7b.json` -> `AGENTS/benchmark.native.stage-profiling.kernel-substages.all.r3.v8.json`:
+
+- `4jpn`
+  - `get_exposed_and_buried_voxels`: `0.016362s` (`7.838%`) -> `0.011636s` (`5.261%`)
+- `4jpp_assembly`
+  - `get_exposed_and_buried_voxels`: `0.025835s` (`8.271%`) -> `0.017468s` (`5.402%`)
+
+Interpretation:
+- Native selection output removed a large portion of exposed/buried Python orchestration overhead.
+- `get_exposed_and_buried_voxels` is no longer among the top stage-level costs.
+
+### 20.3 Updated Optimization Priority
+
+Next highest-ROI work is now:
+1. `load_structure`
+2. `get_first_shell_exposed_voxels`
+3. `add_extra_points`
+4. native classify-path internals (`classify_component_type`, BFS) as a parallel track
