@@ -113,7 +113,7 @@ Tasks:
 - `int32[M,3]` for voxel indices.
 - Return buffers plus counts instead of per-voxel callbacks.
 - Add runtime feature flag:
-- `utils.NATIVE_BACKEND = "python" | "rust"` with auto-detect default.
+- `VOLUMIZER_BACKEND=python|auto|native` runtime selection via `volumizer/native_backend.py`.
 
 Exit criteria:
 - Extension builds locally and in CI.
@@ -175,7 +175,7 @@ Exit criteria:
 Deliverables:
 - Cross-platform wheel builds (Linux/macOS; Windows if feasible).
 - Removal of manual `src/compile_c_libs.sh` requirement for standard installs.
-- CLI command (example: `volumizer run ...`) with JSON and annotated CIF outputs.
+- CLI subcommands (example: `volumizer analyze|cluster|cache ...`) with JSON and annotated CIF outputs.
 
 Tasks:
 - Add CLI entrypoint with:

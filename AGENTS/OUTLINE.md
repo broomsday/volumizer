@@ -50,7 +50,7 @@ Main orchestration is in `volumizer/volumizer.py`.
 ### Annotation DataFrame
 Built in `volumizer/utils.py::make_annotation_dataframe()`:
 - one row per detected hub/pore/pocket/cavity
-- sorted by descending volume
+- per-type groups are volume-sorted before dataframe assembly
 - stores principal-axis lengths as `x`, `y`, `z`
 
 ### Annotated Pseudo-Atom Structure (CIF/PDB Output)
@@ -63,7 +63,7 @@ Built in `volumizer/pdb.py`:
 ## 5. Codebase Map
 
 - `volumizer/volumizer.py`: high-level API (`volumize_pdb`, `volumize_structure`, save helpers)
-- `volumizer/cli.py`: CLI parser/orchestration (`analyze`, `cluster`, `cache` subcommands, checkpoint/resume, progress logging (JSONL + periodic ETA), metadata cache controls, manifest write/replay, summary subset replay, deterministic cluster sharding, failures-manifest export)
+- `volumizer/cli.py`: CLI parser/orchestration (`analyze`, `cluster`, `cache` subcommands, checkpoint/resume, progress logging (JSONL + periodic ETA), metadata cache controls, manifest write/replay, summary subset replay, deterministic cluster sharding, failures-manifest export, fail-fast option)
 - `volumizer/voxel.py`: voxel generation, burial/exposure split, BFS agglomeration, type assignment, geometric metrics
 - `volumizer/fib_sphere.py`: atom shell point generation
 - `volumizer/pdb.py`: structure I/O, cleanup, CIF/PDB formatting, annotation structure assembly
@@ -72,20 +72,27 @@ Built in `volumizer/pdb.py`:
 - `src/voxel.c`, `src/fib_sphere.c`: optional accelerated routines called via `ctypes`
 - `tests/`: behavior and regression tests for classification and C/Python parity
 
-## 6. Performance Architecture (Python + C)
+## 6. Performance Architecture (Python + C + Native)
 
-The project uses Python by default and conditionally enables native acceleration if both shared libraries exist:
-- `src/voxel.so`
-- `src/fib_sphere.so`
+Backend behavior currently has three runtime modes:
+- `VOLUMIZER_BACKEND=python` (default): Python orchestration path; uses C helper `.so` kernels when available.
+- `VOLUMIZER_BACKEND=auto`: native when import succeeds, otherwise same behavior as `python` mode.
+- `VOLUMIZER_BACKEND=native`: require `volumizer_native` and fail if unavailable.
 
-These are manually built via `src/compile_c_libs.sh`. Runtime selection is controlled by `utils.using_performant()`.
-
-Accelerated/native paths currently cover:
+`ctypes` C helper path (`src/voxel.so`, `src/fib_sphere.so`, built via `src/compile_c_libs.sh`) accelerates:
 - Fibonacci sphere coordinate generation
 - Neighbor voxel detection
 - BFS component growth
 
-Most orchestration, data reshaping, and classification logic remains in Python.
+Rust native path (`native/`, `volumizer_native`) accelerates:
+- Fibonacci sphere point generation (single + batch)
+- Neighbor voxel detection
+- First-shell exposed selection
+- Exposed/buried solvent split
+- BFS component expansion
+- Buried-component classification
+
+Most high-level orchestration, filtering, and output shaping remains in Python.
 
 ## 6a. Migration Status (Current)
 
@@ -96,8 +103,9 @@ Implemented so far:
 - Fibonacci sphere point generation.
 - Fibonacci sphere batch point generation.
 - Neighbor voxel index detection.
+- First-shell exposed specialized selection APIs.
 - BFS component expansion.
-- Exposed/buried solvent split.
+- Exposed/buried solvent split (legacy + low-copy selection API).
 - Buried-component classification output in flattened buffer format.
 - Python dispatch/fallback paths are wired in `volumizer/fib_sphere.py` and `volumizer/voxel.py`.
 - Native parity and integration tests are present and passing when the module is built.
@@ -136,7 +144,7 @@ Likely architecture for next iteration:
 
 Current user interface includes both Python function calls and a subcommand CLI (`volumizer analyze|cluster|cache`) for file/PDB-ID/cluster inputs with CIF + JSON outputs plus metadata-cache inspection/maintenance. Legacy flag-only invocation is still auto-routed for compatibility. For broader adoption:
 
-1. Continue CLI UX hardening with validation and safety features (for example manifest/summary validation subcommands, failure-threshold guards, and runtime limits) on top of the current baseline (`analyze`/`cluster`/`cache`, resume, method/resolution filters, jobs/retries, metadata cache + negative cache, dry-run, checkpoint, progress JSONL + progress interval, manifest write/replay, summary subset replay, deterministic sharding, failures-manifest export).
+1. Continue CLI UX hardening with validation and safety features (for example manifest/summary validation subcommands, failure-threshold guards, and runtime limits) on top of the current baseline (`analyze`/`cluster`/`cache`, resume, method/resolution filters, jobs/retries, metadata cache + negative cache, dry-run, checkpoint, progress JSONL + progress interval, manifest write/replay, summary subset replay, deterministic sharding, failures-manifest export, fail-fast).
 2. Improve install ergonomics for native acceleration (prebuilt wheels or optional Rust extension build).
 3. Add user-facing docs focused on:
    - quick start from raw PDB/CIF

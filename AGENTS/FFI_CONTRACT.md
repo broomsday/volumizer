@@ -9,15 +9,19 @@ This contract targets:
 - voxel neighbor detection
 - BFS component expansion
 - exposed/buried solvent split
-- (later) full volume classification
+- first-shell exposed voxel selection
+- full volume classification
 
 Current implementation status:
 - Implemented in `volumizer_native`:
 - `fibonacci_sphere_points`
 - `fibonacci_sphere_points_batch`
 - `get_neighbor_voxel_indices`
+- `get_first_shell_exposed_indices`
+- `get_first_shell_exposed_selection`
 - `bfs_component_indices`
 - `get_exposed_and_buried_voxel_indices`
+- `get_exposed_and_buried_selection`
 - `classify_buried_components`
 - Still pending:
 - Stable packaging/import contract for installed wheels across platforms
@@ -25,7 +29,8 @@ Current implementation status:
 ## 2. Conventions
 
 - Coordinate system: Angstrom units, right-handed XYZ.
-- Index dtype: `int32`.
+- Index dtype: `int32` for `(N,3)` voxel/index arrays unless otherwise noted.
+- Split-axis selection APIs use `int64` axis arrays and return `int64` flat indices.
 - Coordinate dtype: `float32` in native calls unless otherwise noted.
 - Contiguous arrays required at boundary (`C` order).
 - All return buffers are deterministic and sorted where relevant.
@@ -34,7 +39,7 @@ Current implementation status:
 ## 3. Backend Selection
 
 Python runtime should support:
-- `VOLUMIZER_BACKEND=python` (default) -> always Python implementation
+- `VOLUMIZER_BACKEND=python` (default) -> Python orchestration path (may still use `ctypes` C helpers when present)
 - `VOLUMIZER_BACKEND=native` -> require native module, fail loudly if unavailable
 - `VOLUMIZER_BACKEND=auto` -> use native when import succeeds, otherwise Python
 
@@ -126,8 +131,9 @@ Output:
 Notes:
 - Must preserve parity with current `get_exposed_and_buried_voxels` semantics.
 - Returned indices are deterministic and ordered by input traversal.
+- This is the legacy native split API; Python prefers `get_exposed_and_buried_selection` when available.
 
-## 4.6 `classify_buried_components` (Phase 2+)
+## 4.6 `classify_buried_components`
 
 Intent:
 - Full native kernel for agglomerating buried voxels and classifying cavity/pocket/pore/hub.
@@ -146,12 +152,74 @@ Output:
 - `component_voxel_indices_flat: np.ndarray[int32]`
 - `surface_offsets: np.ndarray[int32]` prefix offsets into `component_surface_indices_flat`
 - `component_surface_indices_flat: np.ndarray[int32]`
-- `component_centers: np.ndarray[float32]` shape `(C,3)`
-- `component_axial_lengths: np.ndarray[float32]` shape `(C,3)`
+- optional `kernel_stage_timings_seconds: dict[str, float]` for benchmark instrumentation
 
 Notes:
 - Flattened buffers avoid Python object allocation overhead.
-- Python layer will map type codes to labels and construct `VoxelGroup`.
+- Python layer maps type codes to labels, constructs `VoxelGroup`, and computes centers/axial lengths.
+
+## 4.7 `get_first_shell_exposed_indices`
+
+Intent:
+- Return indices of exposed voxels that are 6-neighbors of any buried voxel.
+
+Input:
+- `exposed_voxels: np.ndarray[int32]` shape `(E, 3)`
+- `buried_voxels: np.ndarray[int32]` shape `(B, 3)`
+- `grid_dims: np.ndarray[int32]` shape `(3,)`
+
+Output:
+- `np.ndarray[int32]` shape `(K,)`, indices into `exposed_voxels`
+
+Notes:
+- Maintains first-shell semantics used by `voxel.get_first_shell_exposed_voxels()`.
+
+## 4.8 `get_first_shell_exposed_selection`
+
+Intent:
+- Return first-shell selection indices and precomputed flat voxel indices to reduce Python-side mapping overhead.
+
+Input:
+- `exposed_x: np.ndarray[int64]` shape `(E,)`
+- `exposed_y: np.ndarray[int64]` shape `(E,)`
+- `exposed_z: np.ndarray[int64]` shape `(E,)`
+- `buried_x: np.ndarray[int64]` shape `(B,)`
+- `buried_y: np.ndarray[int64]` shape `(B,)`
+- `buried_z: np.ndarray[int64]` shape `(B,)`
+- `grid_dims: np.ndarray[int32]` shape `(3,)`
+
+Output:
+- `dict` with:
+- `neighbor_indices: np.ndarray[int32]` shape `(K,)`, indices into exposed axis arrays
+- `flat_indices: np.ndarray[int64]` shape `(K,)`, flat voxel-grid indices for selected voxels
+
+Notes:
+- Preferred fast path when available; Python falls back to `get_first_shell_exposed_indices`.
+
+## 4.9 `get_exposed_and_buried_selection`
+
+Intent:
+- Return exposed/buried selections with query indices and flat voxel-grid indices in one call.
+
+Input:
+- `solvent_x: np.ndarray[int64]` shape `(S,)`
+- `solvent_y: np.ndarray[int64]` shape `(S,)`
+- `solvent_z: np.ndarray[int64]` shape `(S,)`
+- `protein_x: np.ndarray[int64]` shape `(P,)`
+- `protein_y: np.ndarray[int64]` shape `(P,)`
+- `protein_z: np.ndarray[int64]` shape `(P,)`
+- `grid_dims: np.ndarray[int32]` shape `(3,)`
+
+Output:
+- `dict` with:
+- `exposed_query_indices: np.ndarray[int32]` shape `(E,)`
+- `buried_query_indices: np.ndarray[int32]` shape `(B,)`
+- `exposed_flat_indices: np.ndarray[int64]` shape `(E,)`
+- `buried_flat_indices: np.ndarray[int64]` shape `(B,)`
+
+Notes:
+- Preferred low-copy native split API for Python mapping path.
+- Python falls back to `get_exposed_and_buried_voxel_indices` when this API is unavailable.
 
 ## 5. Validation Requirements
 
