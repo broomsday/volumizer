@@ -39,6 +39,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "min_voxels": 2,
         "min_volume": None,
         "backend": None,
+        "assembly_policy": "biological",
         "keep_non_protein": False,
         "jobs": 1,
         "timeout": 60.0,
@@ -698,7 +699,7 @@ def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_pa
         ],
     )
 
-    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
         return {
             "source": source_label,
             "input_path": str(input_path),
@@ -741,7 +742,7 @@ def test_run_cli_parallel_jobs_emits_periodic_progress(
         ],
     )
 
-    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
         return {
             "source": source_label,
             "input_path": str(input_path),
@@ -782,7 +783,7 @@ def test_run_cli_progress_interval_zero_disables_periodic_progress(
         ],
     )
 
-    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
         return {
             "source": source_label,
             "input_path": str(input_path),
@@ -823,7 +824,7 @@ def test_run_cli_writes_failures_manifest(monkeypatch, tmp_path: Path):
         ],
     )
 
-    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
         if source_label == "first":
             raise RuntimeError("boom")
         return {
@@ -932,7 +933,7 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
         ],
     )
 
-    def _analyze_first_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+    def _analyze_first_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
         if source_label == "first":
             structure_out = output_dir / "first.annotated.cif"
             annotation_out = output_dir / "first.annotation.json"
@@ -965,7 +966,7 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
     assert len(first_checkpoint["results"]) == 1
     assert len(first_checkpoint["errors"]) == 1
 
-    def _analyze_second_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite):
+    def _analyze_second_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
         if source_label == "first":
             raise RuntimeError("first should be skipped on resume")
         structure_out = output_dir / "second.annotated.cif"

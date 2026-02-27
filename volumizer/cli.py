@@ -113,6 +113,15 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         help="Override backend mode for this run (python|auto|native).",
     )
     parser.add_argument(
+        "--assembly-policy",
+        choices=pdb.VALID_ASSEMBLY_POLICIES,
+        default=pdb.DEFAULT_ASSEMBLY_POLICY,
+        help=(
+            "Structure assembly policy for load stage: "
+            "biological (default), asymmetric, or auto."
+        ),
+    )
+    parser.add_argument(
         "--keep-non-protein",
         action="store_true",
         help="Keep non-protein residues during structure cleaning.",
@@ -889,6 +898,7 @@ def _make_checkpoint_signature(
         "min_voxels": args.min_voxels,
         "min_volume": args.min_volume,
         "backend": args.backend,
+        "assembly_policy": args.assembly_policy,
         "keep_non_protein": args.keep_non_protein,
         "progress_interval": args.progress_interval,
         "dry_run": args.dry_run,
@@ -1810,6 +1820,7 @@ def analyze_structure_file(
     min_voxels: int,
     min_volume: float | None,
     overwrite: bool,
+    assembly_policy: str = pdb.DEFAULT_ASSEMBLY_POLICY,
 ) -> dict:
     """
     Run volumizer on one structure file and write outputs.
@@ -1829,7 +1840,10 @@ def analyze_structure_file(
             f"Output annotation already exists: {annotation_output_path}. Use --overwrite."
         )
 
-    input_structure = pdb.load_structure(input_path)
+    input_structure = pdb.load_structure(
+        input_path,
+        assembly_policy=assembly_policy,
+    )
     prepared_structure = volumizer.prepare_pdb_structure(input_structure)
     annotation_df, annotation_structure = volumizer.annotate_structure_volumes(
         prepared_structure,
@@ -1961,6 +1975,7 @@ def _analyze_structures(
                         min_voxels=int(args.min_voxels),
                         min_volume=args.min_volume,
                         overwrite=bool(args.overwrite),
+                        assembly_policy=str(args.assembly_policy),
                     )
                 )
             except Exception as error:  # pragma: no cover - exercised via CLI integration tests
@@ -2023,6 +2038,7 @@ def _analyze_structures(
                 min_voxels=int(args.min_voxels),
                 min_volume=args.min_volume,
                 overwrite=bool(args.overwrite),
+                assembly_policy=str(args.assembly_policy),
             ): (index, source_label, input_path)
             for index, (source_label, input_path) in enumerate(pending_structures)
         }
@@ -2123,6 +2139,11 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
         raise ValueError("--retry-delay must be >= 0.")
     if args.progress_interval < 0:
         raise ValueError("--progress-interval must be >= 0.")
+    if args.assembly_policy not in pdb.VALID_ASSEMBLY_POLICIES:
+        raise ValueError(
+            "--assembly-policy must be one of: "
+            + ", ".join(pdb.VALID_ASSEMBLY_POLICIES)
+        )
 
     if args.command == "cluster":
         has_num_shards = args.num_shards is not None
@@ -2215,6 +2236,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "output_dir": str(output_dir),
             "download_dir": str(download_dir),
             "resolution": args.resolution,
+            "assembly_policy": args.assembly_policy,
             "min_voxels": args.min_voxels,
             "min_volume": args.min_volume,
             "backend": args.backend if args.backend is not None else utils.get_active_backend(),

@@ -41,6 +41,8 @@ DEFAULT_CASES = [
     BenchmarkCase("large", "4jpp_assembly", ROOT_DIR / "tests" / "pdbs" / "4jpp.cif"),
 ]
 
+VALID_ASSEMBLY_POLICIES = ("biological", "asymmetric", "auto")
+
 
 def max_rss_kb() -> float | None:
     """
@@ -89,7 +91,11 @@ def _normalize_stage_timings(
     return normalized, round(stage_sum, 6)
 
 
-def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
+def run_single_case(
+    case: BenchmarkCase,
+    resolution: float,
+    assembly_policy: str = "biological",
+) -> dict[str, Any]:
     """
     Run one volumizer benchmark case and return result metadata.
     """
@@ -101,6 +107,7 @@ def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
     annotation_df, _, _ = volumizer.volumize_pdb(
         case.path,
         stage_timings=stage_timings,
+        assembly_policy=assembly_policy,
     )
     elapsed_seconds = time.perf_counter() - start
 
@@ -127,6 +134,7 @@ def run_single_case(case: BenchmarkCase, resolution: float) -> dict[str, Any]:
         "case_name": case.name,
         "path": str(case.path.relative_to(ROOT_DIR)),
         "resolution": resolution,
+        "assembly_policy": assembly_policy,
         "backend": backend,
         "elapsed_seconds": round(elapsed_seconds, 6),
         "tracked_stage_seconds": tracked_stage_seconds,
@@ -143,14 +151,19 @@ def summarize(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Aggregate per-run results by case.
     """
-    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for row in results:
-        key = (row["category"], row["case_name"], row["path"])
+        key = (
+            row["category"],
+            row["case_name"],
+            row["path"],
+            row.get("assembly_policy", "biological"),
+        )
         grouped.setdefault(key, []).append(row)
 
     summary_rows = []
     for key in sorted(grouped.keys()):
-        category, case_name, path = key
+        category, case_name, path, assembly_policy = key
         runs = grouped[key]
         elapsed_values = [float(r["elapsed_seconds"]) for r in runs]
         mean_seconds = sum(elapsed_values) / len(elapsed_values)
@@ -191,6 +204,7 @@ def summarize(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "largest_type": last["largest_type"],
                 "largest_volume": last["largest_volume"],
                 "num_detected_volumes": last["num_detected_volumes"],
+                "assembly_policy": assembly_policy,
                 "stage_mean_seconds": stage_mean_seconds,
                 "stage_mean_percent_of_total": stage_mean_percent_of_total,
             }
@@ -218,6 +232,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=2.0,
         help="Voxel resolution in Angstroms.",
+    )
+    parser.add_argument(
+        "--assembly-policy",
+        choices=VALID_ASSEMBLY_POLICIES,
+        default="biological",
+        help="Assembly policy passed to load_structure (default: biological).",
     )
     parser.add_argument(
         "--output-json",
@@ -251,7 +271,7 @@ def print_summary(summary_rows: list[dict[str, Any]]) -> None:
     Emit a compact text table to stdout.
     """
     print(
-        "category case runs mean_s min_s max_s max_rss_mb backend largest_type largest_volume num_volumes"
+        "category case assembly_policy runs mean_s min_s max_s max_rss_mb backend largest_type largest_volume num_volumes"
     )
     for row in summary_rows:
         largest_volume = (
@@ -259,7 +279,7 @@ def print_summary(summary_rows: list[dict[str, Any]]) -> None:
         )
         max_rss_mb = "None" if row["max_rss_mb"] is None else f"{row['max_rss_mb']:.3f}"
         print(
-            f"{row['category']} {row['case_name']} {row['runs']} "
+            f"{row['category']} {row['case_name']} {row['assembly_policy']} {row['runs']} "
             f"{row['mean_seconds']:.6f} {row['min_seconds']:.6f} {row['max_seconds']:.6f} "
             f"{max_rss_mb} {row['backend']} {row['largest_type']} {largest_volume} "
             f"{row['num_detected_volumes']}"
@@ -312,7 +332,11 @@ def main() -> int:
             category=args.category, name=args.case_name, path=args.case_path
         )
         try:
-            result = run_single_case(case, args.resolution)
+            result = run_single_case(
+                case,
+                args.resolution,
+                assembly_policy=args.assembly_policy,
+            )
         except RuntimeError as error:
             print(str(error), file=sys.stderr)
             return 1
@@ -355,6 +379,8 @@ def main() -> int:
                 str(case.path),
                 "--resolution",
                 str(args.resolution),
+                "--assembly-policy",
+                args.assembly_policy,
             ]
             run = subprocess.run(
                 cmd,
@@ -381,6 +407,7 @@ def main() -> int:
         output = {
             "generated_at_utc": datetime.now(tz=timezone.utc).isoformat(),
             "resolution": args.resolution,
+            "assembly_policy": args.assembly_policy,
             "repeats": args.repeats,
             "group": args.group,
             "results": all_results,

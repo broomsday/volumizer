@@ -251,14 +251,22 @@ def volumize_structure(
 def volumize_pdb(
     pdb_file: Path,
     stage_timings: dict[str, float] | None = None,
+    assembly_policy: str = "biological",
 ) -> tuple[pd.DataFrame, bts.AtomArray, bts.AtomArray]:
     """
     Convenience function to volumize a PDB file.
     """
+    def _load_structure_with_policy(path: Path) -> bts.AtomArray:
+        return pdb.load_structure(
+            path,
+            assembly_policy=assembly_policy,
+            stage_timings=stage_timings,
+        )
+
     pdb_structure = _timed_call(
         stage_timings,
         "load_structure",
-        pdb.load_structure,
+        _load_structure_with_policy,
         pdb_file,
     )
     return volumize_structure(pdb_structure, stage_timings=stage_timings)
@@ -268,12 +276,14 @@ def volumize_pdb_and_save(
     in_pdb_file: Path,
     out_pdb_file: Path,
     out_annotation_df: Path,
+    assembly_policy: str = "biological",
 ) -> None:
     """
     Convenience function to perform volumization and save the output.
     """
     annotation_df, prepared_pdb_structure, annotation_structure = volumize_pdb(
-        in_pdb_file
+        in_pdb_file,
+        assembly_policy=assembly_policy,
     )
     out_pdb_lines = pdb.make_volumized_pdb_lines(
         [prepared_pdb_structure, annotation_structure]

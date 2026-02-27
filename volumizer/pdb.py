@@ -3,6 +3,7 @@ Functions for parsing, cleaning, and modifying PDBs.
 """
 
 from pathlib import Path
+from time import perf_counter
 
 import biotite.structure as bts
 from biotite.structure.io import load_structure as biotite_load_structure
@@ -21,25 +22,289 @@ from volumizer.types import VoxelGroup
 from volumizer import utils
 
 
-def load_structure(file_path: Path) -> bts.AtomArray:
+DEFAULT_ASSEMBLY_POLICY = "biological"
+VALID_ASSEMBLY_POLICIES = (
+    "biological",
+    "asymmetric",
+    "auto",
+)
+
+_LOAD_STRUCTURE_PARSE_STAGE = "load_structure_parse_decode"
+_LOAD_STRUCTURE_ASSEMBLY_STAGE = "load_structure_assembly_expand"
+_LOAD_STRUCTURE_FALLBACK_STAGE = "load_structure_fallback"
+_IDENTITY_OPERATION_EXPRESSIONS = {"1", "(1)"}
+
+
+def _accumulate_stage_timing(
+    stage_timings: dict[str, float] | None,
+    stage_name: str,
+    elapsed_seconds: float,
+) -> None:
+    if stage_timings is None:
+        return
+
+    stage_timings[stage_name] = stage_timings.get(stage_name, 0.0) + float(
+        elapsed_seconds
+    )
+
+
+def _safe_float(value: str) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_identity_operation_row(
+    oper_list_category: dict[str, list[str]],
+    row_index: int,
+) -> bool:
+    expected_fields = {
+        "matrix[1][1]": 1.0,
+        "matrix[1][2]": 0.0,
+        "matrix[1][3]": 0.0,
+        "matrix[2][1]": 0.0,
+        "matrix[2][2]": 1.0,
+        "matrix[2][3]": 0.0,
+        "matrix[3][1]": 0.0,
+        "matrix[3][2]": 0.0,
+        "matrix[3][3]": 1.0,
+        "vector[1]": 0.0,
+        "vector[2]": 0.0,
+        "vector[3]": 0.0,
+    }
+
+    for field_name, expected_value in expected_fields.items():
+        field_values = oper_list_category.get(field_name)
+        if field_values is None or row_index >= len(field_values):
+            return False
+
+        parsed_value = _safe_float(field_values[row_index])
+        if parsed_value is None:
+            return False
+
+        if abs(parsed_value - expected_value) > 1e-6:
+            return False
+
+    return True
+
+
+def _can_use_identity_assembly_shortcut_cif(file: pdbx.PDBxFile) -> bool:
     """
-    Load various structure formats.
+    Return True only when the default biological assembly is provably identity-only.
+
+    This is intentionally strict: if required categories are missing or ambiguous,
+    return False and fall back to explicit biological assembly expansion.
     """
     try:
-        if file_path.suffix == ".pdb":
+        assembly_map = pdbx.list_assemblies(file)
+    except (InvalidFileError, KeyError, ValueError, TypeError):
+        return False
+
+    if not assembly_map:
+        return False
+
+    selected_assembly_id = str(next(iter(assembly_map.keys())))
+
+    try:
+        assembly_gen = file.get_category("pdbx_struct_assembly_gen", expect_looped=True)
+        oper_list = file.get_category("pdbx_struct_oper_list", expect_looped=True)
+        atom_site = file.get_category("atom_site", expect_looped=True)
+    except (KeyError, ValueError, TypeError):
+        return False
+
+    if assembly_gen is None or oper_list is None or atom_site is None:
+        return False
+
+    assembly_ids = assembly_gen.get("assembly_id")
+    oper_expressions = assembly_gen.get("oper_expression")
+    asym_id_lists = assembly_gen.get("asym_id_list")
+    if (
+        assembly_ids is None
+        or oper_expressions is None
+        or asym_id_lists is None
+        or len(assembly_ids) != len(oper_expressions)
+        or len(assembly_ids) != len(asym_id_lists)
+    ):
+        return False
+
+    assembly_asym_ids: set[str] = set()
+    selected_rows = 0
+    for row_index, assembly_id in enumerate(assembly_ids):
+        if str(assembly_id) != selected_assembly_id:
+            continue
+
+        selected_rows += 1
+        expression = oper_expressions[row_index].replace(" ", "")
+        if expression not in _IDENTITY_OPERATION_EXPRESSIONS:
+            return False
+
+        asym_ids = {
+            token.strip()
+            for token in asym_id_lists[row_index].split(",")
+            if len(token.strip()) > 0
+        }
+        assembly_asym_ids |= asym_ids
+
+    if selected_rows == 0 or len(assembly_asym_ids) == 0:
+        return False
+
+    oper_ids = oper_list.get("id")
+    if oper_ids is None:
+        return False
+
+    identity_row_index = None
+    for row_index, oper_id in enumerate(oper_ids):
+        if str(oper_id).strip() == "1":
+            identity_row_index = row_index
+            break
+
+    if identity_row_index is None:
+        return False
+
+    if not _is_identity_operation_row(oper_list, identity_row_index):
+        return False
+
+    asym_column = atom_site.get("label_asym_id")
+    if asym_column is None:
+        asym_column = atom_site.get("auth_asym_id")
+    if asym_column is None:
+        return False
+
+    all_asym_ids = {
+        str(asym_id).strip()
+        for asym_id in asym_column
+        if str(asym_id).strip() not in {"", "?", "."}
+    }
+    if len(all_asym_ids) == 0:
+        return False
+
+    return assembly_asym_ids == all_asym_ids
+
+
+def load_structure(
+    file_path: Path,
+    assembly_policy: str = DEFAULT_ASSEMBLY_POLICY,
+    stage_timings: dict[str, float] | None = None,
+) -> bts.AtomArray:
+    """
+    Load various structure formats with explicit assembly policy controls.
+    """
+    normalized_policy = str(assembly_policy).strip().lower()
+    if normalized_policy not in VALID_ASSEMBLY_POLICIES:
+        raise ValueError(
+            f"Unsupported assembly policy: {assembly_policy}. "
+            f"Expected one of: {', '.join(VALID_ASSEMBLY_POLICIES)}"
+        )
+
+    suffix = file_path.suffix.lower()
+
+    parse_start = perf_counter()
+    parse_recorded = False
+    assembly_start: float | None = None
+    assembly_recorded = False
+
+    try:
+        if suffix == ".pdb":
             file = pdb.PDBFile.read(file_path)
-            assembly = pdb.get_assembly(file, model=1)
-        elif file_path.suffix == ".cif":
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_PARSE_STAGE,
+                perf_counter() - parse_start,
+            )
+            parse_recorded = True
+
+            if normalized_policy == "asymmetric":
+                return pdb.get_structure(file, model=1)
+
+            assembly_start = perf_counter()
+            structure = pdb.get_assembly(file, model=1)
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_ASSEMBLY_STAGE,
+                perf_counter() - assembly_start,
+            )
+            assembly_recorded = True
+            return structure
+
+        if suffix in {".cif", ".mmcif"}:
             file = pdbx.PDBxFile.read(file_path)
-            assembly = pdbx.get_assembly(file, model=1)
-        elif file_path.suffix == ".mmtf":
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_PARSE_STAGE,
+                perf_counter() - parse_start,
+            )
+            parse_recorded = True
+
+            if normalized_policy == "asymmetric":
+                return pdbx.get_structure(file, model=1)
+
+            if normalized_policy == "auto" and _can_use_identity_assembly_shortcut_cif(file):
+                return pdbx.get_structure(file, model=1)
+
+            assembly_start = perf_counter()
+            structure = pdbx.get_assembly(file, model=1)
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_ASSEMBLY_STAGE,
+                perf_counter() - assembly_start,
+            )
+            assembly_recorded = True
+            return structure
+
+        if suffix == ".mmtf":
             file = mmtf.MMTFFile.read(file_path)
-            assembly = mmtf.get_assembly(file, model=1)
-        else:
-            return biotite_load_structure(file_path)
-        return assembly
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_PARSE_STAGE,
+                perf_counter() - parse_start,
+            )
+            parse_recorded = True
+
+            if normalized_policy == "asymmetric":
+                return mmtf.get_structure(file, model=1)
+
+            assembly_start = perf_counter()
+            structure = mmtf.get_assembly(file, model=1)
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_ASSEMBLY_STAGE,
+                perf_counter() - assembly_start,
+            )
+            assembly_recorded = True
+            return structure
+
+        structure = biotite_load_structure(file_path)
+        _accumulate_stage_timing(
+            stage_timings,
+            _LOAD_STRUCTURE_PARSE_STAGE,
+            perf_counter() - parse_start,
+        )
+        return structure
+
     except (InvalidFileError, NotImplementedError):
-        return biotite_load_structure(file_path)
+        now = perf_counter()
+        if not parse_recorded:
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_PARSE_STAGE,
+                now - parse_start,
+            )
+        elif assembly_start is not None and not assembly_recorded:
+            _accumulate_stage_timing(
+                stage_timings,
+                _LOAD_STRUCTURE_ASSEMBLY_STAGE,
+                now - assembly_start,
+            )
+
+        fallback_start = perf_counter()
+        structure = biotite_load_structure(file_path)
+        _accumulate_stage_timing(
+            stage_timings,
+            _LOAD_STRUCTURE_FALLBACK_STAGE,
+            perf_counter() - fallback_start,
+        )
+        return structure
 
 
 def save_structure(structure: bts.AtomArray, output: Path | str) -> None:

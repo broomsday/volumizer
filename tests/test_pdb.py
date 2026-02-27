@@ -1,7 +1,17 @@
+from pathlib import Path
+
 import numpy as np
+import pytest
+from biotite.structure.io import pdbx
 
 from volumizer import pdb
+from volumizer.paths import TEST_DIR
 from volumizer.types import VoxelGroup
+
+
+TEST_PDB_DIR = TEST_DIR / "pdbs"
+TEST_IDENTITY_CIF = TEST_PDB_DIR / "4jpn.cif"
+TEST_FALLBACK_CIF = TEST_PDB_DIR / "4jpp.cif"
 
 
 class DummyVoxelGrid:
@@ -100,3 +110,110 @@ def test_volumes_to_structure_combines_voxel_groups():
         assert str(structure.element[index]) == element
         assert int(structure.res_id[index]) == res_id
         assert float(structure.b_factor[index]) == b_factor
+
+
+def test_load_structure_rejects_invalid_assembly_policy():
+    with pytest.raises(ValueError, match="Unsupported assembly policy"):
+        pdb.load_structure(Path("dummy.cif"), assembly_policy="invalid")
+
+
+def test_load_structure_asymmetric_uses_get_structure_for_cif(monkeypatch, tmp_path: Path):
+    sentinel = object()
+    dummy_file = object()
+    called = {"structure": 0, "assembly": 0}
+
+    monkeypatch.setattr(pdbx.PDBxFile, "read", lambda _: dummy_file)
+
+    def _get_structure(file, model=1):
+        called["structure"] += 1
+        assert file is dummy_file
+        assert model == 1
+        return sentinel
+
+    def _get_assembly(*args, **kwargs):
+        called["assembly"] += 1
+        raise AssertionError("get_assembly should not be used for asymmetric policy")
+
+    monkeypatch.setattr(pdbx, "get_structure", _get_structure)
+    monkeypatch.setattr(pdbx, "get_assembly", _get_assembly)
+
+    stage_timings: dict[str, float] = {}
+    result = pdb.load_structure(
+        tmp_path / "dummy.cif",
+        assembly_policy="asymmetric",
+        stage_timings=stage_timings,
+    )
+
+    assert result is sentinel
+    assert called == {"structure": 1, "assembly": 0}
+    assert stage_timings["load_structure_parse_decode"] >= 0.0
+    assert "load_structure_assembly_expand" not in stage_timings
+    assert "load_structure_fallback" not in stage_timings
+
+
+def test_can_use_identity_assembly_shortcut_detects_expected_examples():
+    identity_file = pdbx.PDBxFile.read(TEST_IDENTITY_CIF)
+    fallback_file = pdbx.PDBxFile.read(TEST_FALLBACK_CIF)
+
+    assert pdb._can_use_identity_assembly_shortcut_cif(identity_file)
+    assert not pdb._can_use_identity_assembly_shortcut_cif(fallback_file)
+
+
+def test_load_structure_auto_shortcuts_identity_assembly(monkeypatch):
+    sentinel = object()
+    called = {"structure": 0, "assembly": 0}
+
+    def _get_structure(file, model=1):
+        called["structure"] += 1
+        assert model == 1
+        return sentinel
+
+    def _get_assembly(*args, **kwargs):
+        called["assembly"] += 1
+        raise AssertionError("identity shortcut should skip get_assembly in auto mode")
+
+    monkeypatch.setattr(pdbx, "get_structure", _get_structure)
+    monkeypatch.setattr(pdbx, "get_assembly", _get_assembly)
+
+    stage_timings: dict[str, float] = {}
+    result = pdb.load_structure(
+        TEST_IDENTITY_CIF,
+        assembly_policy="auto",
+        stage_timings=stage_timings,
+    )
+
+    assert result is sentinel
+    assert called == {"structure": 1, "assembly": 0}
+    assert stage_timings["load_structure_parse_decode"] >= 0.0
+    assert "load_structure_assembly_expand" not in stage_timings
+    assert "load_structure_fallback" not in stage_timings
+
+
+def test_load_structure_records_fallback_stage_on_missing_assembly_metadata():
+    stage_timings: dict[str, float] = {}
+
+    structure = pdb.load_structure(
+        TEST_FALLBACK_CIF,
+        assembly_policy="biological",
+        stage_timings=stage_timings,
+    )
+
+    assert len(structure) > 0
+    assert stage_timings["load_structure_parse_decode"] > 0.0
+    assert stage_timings["load_structure_assembly_expand"] > 0.0
+    assert stage_timings["load_structure_fallback"] > 0.0
+
+
+def test_load_structure_records_parse_and_assembly_stages_for_biological_cif():
+    stage_timings: dict[str, float] = {}
+
+    structure = pdb.load_structure(
+        TEST_IDENTITY_CIF,
+        assembly_policy="biological",
+        stage_timings=stage_timings,
+    )
+
+    assert len(structure) > 0
+    assert stage_timings["load_structure_parse_decode"] > 0.0
+    assert stage_timings["load_structure_assembly_expand"] > 0.0
+    assert "load_structure_fallback" not in stage_timings

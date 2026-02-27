@@ -696,3 +696,60 @@ Guardrails:
 2. `load_structure` format-policy experiments (`cif` vs BCIF path where applicable)
 3. residual `get_first_shell_exposed_voxels` cleanup
 4. native classify-path residual tuning (`classify_component_type`, BFS)
+
+## 22. Load-Structure Policy Controls + Sub-Stage Instrumentation (2026-02-27)
+
+Scope:
+- Implement explicit `load_structure` assembly policy controls:
+  - `biological` (default)
+  - `asymmetric`
+  - `auto` (strict identity-only shortcut for CIF/mmCIF entries)
+- Add load-stage sub-timing capture:
+  - `load_structure_parse_decode`
+  - `load_structure_assembly_expand`
+  - `load_structure_fallback`
+- Wire assembly policy through library + tooling surfaces:
+  - `volumizer.volumize_pdb()` / `volumizer.volumize_pdb_and_save()`
+  - CLI `--assembly-policy`
+  - benchmark harness `scripts/benchmark.py`
+
+Artifacts generated (native backend, repeats=3, resolution=2.0 A):
+- `AGENTS/benchmark.native.stage-profiling.load-policy.medium.biological.r3.v1.json`
+- `AGENTS/benchmark.native.stage-profiling.load-policy.medium.asymmetric.r3.v1.json`
+- `AGENTS/benchmark.native.stage-profiling.load-policy.medium.auto.r3.v1.json`
+- `AGENTS/benchmark.native.stage-profiling.load-policy.large.biological.r3.v1.json`
+- `AGENTS/benchmark.native.stage-profiling.load-policy.large.asymmetric.r3.v1.json`
+- `AGENTS/benchmark.native.stage-profiling.load-policy.large.auto.r3.v1.json`
+
+### 22.1 Runtime + Load Sub-Stage Results
+
+| case | policy | mean_s | load_structure_s | parse_decode_s | assembly_expand_s | fallback_s |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 4jpn (`tests/pdbs/4jpn.pdb`) | biological | 0.211941 | 0.068490 | 0.004996 | 0.028862 | 0.034608 |
+| 4jpn (`tests/pdbs/4jpn.pdb`) | auto | 0.203499 | 0.069193 | 0.004901 | 0.029558 | 0.034713 |
+| 4jpn (`tests/pdbs/4jpn.pdb`) | asymmetric | 0.170258 | 0.033894 | 0.004992 | n/a | n/a |
+| 4jpp_assembly (`tests/pdbs/4jpp.cif`) | biological | 0.307657 | 0.096716 | 0.014278 | 0.000014 | 0.082405 |
+| 4jpp_assembly (`tests/pdbs/4jpp.cif`) | auto | 0.309758 | 0.097722 | 0.014497 | 0.000005 | 0.083184 |
+| 4jpp_assembly (`tests/pdbs/4jpp.cif`) | asymmetric | 0.292762 | 0.082851 | 0.014189 | n/a | n/a |
+
+### 22.2 Delta vs Biological
+
+| case | policy | end_to_end_delta | load_structure_delta |
+| --- | --- | ---: | ---: |
+| 4jpn | auto | 3.98% faster | 1.03% slower |
+| 4jpn | asymmetric | 19.67% faster | 50.51% faster |
+| 4jpp_assembly | auto | 0.68% slower | 1.04% slower |
+| 4jpp_assembly | asymmetric | 4.84% faster | 14.34% faster |
+
+### 22.3 Interpretation
+
+- `load_structure` remains a major runtime contributor in these profiles.
+- On `.pdb` medium benchmark input (`4jpn.pdb`), `auto` behaves like `biological` by design (identity shortcut currently applies only to CIF/mmCIF), so measured differences are minor run-to-run variance.
+- On large CIF (`4jpp.cif`), biological/auto spend nearly all load time in fallback (`~0.082-0.083s`) due missing assembly metadata; `asymmetric` avoids assembly+fallback work and shows a modest end-to-end gain.
+- The new sub-stage timings make it explicit that parse/decode is small (`~0.005s` medium, `~0.014s` large) and fallback dominates problematic entries.
+
+### 22.4 Updated Priority
+
+1. Continue `load_structure` optimization via format-path evaluation (BCIF experiments where compatible, with safe fallback).
+2. Re-benchmark CIF-first representative cases to directly quantify `auto` identity-shortcut value in CIF-driven workflows.
+3. Keep `biological` as default policy to preserve current assembly semantics.
