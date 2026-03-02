@@ -1,11 +1,30 @@
 [project]
 name = "volumizer"
-version = "0.1.4"
+version = "0.1.5"
 description = "Search the RCSB for occluded volumes like cavities, pockets, and pores."
 readme = "README.md"
 requires-python = ">=3.10,<3.12"
+license = { file = "LICENSE" }
 authors = [
   { name = "Aron Broom", email = "broomsday@gmail.com" },
+]
+keywords = [
+  "structural-biology",
+  "protein",
+  "pdb",
+  "bioinformatics",
+  "cavity-detection",
+  "pocket-detection",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
   "numpy>=1.23,<2.0",
@@ -15,6 +34,9 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/broomsday/volumizer"
+Repository = "https://github.com/broomsday/volumizer"
+Issues = "https://github.com/broomsday/volumizer/issues"
+Changelog = "https://github.com/broomsday/volumizer/releases"
 
 [project.scripts]
 volumizer = "volumizer.cli:main"

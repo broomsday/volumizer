@@ -68,6 +68,23 @@ def test_normalize_argv_for_subcommands_infers_cluster():
     assert normalized[0] == "cluster"
 
 
+
+def test_normalize_argv_for_subcommands_preserves_version_flag():
+    assert cli._normalize_argv_for_subcommands(["--version"]) == ["--version"]
+    assert cli._normalize_argv_for_subcommands(["-V"]) == ["-V"]
+
+
+def test_main_version_flag_outputs_version(capsys):
+    try:
+        cli.main(["--version"])
+        assert False, "expected SystemExit for --version"
+    except SystemExit as error:
+        assert error.code == 0
+
+    stdout = capsys.readouterr().out.strip()
+    assert stdout.startswith("volumizer ")
+
+
 def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
     out_path = tmp_path / "1ABC.cif"
     out_path.write_text("dummy", encoding="utf-8")

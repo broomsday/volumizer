@@ -23,7 +23,13 @@ The dataframe output shows volume/dimensinos of each occluded volume in the stru
 | 5  | 4  | pocket |   135.0  |   6.000 |   6.000 |   0.000 |
 
 # Installation
-The package is published on PyPi, `pip install volumizer`.
+Install from PyPI:
+
+```bash
+pip install volumizer
+```
+
+This installs the portable Python wheel and CLI (`volumizer`). Optional local C helpers and the optional Rust native extension are not bundled in the default wheel.
 
 ## Developing the Volumizer Package
 `biotite==0.37.0` does not support Python 3.14. Use Python 3.10 or 3.11 with `uv`.
@@ -40,8 +46,8 @@ Optional native scaffold (Phase 1):
 3. `uv run --python 3.11 maturin develop --manifest-path native/Cargo.toml`
 
 Backend selection:
-- `VOLUMIZER_BACKEND=python` (default): use Python/C-ctypes implementation
-- `VOLUMIZER_BACKEND=auto`: use native if importable, otherwise Python
+- `VOLUMIZER_BACKEND=python` (default): use Python implementation (and local C helpers only when `src/voxel.so` and `src/fib_sphere.so` are present)
+- `VOLUMIZER_BACKEND=auto`: use native if importable, otherwise Python mode
 - `VOLUMIZER_BACKEND=native`: require native module and fail if unavailable
 
 # Usage
@@ -49,7 +55,19 @@ Backend selection:
 ## CLI
 The package now includes a CLI entrypoint: `volumizer`.
 
+Print CLI version:
+
+```bash
+volumizer --version
+```
+
 Analyze a local structure file:
+
+Control load behavior with assembly policy (`biological` default, `asymmetric`, `auto`):
+
+```bash
+volumizer analyze --input my_structure.cif --output-dir out --assembly-policy auto
+```
 
 ```bash
 volumizer analyze --input my_structure.cif --output-dir out
@@ -144,6 +162,7 @@ Cluster filtering defaults:
 - Parallel workers for metadata/download + analysis with `--jobs`, e.g. `--jobs 8`
 - Deterministic run partitioning with `--num-shards <N> --shard-index <K>` to split representative lists across machines/jobs (`0 <= K < N`; both flags required)
 - Retry transient network errors with `--retries` and `--retry-delay`
+- Structure-load policy for `analyze` and `cluster` can be set with `--assembly-policy biological|asymmetric|auto`
 - Cluster metadata cache defaults to `<output-dir>/entry_metadata_cache.json`; override with `--metadata-cache` or disable with `--no-metadata-cache`
 - Cache stores both successful entry metadata and permanent metadata failures (e.g. HTTP 404) to avoid repeated failed fetches on later runs
 - Checkpointing defaults to `<output-dir>/run.checkpoint.json`; override with `--checkpoint` or disable with `--no-checkpoint`

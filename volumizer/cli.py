@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from importlib.metadata import PackageNotFoundError, version as package_version
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,13 @@ DEFAULT_METADATA_CACHE_FILENAME = "entry_metadata_cache.json"
 METADATA_CACHE_FORMAT_VERSION = 2
 DEFAULT_CHECKPOINT_FILENAME = "run.checkpoint.json"
 MANIFEST_FORMAT_VERSION = 1
+
+
+def _resolve_cli_version() -> str:
+    try:
+        return package_version("volumizer")
+    except PackageNotFoundError:
+        return "0+unknown"
 
 
 def _utc_timestamp() -> str:
@@ -309,6 +317,13 @@ def build_parser() -> argparse.ArgumentParser:
             "Analyze one or more structures and write annotated CIF + JSON outputs."
         ),
     )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {_resolve_cli_version()}",
+        help="Show installed volumizer version and exit.",
+    )
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -418,7 +433,7 @@ def _normalize_argv_for_subcommands(argv_list: list[str]) -> list[str]:
     if len(argv_list) == 0:
         return argv_list
 
-    known_subcommands = {"analyze", "cluster", "cache", "-h", "--help"}
+    known_subcommands = {"analyze", "cluster", "cache", "-h", "--help", "-V", "--version"}
     first = argv_list[0]
     if first in known_subcommands:
         return argv_list
