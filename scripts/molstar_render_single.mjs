@@ -128,7 +128,7 @@ async function setupViewer(page, width, height, backgroundHex) {
   ].join('\n');
 
   await page.setViewportSize({ width, height });
-  await page.setContent(html, { waitUntil: 'load' });
+  await page.setContent(html, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => Boolean(globalThis.molstar && globalThis.molstar.Viewer), {
     timeout: 45_000,
   });
@@ -147,6 +147,18 @@ async function setupViewer(page, width, height, backgroundHex) {
     });
     globalThis.__volumizerViewer = viewer;
   });
+}
+
+async function waitForViewerReady(page, timeoutMs = 15000) {
+  await page.waitForFunction(
+    () => {
+      const viewer = globalThis.__volumizerViewer;
+      if (!viewer || !viewer.plugin) return false;
+      const canvas = viewer.plugin.canvas3d || viewer.plugin.canvas3dContext?.canvas3d;
+      return Boolean(canvas);
+    },
+    { timeout: timeoutMs },
+  );
 }
 
 async function loadStructureIntoViewer(page, structureData) {
@@ -168,6 +180,7 @@ async function loadStructureIntoViewer(page, structureData) {
     const blobUrl = URL.createObjectURL(blob);
     try {
       await viewer.loadStructureFromUrl(blobUrl, payload.format, payload.isBinary);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     } finally {
       URL.revokeObjectURL(blobUrl);
     }
@@ -175,10 +188,13 @@ async function loadStructureIntoViewer(page, structureData) {
 }
 
 async function setAxisView(page, axis) {
-  await page.evaluate(async (axisName) => {
+  return await page.evaluate(async (axisName) => {
     const viewer = globalThis.__volumizerViewer;
-    const canvas3d = viewer?.plugin?.canvas3d;
-    if (!canvas3d) throw new Error('Mol* canvas unavailable');
+    const plugin = viewer?.plugin;
+    const canvas3d = plugin?.canvas3d || plugin?.canvas3dContext?.canvas3d;
+    if (!canvas3d || typeof canvas3d.requestCameraReset !== 'function') {
+      return false;
+    }
 
     const sphere = canvas3d.boundingSphereVisible || canvas3d.boundingSphere;
     const center = sphere?.center || [0, 0, 0];
@@ -207,6 +223,7 @@ async function setAxisView(page, axis) {
 
     canvas3d.requestCameraReset({ snapshot, durationMs: 0 });
     await new Promise((resolve) => setTimeout(resolve, 120));
+    return true;
   }, axis);
 }
 
@@ -220,7 +237,11 @@ async function renderThumbnails(args) {
   const chromium = await loadPlaywright();
   const structureData = await readStructure(structurePath, args.format);
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--use-angle=swiftshader', '--disable-dev-shm-usage'],
+  });
+
   try {
     const context = await browser.newContext({
       viewport: { width: args.width, height: args.height },
@@ -230,6 +251,12 @@ async function renderThumbnails(args) {
 
     await setupViewer(page, args.width, args.height, style.background_hex || '#ffffff');
     await loadStructureIntoViewer(page, structureData);
+
+    try {
+      await waitForViewerReady(page, 15000);
+    } catch {
+      // Continue and still emit screenshots; camera orientation may not be available.
+    }
 
     const axes = ['x', 'y', 'z'];
     for (const axis of axes) {
@@ -255,7 +282,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.stack || error.message : String(error);
   process.stderr.write(`${message}\n`);
   process.exit(1);
 });
