@@ -194,6 +194,8 @@ For step 3 pre-rendering, using Mol* is a good choice so gallery thumbnails matc
 ## Phase B: Thumbnail Rendering
 - Add Node renderer (Mol* + Playwright/Puppeteer).
 - Add render queue logic and cached outputs.
+- Current implementation: `scripts/render_gallery_thumbnails.py` (queue) + `scripts/molstar_render_single.mjs` (Mol* worker).
+- Runtime prerequisites: `playwright` package and Chromium browser (`npm install --save-dev playwright` + `npx playwright install chromium`).
 - Deliverable: 3 PNGs per hit with deterministic style.
 
 ## Phase C: Local API + Gallery UI
@@ -244,7 +246,7 @@ For step 3 pre-rendering, using Mol* is a good choice so gallery thumbnails matc
 
 ## 14. Immediate Next Actions
 
-1. Implement `scripts/build_gallery_index.py` (Phase A).
-2. Finalize exact pore metric definitions (`length`, `min/max diameter`) and confirm mapping from current volumizer outputs.
-3. Implement `scripts/render_gallery_thumbnails.mjs` (Phase B).
-4. Add minimal FastAPI service + gallery page scaffold (Phase C).
+1. Install Node render dependencies (`npm install --save-dev playwright` + `npx playwright install chromium`).
+2. Run `scripts/render_gallery_thumbnails.py` on a real indexed run and validate generated `x/y/z` PNG quality.
+3. Add minimal FastAPI endpoints (`/api/runs`, `/api/hits`, `/api/hits/{structure_id}`) for Phase C.
+4. Scaffold gallery page with filter controls and thumbnail grid wired to `/api/hits`.

@@ -502,6 +502,7 @@ def _build_resume_skip_entry(
 
     return {
         "source": source_label,
+        "pdb_id": _infer_pdb_id_for_result(source_label, input_path),
         "input_path": str(input_path),
         "structure_output": str(structure_output_path),
         "annotation_output": str(annotation_output_path),
@@ -523,6 +524,7 @@ def _build_dry_run_plan_entry(
     )
     return {
         "source": source_label,
+        "pdb_id": _infer_pdb_id_for_result(source_label, input_path),
         "input_path": str(input_path),
         "structure_output": str(structure_output_path),
         "annotation_output": str(annotation_output_path),
@@ -1828,6 +1830,15 @@ def _build_annotation_payload(
     }
 
 
+def _infer_pdb_id_for_result(source_label: str, input_path: Path) -> str | None:
+    for candidate in (source_label, input_path.stem):
+        try:
+            return rcsb.normalize_pdb_id(candidate)
+        except ValueError:
+            continue
+    return None
+
+
 def analyze_structure_file(
     source_label: str,
     input_path: Path,
@@ -1879,6 +1890,7 @@ def analyze_structure_file(
 
     return {
         "source": source_label,
+        "pdb_id": _infer_pdb_id_for_result(source_label, input_path),
         "input_path": str(input_path),
         "structure_output": str(structure_output_path),
         "annotation_output": str(annotation_output_path),

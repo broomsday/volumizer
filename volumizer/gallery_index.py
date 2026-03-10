@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from volumizer import pdb, utils
+from volumizer import pdb, rcsb, utils
 
 
 _VALID_VOLUME_KINDS = {"pore", "pocket", "cavity", "hub"}
@@ -25,6 +25,37 @@ def _safe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_pdb_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    candidate = value.strip()
+    if len(candidate) == 0:
+        return None
+
+    try:
+        return rcsb.normalize_pdb_id(candidate)
+    except ValueError:
+        return None
+
+
+def _infer_pdb_id(result: dict[str, Any], source_label: str, input_path: Path | None) -> str | None:
+    direct = _normalize_pdb_id(result.get("pdb_id"))
+    if direct is not None:
+        return direct
+
+    from_source = _normalize_pdb_id(source_label)
+    if from_source is not None:
+        return from_source
+
+    if input_path is not None:
+        from_input = _normalize_pdb_id(input_path.stem)
+        if from_input is not None:
+            return from_input
+
+    return None
 
 
 def _sort_row_key(value: str) -> tuple[int, str]:
@@ -461,10 +492,11 @@ def build_gallery_index(
                 annotation_payload = json.loads(annotation_path.read_text(encoding="utf-8"))
                 volume_records = _parse_volume_records(annotation_payload)
                 grouped_rows = _normalize_volume_rows(volume_records)
-
-                pdb_id = None
-                if isinstance(result.get("pdb_id"), str):
-                    pdb_id = str(result["pdb_id"])
+                pdb_id = _infer_pdb_id(
+                    result,
+                    source_label=source_label,
+                    input_path=input_path,
+                )
 
                 cursor = connection.execute(
                     """

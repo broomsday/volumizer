@@ -190,3 +190,72 @@ def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_pa
         ).fetchall()
 
     assert rows == [(222.0, 9.0, 2.0, 4.0)]
+
+
+def test_build_gallery_index_infers_pdb_id_from_source_when_missing(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    annotation_path = tmp_path / "1dzf.annotation.json"
+    structure_output_path = tmp_path / "1dzf.annotated.cif"
+    db_path = tmp_path / "gallery.db"
+
+    structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "1dzf",
+                "num_volumes": 1,
+                "volumes": [
+                    {
+                        "id": 0,
+                        "type": "pore",
+                        "volume": 111.0,
+                        "x": 9.0,
+                        "y": 4.0,
+                        "z": 2.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {
+                    "assembly_policy": "biological",
+                    "resolution": 3.0,
+                    "keep_non_protein": False,
+                    "output_dir": str(tmp_path),
+                },
+                "results": [
+                    {
+                        "source": "1dzf",
+                        "input_path": str(TEST_INPUT_PDB),
+                        "structure_output": str(structure_output_path),
+                        "annotation_output": str(annotation_path),
+                    }
+                ],
+                "errors": [],
+                "skipped": [],
+                "planned": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="pdb-id-infer-test",
+        replace_run=False,
+        strict=True,
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT source_label, pdb_id FROM structures"
+        ).fetchone()
+
+    assert row == ("1dzf", "1DZF")
