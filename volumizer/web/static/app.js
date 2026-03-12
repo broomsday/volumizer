@@ -1,0 +1,406 @@
+const state = {
+  currentOffset: 0,
+  totalCount: 0,
+  currentLimit: 24,
+  currentViewer: null,
+};
+
+const elements = {
+  filtersForm: document.getElementById('filters-form'),
+  runSelect: document.getElementById('run-id'),
+  limitSelect: document.getElementById('limit'),
+  sortBySelect: document.getElementById('sort-by'),
+  sortDirSelect: document.getElementById('sort-dir'),
+  prevPageButton: document.getElementById('prev-page'),
+  nextPageButton: document.getElementById('next-page'),
+  resetButton: document.getElementById('reset-filters'),
+  loadingState: document.getElementById('loading-state'),
+  emptyState: document.getElementById('empty-state'),
+  resultsGrid: document.getElementById('results-grid'),
+  dbPill: document.getElementById('db-pill'),
+  resultPill: document.getElementById('result-pill'),
+  pageStatus: document.getElementById('page-status'),
+  detailDialog: document.getElementById('detail-dialog'),
+  closeDetailButton: document.getElementById('close-detail'),
+  detailTitle: document.getElementById('detail-title'),
+  detailLinks: document.getElementById('detail-links'),
+  detailMetrics: document.getElementById('detail-metrics'),
+  detailVolumes: document.getElementById('detail-volumes'),
+  viewerHost: document.getElementById('viewer-host'),
+};
+
+function numericInputValue(name) {
+  const field = elements.filtersForm.elements.namedItem(name);
+  const value = field ? String(field.value).trim() : '';
+  if (value === '') return null;
+  return value;
+}
+
+function buildSearchParams() {
+  const params = new URLSearchParams();
+  const runId = String(elements.runSelect.value || '').trim();
+  if (runId) params.set('run_id', runId);
+
+  const numericNames = [
+    'pore_volume_min',
+    'pore_length_min',
+    'pore_dmin_min',
+    'pore_dmax_min',
+    'chains_min',
+    'residues_min',
+    'seq_unique_chains_min',
+  ];
+  for (const name of numericNames) {
+    const value = numericInputValue(name);
+    if (value !== null) params.set(name, value);
+  }
+
+  params.set('sort_by', elements.sortBySelect.value);
+  params.set('sort_dir', elements.sortDirSelect.value);
+  params.set('limit', String(state.currentLimit));
+  params.set('offset', String(state.currentOffset));
+  return params;
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = await response.json();
+      if (payload && payload.detail) detail = String(payload.detail);
+    } catch {
+      // Ignore JSON parse failures for plain-text responses.
+    }
+    throw new Error(detail);
+  }
+  return response.json();
+}
+
+async function loadHealth() {
+  const health = await fetchJson('/api/health');
+  elements.dbPill.textContent = health.db_exists ? health.db.split('/').slice(-2).join('/') : 'Missing DB';
+}
+
+async function loadRuns() {
+  const payload = await fetchJson('/api/runs');
+  const previousValue = elements.runSelect.value;
+  elements.runSelect.innerHTML = '<option value="">All runs</option>';
+
+  for (const run of payload.runs) {
+    const option = document.createElement('option');
+    option.value = run.run_id;
+    option.textContent = `${run.run_id} (${run.structure_count})`;
+    elements.runSelect.append(option);
+  }
+
+  if ([...elements.runSelect.options].some((option) => option.value === previousValue)) {
+    elements.runSelect.value = previousValue;
+  }
+}
+
+function renderThumbnail(url, axis) {
+  const frame = document.createElement('div');
+  frame.className = 'thumb-frame';
+
+  if (url) {
+    const image = document.createElement('img');
+    image.src = url;
+    image.alt = `${axis.toUpperCase()} thumbnail`;
+    frame.append(image);
+  } else {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumb-placeholder';
+    placeholder.textContent = axis.toUpperCase();
+    frame.append(placeholder);
+  }
+
+  return frame;
+}
+
+function renderMetric(label, value) {
+  const item = document.createElement('div');
+  item.className = 'metric-pill';
+  const labelNode = document.createElement('span');
+  labelNode.className = 'metric-label';
+  labelNode.textContent = label;
+  const valueNode = document.createElement('span');
+  valueNode.className = 'metric-value';
+  valueNode.textContent = value;
+  item.append(labelNode, valueNode);
+  return item;
+}
+
+function prettyNumber(value, digits = 1) {
+  if (value === null || value === undefined || value === '') return '—';
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return String(value);
+  return numericValue.toLocaleString(undefined, {
+    maximumFractionDigits: digits,
+  });
+}
+
+function renderResults(rows) {
+  elements.resultsGrid.innerHTML = '';
+  for (const row of rows) {
+    const card = document.createElement('article');
+    card.className = 'result-card';
+
+    const thumbStrip = document.createElement('div');
+    thumbStrip.className = 'thumb-strip';
+    thumbStrip.append(
+      renderThumbnail(row.urls.thumbnail_x, 'x'),
+      renderThumbnail(row.urls.thumbnail_y, 'y'),
+      renderThumbnail(row.urls.thumbnail_z, 'z'),
+    );
+
+    const body = document.createElement('div');
+    body.className = 'card-body';
+
+    const titleRow = document.createElement('div');
+    titleRow.className = 'card-title-row';
+    const title = document.createElement('h3');
+    title.textContent = row.source_label;
+    const runTag = document.createElement('span');
+    runTag.className = 'run-tag';
+    runTag.textContent = row.run_id;
+    titleRow.append(title, runTag);
+
+    const subtitle = document.createElement('p');
+    subtitle.className = 'card-subtitle';
+    subtitle.textContent = row.pdb_id ? `PDB ${row.pdb_id}` : 'Local structure';
+
+    const metrics = document.createElement('div');
+    metrics.className = 'metric-grid';
+    metrics.append(
+      renderMetric('Largest pore', `${prettyNumber(row.largest_pore_volume_a3, 0)} A^3`),
+      renderMetric('Length', `${prettyNumber(row.largest_pore_length_a)} A`),
+      renderMetric('Min diam.', `${prettyNumber(row.largest_pore_min_diameter_a)} A`),
+      renderMetric('Chains', prettyNumber(row.num_chains, 0)),
+      renderMetric('Residues', prettyNumber(row.num_residues, 0)),
+      renderMetric('Render', row.render_status || 'pending'),
+    );
+
+    const actions = document.createElement('div');
+    actions.className = 'card-actions';
+    const openButton = document.createElement('button');
+    openButton.type = 'button';
+    openButton.className = 'primary-button';
+    openButton.textContent = 'Open Detail';
+    openButton.addEventListener('click', () => openDetail(row.structure_id));
+    actions.append(openButton);
+
+    body.append(titleRow, subtitle, metrics, actions);
+    card.append(thumbStrip, body);
+    elements.resultsGrid.append(card);
+  }
+}
+
+function updatePaging() {
+  const pageNumber = Math.floor(state.currentOffset / state.currentLimit) + 1;
+  const pageCount = Math.max(1, Math.ceil(state.totalCount / state.currentLimit));
+  elements.pageStatus.textContent = `Page ${pageNumber} of ${pageCount}`;
+  elements.prevPageButton.disabled = state.currentOffset <= 0;
+  elements.nextPageButton.disabled = state.currentOffset + state.currentLimit >= state.totalCount;
+}
+
+async function search() {
+  elements.loadingState.hidden = false;
+  elements.emptyState.hidden = true;
+
+  try {
+    const params = buildSearchParams();
+    const payload = await fetchJson(`/api/hits?${params.toString()}`);
+    state.totalCount = payload.total_count;
+    elements.resultPill.textContent = String(payload.total_count);
+    renderResults(payload.rows);
+    elements.emptyState.hidden = payload.rows.length > 0;
+    updatePaging();
+  } catch (error) {
+    elements.resultsGrid.innerHTML = '';
+    elements.emptyState.hidden = false;
+    elements.emptyState.textContent = `Unable to load hits: ${error.message}`;
+    state.totalCount = 0;
+    elements.resultPill.textContent = '0';
+    updatePaging();
+  } finally {
+    elements.loadingState.hidden = true;
+  }
+}
+
+function buildDetailMetric(label, value) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'detail-metric';
+  const labelNode = document.createElement('span');
+  labelNode.className = 'detail-metric-label';
+  labelNode.textContent = label;
+  const valueNode = document.createElement('strong');
+  valueNode.textContent = value;
+  wrapper.append(labelNode, valueNode);
+  return wrapper;
+}
+
+function renderDetail(detail, viewerData) {
+  elements.detailTitle.textContent = detail.source_label;
+  elements.detailLinks.innerHTML = '';
+
+  const linkItems = [
+    ['Annotated CIF', viewerData.structure_url],
+    ['Annotation JSON', viewerData.annotation_url],
+  ];
+  for (const [label, href] of linkItems) {
+    if (!href) continue;
+    const link = document.createElement('a');
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noreferrer';
+    link.textContent = label;
+    elements.detailLinks.append(link);
+  }
+
+  elements.detailMetrics.innerHTML = '';
+  elements.detailMetrics.append(
+    buildDetailMetric('Run', detail.run_id),
+    buildDetailMetric('PDB', detail.pdb_id || '—'),
+    buildDetailMetric('Largest pore', `${prettyNumber(detail.largest_pore_volume_a3, 0)} A^3`),
+    buildDetailMetric('Length', `${prettyNumber(detail.largest_pore_length_a)} A`),
+    buildDetailMetric('Min diameter', `${prettyNumber(detail.largest_pore_min_diameter_a)} A`),
+    buildDetailMetric('Max diameter', `${prettyNumber(detail.largest_pore_max_diameter_a)} A`),
+    buildDetailMetric('Chains', prettyNumber(detail.num_chains, 0)),
+    buildDetailMetric('Residues', prettyNumber(detail.num_residues, 0)),
+    buildDetailMetric('Unique chains', prettyNumber(detail.num_sequence_unique_chains, 0)),
+  );
+
+  elements.detailVolumes.innerHTML = '';
+  for (const volume of detail.volumes) {
+    const row = document.createElement('tr');
+    row.innerHTML = [
+      `<td>${volume.kind}</td>`,
+      `<td>${Number(volume.rank_in_kind) + 1}</td>`,
+      `<td>${prettyNumber(volume.volume_a3, 0)}</td>`,
+      `<td>${prettyNumber(volume.length_a)}</td>`,
+      `<td>${prettyNumber(volume.min_diameter_a)}</td>`,
+      `<td>${prettyNumber(volume.max_diameter_a)}</td>`,
+    ].join('');
+    elements.detailVolumes.append(row);
+  }
+}
+
+async function mountViewer(viewerData) {
+  if (!viewerData.structure_url || !viewerData.structure_format) {
+    elements.viewerHost.innerHTML = '<div class="viewer-placeholder">Annotated structure is unavailable for this hit.</div>';
+    return;
+  }
+
+  if (!window.molstar || !window.molstar.Viewer) {
+    elements.viewerHost.innerHTML = '<div class="viewer-placeholder">Mol* failed to load. Open the annotated CIF directly instead.</div>';
+    return;
+  }
+
+  if (state.currentViewer && state.currentViewer.plugin && typeof state.currentViewer.plugin.dispose === 'function') {
+    state.currentViewer.plugin.dispose();
+    state.currentViewer = null;
+  }
+
+  elements.viewerHost.innerHTML = '<div id="molstar-app" class="molstar-app"></div>';
+
+  const viewer = await window.molstar.Viewer.create('molstar-app', {
+    layoutIsExpanded: false,
+    layoutShowControls: false,
+    layoutShowLog: false,
+    layoutShowLeftPanel: false,
+    viewportShowExpand: false,
+    viewportShowSelectionMode: false,
+    viewportShowAnimation: false,
+    collapseLeftPanel: true,
+    pluginStateServer: false,
+  });
+
+  state.currentViewer = viewer;
+  await viewer.loadStructureFromUrl(
+    viewerData.structure_url,
+    viewerData.structure_format,
+    viewerData.structure_format === 'bcif',
+  );
+}
+
+async function openDetail(structureId) {
+  try {
+    const [detail, viewerData] = await Promise.all([
+      fetchJson(`/api/hits/${structureId}`),
+      fetchJson(`/api/hits/${structureId}/viewer-data`),
+    ]);
+    renderDetail(detail, viewerData);
+    if (!elements.detailDialog.open) {
+      elements.detailDialog.showModal();
+    }
+    await mountViewer(viewerData);
+  } catch (error) {
+    elements.viewerHost.innerHTML = `<div class="viewer-placeholder">Unable to load detail: ${error.message}</div>`;
+    if (!elements.detailDialog.open) {
+      elements.detailDialog.showModal();
+    }
+  }
+}
+
+function closeDetail() {
+  if (elements.detailDialog.open) {
+    elements.detailDialog.close();
+  }
+}
+
+function wireEvents() {
+  elements.filtersForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    state.currentOffset = 0;
+    state.currentLimit = Number(elements.limitSelect.value);
+    await search();
+  });
+
+  elements.resetButton.addEventListener('click', async () => {
+    elements.sortBySelect.value = 'largest_pore_volume';
+    elements.sortDirSelect.value = 'desc';
+    elements.limitSelect.value = '24';
+    state.currentLimit = 24;
+    state.currentOffset = 0;
+    window.setTimeout(search, 0);
+  });
+
+  elements.prevPageButton.addEventListener('click', async () => {
+    state.currentOffset = Math.max(0, state.currentOffset - state.currentLimit);
+    await search();
+  });
+
+  elements.nextPageButton.addEventListener('click', async () => {
+    state.currentOffset += state.currentLimit;
+    await search();
+  });
+
+  elements.closeDetailButton.addEventListener('click', closeDetail);
+  elements.detailDialog.addEventListener('click', (event) => {
+    const rect = elements.detailDialog.getBoundingClientRect();
+    const insideDialog =
+      rect.top <= event.clientY &&
+      event.clientY <= rect.top + rect.height &&
+      rect.left <= event.clientX &&
+      event.clientX <= rect.left + rect.width;
+    if (!insideDialog) {
+      closeDetail();
+    }
+  });
+}
+
+async function init() {
+  wireEvents();
+  await loadHealth();
+  await loadRuns();
+  await search();
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  init().catch((error) => {
+    elements.loadingState.hidden = true;
+    elements.emptyState.hidden = false;
+    elements.emptyState.textContent = `Startup failed: ${error.message}`;
+  });
+});

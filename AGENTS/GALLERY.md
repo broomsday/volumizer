@@ -37,6 +37,15 @@ For step 3 pre-rendering, using Mol* is a good choice so gallery thumbnails matc
 - Frontend: lightweight HTML/CSS/JS app.
 - Interactive view: embed Mol* on detail page/modal.
 
+### 3.4 Recommended Local-First Server Shape
+- Keep the web layer thin and Python-native.
+- Use FastAPI only as a read-mostly API and static file server.
+- Reuse existing Python gallery helpers for indexing, SQL querying, and thumbnail generation.
+- Keep SQLite as the only datastore for local/modest datasets.
+- Avoid an ORM initially; direct SQL or thin helper functions are enough for the current schema.
+- Avoid a separate SPA frontend initially; use static HTML/CSS/JS with a small amount of browser-side fetch logic.
+- Keep thumbnail generation offline/asynchronous from browsing; the web app should read cached PNGs, not render them on demand.
+
 ## 4. Filesystem + Data Layout
 
 ## 4.1 Suggested Layout
@@ -201,6 +210,7 @@ For step 3 pre-rendering, using Mol* is a good choice so gallery thumbnails matc
 ## Phase C: Local API + Gallery UI
 - FastAPI endpoints + static frontend.
 - Filter controls + paged gallery.
+- Initial implementation now exists in `volumizer/web/app.py` with static assets under `volumizer/web/static/`.
 - Deliverable: local website showing filtered hits + thumbnails.
 
 ## Phase D: Mol* Interactive View

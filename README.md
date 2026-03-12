@@ -179,6 +179,41 @@ CLI outputs:
 - `run.summary.json`: run configuration and per-structure status
 - `<path from --failures-manifest>` (optional): replayable manifest containing failed structure inputs
 
+## Local Gallery Web App
+For local browsing of modest indexed datasets, the repository now includes a small FastAPI app plus a static gallery UI.
+
+Install the extra local web dependencies:
+
+```bash
+uv sync --python 3.11 --group test --group web
+```
+
+Build the gallery index from a run summary:
+
+```bash
+uv run --python 3.11 python scripts/build_gallery_index.py --summary out/run.summary.json --db data/gallery.db
+```
+
+Render cached `x/y/z` thumbnails for indexed hits:
+
+```bash
+uv run --python 3.11 python scripts/render_gallery_thumbnails.py --db data/gallery.db --render-root data/renders
+```
+
+Serve the local gallery:
+
+```bash
+uv run --python 3.11 python scripts/serve_gallery.py --db data/gallery.db --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000`.
+
+Current web-app scope:
+- `GET /api/runs`, `GET /api/hits`, `GET /api/hits/{structure_id}`, `GET /api/hits/{structure_id}/viewer-data`
+- static browser UI for filtering and browsing hits
+- file-serving endpoints for annotated CIF, annotation JSON, and cached PNG thumbnails
+- Mol* detail viewer embedded in the browser page
+
 Using the test file `tests/pdbs/4jpn.pdb` try out the following:
 
 ## Volumize a PDB and Save the Volumized PDB and DataFrame
