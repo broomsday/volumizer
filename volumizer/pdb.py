@@ -362,6 +362,32 @@ def clean_structure(structure: bts.AtomArray) -> bts.AtomArray:
     return structure
 
 
+def compute_sse_fractions(
+    structure: bts.AtomArray,
+) -> dict[str, float | None]:
+    """
+    Compute secondary structure element fractions using biotite P-SEA.
+
+    Returns dict with keys ``frac_alpha``, ``frac_beta``, ``frac_coil``,
+    each a float in [0, 1] or None if annotation is not possible.
+    """
+    try:
+        sse = bts.annotate_sse(structure)
+    except Exception:
+        return {"frac_alpha": None, "frac_beta": None, "frac_coil": None}
+
+    assigned = sse[sse != ""]
+    if len(assigned) == 0:
+        return {"frac_alpha": None, "frac_beta": None, "frac_coil": None}
+
+    total = len(assigned)
+    return {
+        "frac_alpha": float(np.sum(assigned == "a")) / total,
+        "frac_beta": float(np.sum(assigned == "b")) / total,
+        "frac_coil": float(np.sum(assigned == "c")) / total,
+    }
+
+
 def get_structure_coords(structure: bts.AtomArray) -> pd.DataFrame:
     """
     Return the coordinates of an atom array as a dataframe.

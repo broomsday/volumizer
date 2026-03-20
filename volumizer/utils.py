@@ -118,6 +118,8 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
                 "x": annotation.hub_dimensions[i][0],
                 "y": annotation.hub_dimensions[i][1],
                 "z": annotation.hub_dimensions[i][2],
+                "cross_section_circularity": annotation.hub_cross_section_circularity.get(i),
+                "cross_section_uniformity": annotation.hub_cross_section_uniformity.get(i),
             }
             for i in annotation.hub_volumes.keys()
         ]
@@ -132,6 +134,8 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
                 "x": annotation.pore_dimensions[i][0],
                 "y": annotation.pore_dimensions[i][1],
                 "z": annotation.pore_dimensions[i][2],
+                "cross_section_circularity": annotation.pore_cross_section_circularity.get(i),
+                "cross_section_uniformity": annotation.pore_cross_section_uniformity.get(i),
             }
             for i in annotation.pore_volumes.keys()
         ]
@@ -146,6 +150,8 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
                 "x": annotation.cavity_dimensions[i][0],
                 "y": annotation.cavity_dimensions[i][1],
                 "z": annotation.cavity_dimensions[i][2],
+                "cross_section_circularity": annotation.cavity_cross_section_circularity.get(i),
+                "cross_section_uniformity": annotation.cavity_cross_section_uniformity.get(i),
             }
             for i in annotation.cavity_volumes.keys()
         ]
@@ -160,6 +166,8 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
                 "x": annotation.pocket_dimensions[i][0],
                 "y": annotation.pocket_dimensions[i][1],
                 "z": annotation.pocket_dimensions[i][2],
+                "cross_section_circularity": annotation.pocket_cross_section_circularity.get(i),
+                "cross_section_uniformity": annotation.pocket_cross_section_uniformity.get(i),
             }
             for i in annotation.pocket_volumes.keys()
         ]

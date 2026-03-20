@@ -292,6 +292,15 @@ def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--cluster-max-residues",
+        type=int,
+        default=10000,
+        help=(
+            "Max total deposited polymer residues per entry. "
+            "Entries exceeding this are skipped. (default: 10000)"
+        ),
+    )
+    parser.add_argument(
         "--metadata-cache",
         type=Path,
         default=None,
@@ -377,6 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
         cluster_method=None,
         cluster_allow_all_methods=False,
         cluster_max_resolution=None,
+        cluster_max_residues=None,
         metadata_cache=None,
         no_metadata_cache=False,
         write_manifest=None,
@@ -447,6 +457,7 @@ def _normalize_argv_for_subcommands(argv_list: list[str]) -> list[str]:
             "--cluster-method",
             "--cluster-allow-all-methods",
             "--cluster-max-resolution",
+            "--cluster-max-residues",
             "--metadata-cache",
             "--no-metadata-cache",
             "--write-manifest",
@@ -744,6 +755,7 @@ def _write_cluster_manifest(
     filtered_by_method: int,
     filtered_by_resolution: int,
     filtered_missing_resolution: int,
+    filtered_by_residue_count: int,
     metadata_errors: int,
     cache_hits: int,
     negative_cache_hits: int,
@@ -763,6 +775,7 @@ def _write_cluster_manifest(
             "cluster_method_filters": cluster_method_filters,
             "cluster_allow_all_methods": args.cluster_allow_all_methods,
             "cluster_max_resolution": args.cluster_max_resolution,
+            "cluster_max_residues": args.cluster_max_residues,
         },
         "summary": {
             "selected": len(selected_ids),
@@ -770,6 +783,7 @@ def _write_cluster_manifest(
             "filtered_by_method": filtered_by_method,
             "filtered_by_resolution": filtered_by_resolution,
             "missing_resolution": filtered_missing_resolution,
+            "filtered_by_residue_count": filtered_by_residue_count,
             "metadata_errors": metadata_errors,
             "cache_hits": cache_hits,
             "negative_cache_hits": negative_cache_hits,
@@ -904,6 +918,7 @@ def _make_checkpoint_signature(
         "cluster_method_filters": cluster_method_filters,
         "cluster_allow_all_methods": args.cluster_allow_all_methods,
         "cluster_max_resolution": args.cluster_max_resolution,
+        "cluster_max_residues": args.cluster_max_residues,
         "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
         "write_manifest": str(args.write_manifest) if args.write_manifest is not None else None,
         "failures_manifest": (
@@ -1631,6 +1646,7 @@ def resolve_input_structures(
         filtered_by_method = 0
         filtered_by_resolution = 0
         filtered_missing_resolution = 0
+        filtered_by_residue_count = 0
         metadata_errors = 0
         cache_hits = 0
         negative_cache_hits = 0
@@ -1703,6 +1719,7 @@ def resolve_input_structures(
                     entry_metadata,
                     allowed_method_filters=cluster_method_filters,
                     max_resolution=args.cluster_max_resolution,
+                    max_residues=args.cluster_max_residues,
                 )
                 if not passes_filters:
                     if rejection_reason == "experimental_method":
@@ -1711,6 +1728,8 @@ def resolve_input_structures(
                         filtered_by_resolution += 1
                     elif rejection_reason == "missing_resolution":
                         filtered_missing_resolution += 1
+                    elif rejection_reason == "residue_count":
+                        filtered_by_residue_count += 1
                     manifest_rejections.append(
                         {
                             "pdb_id": representative_id,
@@ -1741,6 +1760,7 @@ def resolve_input_structures(
                 filtered_by_method=filtered_by_method,
                 filtered_by_resolution=filtered_by_resolution,
                 filtered_missing_resolution=filtered_missing_resolution,
+                filtered_by_residue_count=filtered_by_residue_count,
                 metadata_errors=metadata_errors,
                 cache_hits=cache_hits,
                 negative_cache_hits=negative_cache_hits,
@@ -1756,6 +1776,7 @@ def resolve_input_structures(
                 f"filtered_by_method={filtered_by_method}, "
                 f"filtered_by_resolution={filtered_by_resolution}, "
                 f"missing_resolution={filtered_missing_resolution}, "
+                f"filtered_by_residue_count={filtered_by_residue_count}, "
                 f"metadata_errors={metadata_errors}."
             )
 
@@ -1772,6 +1793,7 @@ def resolve_input_structures(
             f"num_shards={args.num_shards}, "
             f"methods={method_label}, "
             f"max_resolution={args.cluster_max_resolution}, "
+            f"max_residues={args.cluster_max_residues}, "
             f"cache_hits={cache_hits}, "
             f"negative_cache_hits={negative_cache_hits}, "
             f"cache_misses={cache_misses}, "
@@ -1780,6 +1802,7 @@ def resolve_input_structures(
             f"filtered_by_method={filtered_by_method}, "
             f"filtered_by_resolution={filtered_by_resolution}, "
             f"missing_resolution={filtered_missing_resolution}, "
+            f"filtered_by_residue_count={filtered_by_residue_count}, "
             f"metadata_errors={metadata_errors}",
             file=sys.stderr,
         )
@@ -1815,9 +1838,10 @@ def _build_annotation_payload(
     input_path: Path,
     structure_output_path: Path,
     annotation_df,
+    prepared_structure=None,
 ) -> dict:
     volumes = json.loads(annotation_df.to_json(orient="records"))
-    return {
+    payload = {
         "source": source_label,
         "input_path": str(input_path),
         "output_structure_cif": str(structure_output_path),
@@ -1828,6 +1852,9 @@ def _build_annotation_payload(
         "largest_volume": volumes[0]["volume"] if volumes else None,
         "volumes": volumes,
     }
+    if prepared_structure is not None:
+        payload.update(pdb.compute_sse_fractions(prepared_structure))
+    return payload
 
 
 def _infer_pdb_id_for_result(source_label: str, input_path: Path) -> str | None:
@@ -1885,6 +1912,7 @@ def analyze_structure_file(
         input_path,
         structure_output_path,
         annotation_df,
+        prepared_structure=prepared_structure,
     )
     annotation_output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -2192,6 +2220,9 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
     utils.set_resolution(float(args.resolution))
     utils.set_non_protein(bool(args.keep_non_protein))
 
+    active_backend = native_backend.active_backend()
+    print(f"[volumizer] backend: {active_backend}", file=sys.stderr)
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     download_dir = (
@@ -2248,6 +2279,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "cluster_method_filters": cluster_method_filters,
             "cluster_allow_all_methods": args.cluster_allow_all_methods,
             "cluster_max_resolution": args.cluster_max_resolution,
+            "cluster_max_residues": args.cluster_max_residues,
             "metadata_cache": str(metadata_cache_path) if metadata_cache_path else None,
             "no_metadata_cache": args.no_metadata_cache,
             "write_manifest": (

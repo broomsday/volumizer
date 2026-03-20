@@ -76,6 +76,8 @@ def test_volume_annotations(
                     "x": [108.221],
                     "y": [38.574],
                     "z": [36.310],
+                    "cross_section_circularity": [0.8453],
+                    "cross_section_uniformity": [0.8535],
                 }
             ),
         ),

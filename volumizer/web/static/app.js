@@ -46,9 +46,35 @@ function buildSearchParams() {
     'pore_length_min',
     'pore_dmin_min',
     'pore_dmax_min',
+    'pocket_volume_min',
+    'pocket_length_min',
+    'pocket_dmin_min',
+    'pocket_dmax_min',
+    'cavity_volume_min',
+    'cavity_length_min',
+    'cavity_dmin_min',
+    'cavity_dmax_min',
+    'hub_volume_min',
+    'hub_length_min',
+    'hub_dmin_min',
+    'hub_dmax_min',
     'chains_min',
     'residues_min',
     'seq_unique_chains_min',
+    'frac_alpha_min',
+    'frac_alpha_max',
+    'frac_beta_min',
+    'frac_beta_max',
+    'frac_coil_min',
+    'frac_coil_max',
+    'pore_circularity_min',
+    'pore_uniformity_min',
+    'pocket_circularity_min',
+    'pocket_uniformity_min',
+    'cavity_circularity_min',
+    'cavity_uniformity_min',
+    'hub_circularity_min',
+    'hub_uniformity_min',
   ];
   for (const name of numericNames) {
     const value = numericInputValue(name);
@@ -140,6 +166,11 @@ function prettyNumber(value, digits = 1) {
   });
 }
 
+function prettyPercent(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  return `${(Number(value) * 100).toFixed(0)}%`;
+}
+
 function renderResults(rows) {
   elements.resultsGrid.innerHTML = '';
   for (const row of rows) {
@@ -173,12 +204,17 @@ function renderResults(rows) {
     const metrics = document.createElement('div');
     metrics.className = 'metric-grid';
     metrics.append(
-      renderMetric('Largest pore', `${prettyNumber(row.largest_pore_volume_a3, 0)} A^3`),
-      renderMetric('Length', `${prettyNumber(row.largest_pore_length_a)} A`),
-      renderMetric('Min diam.', `${prettyNumber(row.largest_pore_min_diameter_a)} A`),
+      renderMetric('Pores', prettyNumber(row.num_pores, 0)),
+      renderMetric('Pockets', prettyNumber(row.num_pockets, 0)),
+      renderMetric('Cavities', prettyNumber(row.num_cavities, 0)),
+      renderMetric('Hubs', prettyNumber(row.num_hubs, 0)),
       renderMetric('Chains', prettyNumber(row.num_chains, 0)),
       renderMetric('Residues', prettyNumber(row.num_residues, 0)),
-      renderMetric('Render', row.render_status || 'pending'),
+      renderMetric('Alpha', prettyPercent(row.frac_alpha)),
+      renderMetric('Beta', prettyPercent(row.frac_beta)),
+      renderMetric('Coil', prettyPercent(row.frac_coil)),
+      renderMetric('Pore circ.', prettyNumber(row.largest_pore_circularity, 2)),
+      renderMetric('Pore unif.', prettyNumber(row.largest_pore_uniformity, 2)),
     );
 
     const actions = document.createElement('div');
@@ -262,13 +298,20 @@ function renderDetail(detail, viewerData) {
   elements.detailMetrics.append(
     buildDetailMetric('Run', detail.run_id),
     buildDetailMetric('PDB', detail.pdb_id || '—'),
-    buildDetailMetric('Largest pore', `${prettyNumber(detail.largest_pore_volume_a3, 0)} A^3`),
-    buildDetailMetric('Length', `${prettyNumber(detail.largest_pore_length_a)} A`),
-    buildDetailMetric('Min diameter', `${prettyNumber(detail.largest_pore_min_diameter_a)} A`),
-    buildDetailMetric('Max diameter', `${prettyNumber(detail.largest_pore_max_diameter_a)} A`),
+    buildDetailMetric('Pores', prettyNumber(detail.num_pores, 0)),
+    buildDetailMetric('Pockets', prettyNumber(detail.num_pockets, 0)),
+    buildDetailMetric('Cavities', prettyNumber(detail.num_cavities, 0)),
+    buildDetailMetric('Hubs', prettyNumber(detail.num_hubs, 0)),
     buildDetailMetric('Chains', prettyNumber(detail.num_chains, 0)),
     buildDetailMetric('Residues', prettyNumber(detail.num_residues, 0)),
     buildDetailMetric('Unique chains', prettyNumber(detail.num_sequence_unique_chains, 0)),
+    buildDetailMetric('Alpha', prettyPercent(detail.frac_alpha)),
+    buildDetailMetric('Beta', prettyPercent(detail.frac_beta)),
+    buildDetailMetric('Coil', prettyPercent(detail.frac_coil)),
+    buildDetailMetric('Pore circ.', prettyNumber(detail.largest_pore_circularity, 2)),
+    buildDetailMetric('Pore unif.', prettyNumber(detail.largest_pore_uniformity, 2)),
+    buildDetailMetric('Pocket circ.', prettyNumber(detail.largest_pocket_circularity, 2)),
+    buildDetailMetric('Pocket unif.', prettyNumber(detail.largest_pocket_uniformity, 2)),
   );
 
   elements.detailVolumes.innerHTML = '';
@@ -281,6 +324,8 @@ function renderDetail(detail, viewerData) {
       `<td>${prettyNumber(volume.length_a)}</td>`,
       `<td>${prettyNumber(volume.min_diameter_a)}</td>`,
       `<td>${prettyNumber(volume.max_diameter_a)}</td>`,
+      `<td>${prettyNumber(volume.cross_section_circularity, 2)}</td>`,
+      `<td>${prettyNumber(volume.cross_section_uniformity, 2)}</td>`,
     ].join('');
     elements.detailVolumes.append(row);
   }

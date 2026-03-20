@@ -18,6 +18,9 @@ def _write_annotation(path: Path, volume: float) -> None:
             {
                 "source": path.stem,
                 "num_volumes": 1,
+                "frac_alpha": 0.40,
+                "frac_beta": 0.30,
+                "frac_coil": 0.30,
                 "volumes": [
                     {
                         "id": 0,
@@ -26,6 +29,8 @@ def _write_annotation(path: Path, volume: float) -> None:
                         "x": 12.0,
                         "y": 5.0,
                         "z": 3.0,
+                        "cross_section_circularity": 0.85,
+                        "cross_section_uniformity": 0.72,
                     }
                 ],
             }
@@ -174,6 +179,8 @@ def test_gallery_web_detail_and_viewer_data(tmp_path: Path):
     assert detail_payload["source_label"] == "hit-a"
     assert len(detail_payload["volumes"]) == 1
     assert detail_payload["volumes"][0]["kind"] == "pore"
+    assert detail_payload["volumes"][0]["cross_section_circularity"] == 0.85
+    assert detail_payload["volumes"][0]["cross_section_uniformity"] == 0.72
 
     viewer_response = client.get(f"/api/hits/{structure_id}/viewer-data")
     assert viewer_response.status_code == 200

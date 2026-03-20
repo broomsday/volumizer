@@ -234,6 +234,24 @@ def extract_entry_best_resolution(entry_metadata: dict) -> float | None:
     return min(numeric_values)
 
 
+def extract_entry_deposited_polymer_residue_count(entry_metadata: dict) -> int | None:
+    """
+    Return the total deposited polymer monomer (residue) count, if present.
+    """
+    entry_info = entry_metadata.get("rcsb_entry_info")
+    if not isinstance(entry_info, dict):
+        return None
+
+    value = entry_info.get("deposited_polymer_monomer_count")
+    if value is None:
+        return None
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _expand_allowed_methods(allowed_method_filters: list[str] | tuple[str, ...]) -> set[str]:
     methods: set[str] = set()
     for method_filter in allowed_method_filters:
@@ -246,14 +264,16 @@ def entry_passes_filters(
     entry_metadata: dict,
     allowed_method_filters: list[str] | tuple[str, ...] | None = None,
     max_resolution: float | None = None,
+    max_residues: int | None = None,
 ) -> tuple[bool, str | None]:
     """
-    Apply experimental-method and resolution filters to one entry.
+    Apply experimental-method, resolution, and size filters to one entry.
 
     Returns `(passes, failure_reason)` where `failure_reason` is one of:
     - `experimental_method`
     - `resolution`
     - `missing_resolution`
+    - `residue_count`
     """
     if allowed_method_filters is not None:
         entry_methods = set(extract_entry_experimental_methods(entry_metadata))
@@ -267,6 +287,11 @@ def entry_passes_filters(
             return False, "missing_resolution"
         if best_resolution > max_resolution:
             return False, "resolution"
+
+    if max_residues is not None:
+        residue_count = extract_entry_deposited_polymer_residue_count(entry_metadata)
+        if residue_count is not None and residue_count > max_residues:
+            return False, "residue_count"
 
     return True, None
 

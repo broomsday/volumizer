@@ -47,56 +47,242 @@
             </select>
           </label>
 
-          <div class="field-row">
-            <label>
-              <span>Min pore volume</span>
-              <input type="number" step="0.1" name="pore_volume_min" placeholder="e.g. 5000" />
-            </label>
-            <label>
-              <span>Min pore length</span>
-              <input type="number" step="0.1" name="pore_length_min" placeholder="e.g. 30" />
-            </label>
-          </div>
+          <fieldset class="filter-group">
+            <legend>Pore Filters</legend>
+            <div class="field-row">
+              <label>
+                <span>Min volume</span>
+                <input type="number" step="0.1" name="pore_volume_min" placeholder="e.g. 5000" />
+              </label>
+              <label>
+                <span>Min length</span>
+                <input type="number" step="0.1" name="pore_length_min" placeholder="e.g. 30" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min diameter</span>
+                <input type="number" step="0.1" name="pore_dmin_min" placeholder="e.g. 3" />
+              </label>
+              <label>
+                <span>Max diameter</span>
+                <input type="number" step="0.1" name="pore_dmax_min" placeholder="e.g. 6" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min circularity</span>
+                <input type="number" step="0.01" min="0" max="1" name="pore_circularity_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Min uniformity</span>
+                <input type="number" step="0.01" min="0" max="1" name="pore_uniformity_min" placeholder="0.0" />
+              </label>
+            </div>
+          </fieldset>
 
-          <div class="field-row">
-            <label>
-              <span>Min diameter</span>
-              <input type="number" step="0.1" name="pore_dmin_min" placeholder="e.g. 3" />
-            </label>
-            <label>
-              <span>Max diameter</span>
-              <input type="number" step="0.1" name="pore_dmax_min" placeholder="e.g. 6" />
-            </label>
-          </div>
+          <fieldset class="filter-group">
+            <legend>Pocket Filters</legend>
+            <div class="field-row">
+              <label>
+                <span>Min volume</span>
+                <input type="number" step="0.1" name="pocket_volume_min" placeholder="e.g. 500" />
+              </label>
+              <label>
+                <span>Min length</span>
+                <input type="number" step="0.1" name="pocket_length_min" placeholder="e.g. 10" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min diameter</span>
+                <input type="number" step="0.1" name="pocket_dmin_min" placeholder="e.g. 3" />
+              </label>
+              <label>
+                <span>Max diameter</span>
+                <input type="number" step="0.1" name="pocket_dmax_min" placeholder="e.g. 6" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min circularity</span>
+                <input type="number" step="0.01" min="0" max="1" name="pocket_circularity_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Min uniformity</span>
+                <input type="number" step="0.01" min="0" max="1" name="pocket_uniformity_min" placeholder="0.0" />
+              </label>
+            </div>
+          </fieldset>
 
-          <div class="field-row">
-            <label>
-              <span>Min chains</span>
-              <input type="number" step="1" min="0" name="chains_min" placeholder="0" />
-            </label>
-            <label>
-              <span>Min residues</span>
-              <input type="number" step="1" min="0" name="residues_min" placeholder="0" />
-            </label>
-          </div>
+          <fieldset class="filter-group">
+            <legend>Cavity Filters</legend>
+            <div class="field-row">
+              <label>
+                <span>Min volume</span>
+                <input type="number" step="0.1" name="cavity_volume_min" placeholder="e.g. 100" />
+              </label>
+              <label>
+                <span>Min length</span>
+                <input type="number" step="0.1" name="cavity_length_min" placeholder="e.g. 5" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min diameter</span>
+                <input type="number" step="0.1" name="cavity_dmin_min" placeholder="e.g. 3" />
+              </label>
+              <label>
+                <span>Max diameter</span>
+                <input type="number" step="0.1" name="cavity_dmax_min" placeholder="e.g. 6" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min circularity</span>
+                <input type="number" step="0.01" min="0" max="1" name="cavity_circularity_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Min uniformity</span>
+                <input type="number" step="0.01" min="0" max="1" name="cavity_uniformity_min" placeholder="0.0" />
+              </label>
+            </div>
+          </fieldset>
 
-          <label>
-            <span>Min sequence-unique chains</span>
-            <input type="number" step="1" min="0" name="seq_unique_chains_min" placeholder="0" />
-          </label>
+          <fieldset class="filter-group">
+            <legend>Hub Filters</legend>
+            <div class="field-row">
+              <label>
+                <span>Min volume</span>
+                <input type="number" step="0.1" name="hub_volume_min" placeholder="e.g. 1000" />
+              </label>
+              <label>
+                <span>Min length</span>
+                <input type="number" step="0.1" name="hub_length_min" placeholder="e.g. 10" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min diameter</span>
+                <input type="number" step="0.1" name="hub_dmin_min" placeholder="e.g. 3" />
+              </label>
+              <label>
+                <span>Max diameter</span>
+                <input type="number" step="0.1" name="hub_dmax_min" placeholder="e.g. 6" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min circularity</span>
+                <input type="number" step="0.01" min="0" max="1" name="hub_circularity_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Min uniformity</span>
+                <input type="number" step="0.01" min="0" max="1" name="hub_uniformity_min" placeholder="0.0" />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class="filter-group">
+            <legend>Structure Filters</legend>
+            <div class="field-row">
+              <label>
+                <span>Min chains</span>
+                <input type="number" step="1" min="0" name="chains_min" placeholder="0" />
+              </label>
+              <label>
+                <span>Min residues</span>
+                <input type="number" step="1" min="0" name="residues_min" placeholder="0" />
+              </label>
+            </div>
+            <label>
+              <span>Min sequence-unique chains</span>
+              <input type="number" step="1" min="0" name="seq_unique_chains_min" placeholder="0" />
+            </label>
+          </fieldset>
+
+          <fieldset class="filter-group">
+            <legend>Secondary Structure</legend>
+            <div class="field-row">
+              <label>
+                <span>Min alpha</span>
+                <input type="number" step="0.01" min="0" max="1" name="frac_alpha_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Max alpha</span>
+                <input type="number" step="0.01" min="0" max="1" name="frac_alpha_max" placeholder="1.0" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min beta</span>
+                <input type="number" step="0.01" min="0" max="1" name="frac_beta_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Max beta</span>
+                <input type="number" step="0.01" min="0" max="1" name="frac_beta_max" placeholder="1.0" />
+              </label>
+            </div>
+            <div class="field-row">
+              <label>
+                <span>Min coil</span>
+                <input type="number" step="0.01" min="0" max="1" name="frac_coil_min" placeholder="0.0" />
+              </label>
+              <label>
+                <span>Max coil</span>
+                <input type="number" step="0.01" min="0" max="1" name="frac_coil_max" placeholder="1.0" />
+              </label>
+            </div>
+          </fieldset>
 
           <div class="field-row">
             <label>
               <span>Sort by</span>
               <select id="sort-by" name="sort_by">
-                <option value="largest_pore_volume">Largest pore volume</option>
-                <option value="largest_pore_length">Largest pore length</option>
-                <option value="largest_pore_min_diameter">Largest pore min diameter</option>
-                <option value="largest_pore_max_diameter">Largest pore max diameter</option>
-                <option value="num_pores">Number of pores</option>
-                <option value="num_residues">Residues</option>
-                <option value="num_chains">Chains</option>
-                <option value="source_label">Source label</option>
+                <optgroup label="Pores">
+                  <option value="largest_pore_volume">Largest pore volume</option>
+                  <option value="largest_pore_length">Largest pore length</option>
+                  <option value="largest_pore_min_diameter">Pore min diameter</option>
+                  <option value="largest_pore_max_diameter">Pore max diameter</option>
+                  <option value="num_pores">Number of pores</option>
+                  <option value="largest_pore_circularity">Pore circularity</option>
+                  <option value="largest_pore_uniformity">Pore uniformity</option>
+                </optgroup>
+                <optgroup label="Pockets">
+                  <option value="largest_pocket_volume">Largest pocket volume</option>
+                  <option value="largest_pocket_length">Largest pocket length</option>
+                  <option value="largest_pocket_min_diameter">Pocket min diameter</option>
+                  <option value="largest_pocket_max_diameter">Pocket max diameter</option>
+                  <option value="num_pockets">Number of pockets</option>
+                  <option value="largest_pocket_circularity">Pocket circularity</option>
+                  <option value="largest_pocket_uniformity">Pocket uniformity</option>
+                </optgroup>
+                <optgroup label="Cavities">
+                  <option value="largest_cavity_volume">Largest cavity volume</option>
+                  <option value="largest_cavity_length">Largest cavity length</option>
+                  <option value="largest_cavity_min_diameter">Cavity min diameter</option>
+                  <option value="largest_cavity_max_diameter">Cavity max diameter</option>
+                  <option value="num_cavities">Number of cavities</option>
+                  <option value="largest_cavity_circularity">Cavity circularity</option>
+                  <option value="largest_cavity_uniformity">Cavity uniformity</option>
+                </optgroup>
+                <optgroup label="Hubs">
+                  <option value="largest_hub_volume">Largest hub volume</option>
+                  <option value="largest_hub_length">Largest hub length</option>
+                  <option value="largest_hub_min_diameter">Hub min diameter</option>
+                  <option value="largest_hub_max_diameter">Hub max diameter</option>
+                  <option value="num_hubs">Number of hubs</option>
+                  <option value="largest_hub_circularity">Hub circularity</option>
+                  <option value="largest_hub_uniformity">Hub uniformity</option>
+                </optgroup>
+                <optgroup label="Structure">
+                  <option value="num_residues">Residues</option>
+                  <option value="num_chains">Chains</option>
+                  <option value="frac_alpha">Alpha fraction</option>
+                  <option value="frac_beta">Beta fraction</option>
+                  <option value="frac_coil">Coil fraction</option>
+                  <option value="source_label">Source label</option>
+                </optgroup>
               </select>
             </label>
             <label>
@@ -177,6 +363,8 @@
                   <th>Length</th>
                   <th>Min diam.</th>
                   <th>Max diam.</th>
+                  <th>Circularity</th>
+                  <th>Uniformity</th>
                 </tr>
               </thead>
               <tbody id="detail-volumes"></tbody>

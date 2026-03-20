@@ -192,6 +192,8 @@ def _normalize_volume_rows(
                 "centroid_x": None,
                 "centroid_y": None,
                 "centroid_z": None,
+                "cross_section_circularity": _safe_float(raw_row.get("cross_section_circularity")),
+                "cross_section_uniformity": _safe_float(raw_row.get("cross_section_uniformity")),
             }
         )
 
@@ -280,6 +282,9 @@ CREATE TABLE IF NOT EXISTS structures (
     num_chains INTEGER,
     num_residues INTEGER,
     num_sequence_unique_chains INTEGER,
+    frac_alpha REAL,
+    frac_beta REAL,
+    frac_coil REAL,
     UNIQUE(run_id, source_label),
     FOREIGN KEY(run_id) REFERENCES runs(run_id) ON DELETE CASCADE
 );
@@ -296,16 +301,41 @@ CREATE TABLE IF NOT EXISTS volumes (
     centroid_x REAL,
     centroid_y REAL,
     centroid_z REAL,
+    cross_section_circularity REAL,
+    cross_section_uniformity REAL,
     FOREIGN KEY(structure_id) REFERENCES structures(structure_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS structure_aggregates (
     structure_id INTEGER PRIMARY KEY,
-    num_pores INTEGER NOT NULL,
+    num_pores INTEGER NOT NULL DEFAULT 0,
     largest_pore_volume_a3 REAL,
     largest_pore_length_a REAL,
     largest_pore_min_diameter_a REAL,
     largest_pore_max_diameter_a REAL,
+    num_pockets INTEGER NOT NULL DEFAULT 0,
+    largest_pocket_volume_a3 REAL,
+    largest_pocket_length_a REAL,
+    largest_pocket_min_diameter_a REAL,
+    largest_pocket_max_diameter_a REAL,
+    num_cavities INTEGER NOT NULL DEFAULT 0,
+    largest_cavity_volume_a3 REAL,
+    largest_cavity_length_a REAL,
+    largest_cavity_min_diameter_a REAL,
+    largest_cavity_max_diameter_a REAL,
+    num_hubs INTEGER NOT NULL DEFAULT 0,
+    largest_hub_volume_a3 REAL,
+    largest_hub_length_a REAL,
+    largest_hub_min_diameter_a REAL,
+    largest_hub_max_diameter_a REAL,
+    largest_pore_circularity REAL,
+    largest_pore_uniformity REAL,
+    largest_pocket_circularity REAL,
+    largest_pocket_uniformity REAL,
+    largest_cavity_circularity REAL,
+    largest_cavity_uniformity REAL,
+    largest_hub_circularity REAL,
+    largest_hub_uniformity REAL,
     FOREIGN KEY(structure_id) REFERENCES structures(structure_id) ON DELETE CASCADE
 );
 
@@ -324,6 +354,9 @@ CREATE TABLE IF NOT EXISTS renders (
 CREATE INDEX IF NOT EXISTS idx_structures_filters
 ON structures (num_chains, num_residues, num_sequence_unique_chains);
 
+CREATE INDEX IF NOT EXISTS idx_structures_sse
+ON structures (frac_alpha, frac_beta, frac_coil);
+
 CREATE INDEX IF NOT EXISTS idx_structure_aggregates_pore
 ON structure_aggregates (
     num_pores,
@@ -331,6 +364,33 @@ ON structure_aggregates (
     largest_pore_length_a,
     largest_pore_min_diameter_a,
     largest_pore_max_diameter_a
+);
+
+CREATE INDEX IF NOT EXISTS idx_structure_aggregates_pocket
+ON structure_aggregates (
+    num_pockets,
+    largest_pocket_volume_a3,
+    largest_pocket_length_a,
+    largest_pocket_min_diameter_a,
+    largest_pocket_max_diameter_a
+);
+
+CREATE INDEX IF NOT EXISTS idx_structure_aggregates_cavity
+ON structure_aggregates (
+    num_cavities,
+    largest_cavity_volume_a3,
+    largest_cavity_length_a,
+    largest_cavity_min_diameter_a,
+    largest_cavity_max_diameter_a
+);
+
+CREATE INDEX IF NOT EXISTS idx_structure_aggregates_hub
+ON structure_aggregates (
+    num_hubs,
+    largest_hub_volume_a3,
+    largest_hub_length_a,
+    largest_hub_min_diameter_a,
+    largest_hub_max_diameter_a
 );
 
 CREATE INDEX IF NOT EXISTS idx_volumes_structure_kind
@@ -490,6 +550,15 @@ def build_gallery_index(
                     ) = input_metric_cache[input_path]
 
                 annotation_payload = json.loads(annotation_path.read_text(encoding="utf-8"))
+                frac_alpha = _safe_float(
+                    annotation_payload.get("frac_alpha") if isinstance(annotation_payload, dict) else None
+                )
+                frac_beta = _safe_float(
+                    annotation_payload.get("frac_beta") if isinstance(annotation_payload, dict) else None
+                )
+                frac_coil = _safe_float(
+                    annotation_payload.get("frac_coil") if isinstance(annotation_payload, dict) else None
+                )
                 volume_records = _parse_volume_records(annotation_payload)
                 grouped_rows = _normalize_volume_rows(volume_records)
                 pdb_id = _infer_pdb_id(
@@ -509,8 +578,11 @@ def build_gallery_index(
                         annotation_json_path,
                         num_chains,
                         num_residues,
-                        num_sequence_unique_chains
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        num_sequence_unique_chains,
+                        frac_alpha,
+                        frac_beta,
+                        frac_coil
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         effective_run_id,
@@ -522,6 +594,9 @@ def build_gallery_index(
                         num_chains,
                         num_residues,
                         num_sequence_unique_chains,
+                        frac_alpha,
+                        frac_beta,
+                        frac_coil,
                     ),
                 )
                 structure_id = int(cursor.lastrowid)
@@ -540,8 +615,10 @@ def build_gallery_index(
                                 max_diameter_a,
                                 centroid_x,
                                 centroid_y,
-                                centroid_z
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                centroid_z,
+                                cross_section_circularity,
+                                cross_section_uniformity
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 structure_id,
@@ -554,43 +631,57 @@ def build_gallery_index(
                                 row["centroid_x"],
                                 row["centroid_y"],
                                 row["centroid_z"],
+                                row["cross_section_circularity"],
+                                row["cross_section_uniformity"],
                             ),
                         )
                         indexed_volumes += 1
 
-                pores = grouped_rows["pore"]
-                if len(pores) > 0:
-                    largest_pore = pores[0]
-                    num_pores = len(pores)
-                    largest_pore_volume = float(largest_pore["volume_a3"])
-                    largest_pore_length = float(largest_pore["length_a"])
-                    largest_pore_min_d = float(largest_pore["min_diameter_a"])
-                    largest_pore_max_d = float(largest_pore["max_diameter_a"])
-                else:
-                    num_pores = 0
-                    largest_pore_volume = None
-                    largest_pore_length = None
-                    largest_pore_min_d = None
-                    largest_pore_max_d = None
+                def _kind_aggregates(kind: str) -> tuple[int, float | None, float | None, float | None, float | None, float | None, float | None]:
+                    rows = grouped_rows[kind]
+                    if len(rows) > 0:
+                        largest = rows[0]
+                        return (
+                            len(rows),
+                            float(largest["volume_a3"]),
+                            float(largest["length_a"]),
+                            float(largest["min_diameter_a"]),
+                            float(largest["max_diameter_a"]),
+                            largest["cross_section_circularity"],
+                            largest["cross_section_uniformity"],
+                        )
+                    return (0, None, None, None, None, None, None)
+
+                pore_agg = _kind_aggregates("pore")
+                pocket_agg = _kind_aggregates("pocket")
+                cavity_agg = _kind_aggregates("cavity")
+                hub_agg = _kind_aggregates("hub")
 
                 connection.execute(
                     """
                     INSERT INTO structure_aggregates (
                         structure_id,
-                        num_pores,
-                        largest_pore_volume_a3,
-                        largest_pore_length_a,
-                        largest_pore_min_diameter_a,
-                        largest_pore_max_diameter_a
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        num_pores, largest_pore_volume_a3, largest_pore_length_a,
+                        largest_pore_min_diameter_a, largest_pore_max_diameter_a,
+                        largest_pore_circularity, largest_pore_uniformity,
+                        num_pockets, largest_pocket_volume_a3, largest_pocket_length_a,
+                        largest_pocket_min_diameter_a, largest_pocket_max_diameter_a,
+                        largest_pocket_circularity, largest_pocket_uniformity,
+                        num_cavities, largest_cavity_volume_a3, largest_cavity_length_a,
+                        largest_cavity_min_diameter_a, largest_cavity_max_diameter_a,
+                        largest_cavity_circularity, largest_cavity_uniformity,
+                        num_hubs, largest_hub_volume_a3, largest_hub_length_a,
+                        largest_hub_min_diameter_a, largest_hub_max_diameter_a,
+                        largest_hub_circularity, largest_hub_uniformity
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         structure_id,
-                        num_pores,
-                        largest_pore_volume,
-                        largest_pore_length,
-                        largest_pore_min_d,
-                        largest_pore_max_d,
+                        *pore_agg,
+                        *pocket_agg,
+                        *cavity_agg,
+                        *hub_agg,
                     ),
                 )
 

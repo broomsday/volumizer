@@ -22,6 +22,8 @@ class VoxelGroup(NamedTuple):
     volume: float = 0.0
     center: Optional[np.ndarray] = None
     axial_lengths: list[float] = [0.0, 0.0, 0.0]
+    cross_section_circularity: Optional[float] = None
+    cross_section_uniformity: Optional[float] = None
 
 
 class Annotation(NamedTuple):
@@ -45,3 +47,11 @@ class Annotation(NamedTuple):
     pore_dimensions: dict[int, list[float]]
     cavity_dimensions: dict[int, list[float]]
     pocket_dimensions: dict[int, list[float]]
+    hub_cross_section_circularity: dict[int, Optional[float]] = {}
+    pore_cross_section_circularity: dict[int, Optional[float]] = {}
+    cavity_cross_section_circularity: dict[int, Optional[float]] = {}
+    pocket_cross_section_circularity: dict[int, Optional[float]] = {}
+    hub_cross_section_uniformity: dict[int, Optional[float]] = {}
+    pore_cross_section_uniformity: dict[int, Optional[float]] = {}
+    cavity_cross_section_uniformity: dict[int, Optional[float]] = {}
+    pocket_cross_section_uniformity: dict[int, Optional[float]] = {}

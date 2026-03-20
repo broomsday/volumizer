@@ -50,6 +50,9 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
             {
                 "source": "hit-a",
                 "num_volumes": 2,
+                "frac_alpha": 0.45,
+                "frac_beta": 0.20,
+                "frac_coil": 0.35,
                 "volumes": [
                     {
                         "id": 0,
@@ -58,6 +61,8 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
                         "x": 12.0,
                         "y": 5.0,
                         "z": 3.0,
+                        "cross_section_circularity": 0.85,
+                        "cross_section_uniformity": 0.72,
                     },
                     {
                         "id": 0,
@@ -66,6 +71,8 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
                         "x": 6.0,
                         "y": 4.0,
                         "z": 2.0,
+                        "cross_section_circularity": 0.60,
+                        "cross_section_uniformity": 0.55,
                     },
                 ],
             }
@@ -95,7 +102,8 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
 
         structure_row = connection.execute(
             """
-            SELECT source_label, num_chains, num_residues, num_sequence_unique_chains
+            SELECT source_label, num_chains, num_residues, num_sequence_unique_chains,
+                   frac_alpha, frac_beta, frac_coil
             FROM structures
             """
         ).fetchone()
@@ -104,24 +112,37 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
         assert structure_row[1] is not None and structure_row[1] > 0
         assert structure_row[2] is not None and structure_row[2] > 0
         assert structure_row[3] is not None and structure_row[3] > 0
+        assert structure_row[4] == 0.45
+        assert structure_row[5] == 0.20
+        assert structure_row[6] == 0.35
 
         pore_row = connection.execute(
             """
-            SELECT kind, rank_in_kind, volume_a3, length_a, min_diameter_a, max_diameter_a
+            SELECT kind, rank_in_kind, volume_a3, length_a, min_diameter_a, max_diameter_a,
+                   cross_section_circularity, cross_section_uniformity
             FROM volumes
             WHERE kind = 'pore'
             """
         ).fetchone()
-        assert pore_row == ("pore", 1, 200.0, 12.0, 3.0, 5.0)
+        assert pore_row == ("pore", 1, 200.0, 12.0, 3.0, 5.0, 0.85, 0.72)
 
         aggregate_row = connection.execute(
             """
             SELECT num_pores, largest_pore_volume_a3, largest_pore_length_a,
-                   largest_pore_min_diameter_a, largest_pore_max_diameter_a
+                   largest_pore_min_diameter_a, largest_pore_max_diameter_a,
+                   largest_pore_circularity, largest_pore_uniformity,
+                   num_pockets, largest_pocket_volume_a3, largest_pocket_length_a,
+                   largest_pocket_min_diameter_a, largest_pocket_max_diameter_a,
+                   largest_pocket_circularity, largest_pocket_uniformity,
+                   num_cavities, num_hubs
             FROM structure_aggregates
             """
         ).fetchone()
-        assert aggregate_row == (1, 200.0, 12.0, 3.0, 5.0)
+        assert aggregate_row == (
+            1, 200.0, 12.0, 3.0, 5.0, 0.85, 0.72,
+            1, 40.0, 6.0, 2.0, 4.0, 0.60, 0.55,
+            0, 0,
+        )
 
         render_row = connection.execute(
             "SELECT render_status FROM renders"

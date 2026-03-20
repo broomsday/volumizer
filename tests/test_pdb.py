@@ -217,3 +217,18 @@ def test_load_structure_records_parse_and_assembly_stages_for_biological_cif():
     assert stage_timings["load_structure_parse_decode"] > 0.0
     assert stage_timings["load_structure_assembly_expand"] > 0.0
     assert "load_structure_fallback" not in stage_timings
+
+
+def test_compute_sse_fractions_returns_valid_fractions():
+    structure = pdb.load_structure(TEST_PDB_DIR / "cavity.pdb")
+    cleaned = pdb.clean_structure(structure)
+    result = pdb.compute_sse_fractions(cleaned)
+
+    assert set(result.keys()) == {"frac_alpha", "frac_beta", "frac_coil"}
+    for key in ("frac_alpha", "frac_beta", "frac_coil"):
+        value = result[key]
+        assert value is None or (0.0 <= value <= 1.0), f"{key}={value}"
+
+    non_none = [v for v in result.values() if v is not None]
+    if non_none:
+        assert abs(sum(non_none) - 1.0) < 0.01

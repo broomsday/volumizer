@@ -909,15 +909,16 @@ def _get_voxel_group_center_from_indices(
     return np.mean(voxel_coords, axis=0)
 
 
-def _get_voxel_group_axial_lengths_from_indices(
+def _align_to_principal_axes(
     voxel_indices: np.ndarray,
     voxel_grid: VoxelGrid,
-) -> list[float]:
+) -> np.ndarray | None:
     """
-    Compute principal-axis lengths for flat voxel-grid indices.
+    Align voxel coordinates to principal axes. Returns the aligned (N, 3)
+    coordinate array, or None if there are fewer than 3 voxels.
     """
     if voxel_indices.size < 3:
-        return [0, 0, 0]
+        return None
 
     voxel_coords = np.asarray(voxel_grid.voxel_centers[voxel_indices], dtype=np.float64)
     centered_coords = voxel_coords - np.mean(voxel_coords, axis=0)
@@ -927,9 +928,98 @@ def _get_voxel_group_axial_lengths_from_indices(
     axis_order = np.argsort(eigenvalues)[::-1]
     principal_axes = eigenvectors[:, axis_order]
 
-    aligned_coords = centered_coords @ principal_axes
+    return centered_coords @ principal_axes
+
+
+def _get_voxel_group_axial_lengths_from_indices(
+    voxel_indices: np.ndarray,
+    voxel_grid: VoxelGrid,
+) -> list[float]:
+    """
+    Compute principal-axis lengths for flat voxel-grid indices.
+    """
+    aligned_coords = _align_to_principal_axes(voxel_indices, voxel_grid)
+    if aligned_coords is None:
+        return [0, 0, 0]
+
     axial_lengths = np.round(np.ptp(aligned_coords, axis=0), 3)
     return sorted(axial_lengths.tolist(), reverse=True)
+
+
+def _compute_cross_section_metrics_from_indices(
+    voxel_indices: np.ndarray,
+    voxel_grid: VoxelGrid,
+) -> tuple[float | None, float | None]:
+    """
+    Compute cross-section circularity and uniformity for a voxel group.
+
+    Returns (cross_section_circularity, cross_section_uniformity).
+
+    cross_section_circularity: mean ratio of min/max eigenvalues of the 2D
+        covariance matrix computed per slice perpendicular to the primary axis.
+        1.0 = perfectly circular cross-section, approaching 0 = highly elongated.
+
+    cross_section_uniformity: 1 - coefficient of variation of per-slice voxel
+        counts along the primary axis. 1.0 = constant cross-section area,
+        approaching 0 = highly variable.
+    """
+    aligned_coords = _align_to_principal_axes(voxel_indices, voxel_grid)
+    if aligned_coords is None:
+        return (None, None)
+
+    # Slice along the primary axis (column 0) using bins of ~voxel_size width
+    primary_axis_vals = aligned_coords[:, 0]
+    axis_range = np.ptp(primary_axis_vals)
+    if axis_range < 1e-9:
+        return (1.0, 1.0)
+
+    voxel_size = float(voxel_grid.x_y_z[0])
+    num_bins = max(3, int(np.round(axis_range / voxel_size)))
+    bin_edges = np.linspace(primary_axis_vals.min(), primary_axis_vals.max(), num_bins + 1)
+    # Assign each voxel to a bin
+    bin_assignments = np.digitize(primary_axis_vals, bin_edges[1:-1])
+
+    slice_counts = []
+    circularity_values = []
+    min_voxels_for_circularity = 3
+
+    for bin_idx in range(num_bins):
+        mask = bin_assignments == bin_idx
+        count = int(np.sum(mask))
+        if count == 0:
+            continue
+        slice_counts.append(count)
+
+        if count >= min_voxels_for_circularity:
+            slice_2d = aligned_coords[mask, 1:3]
+            slice_centered = slice_2d - np.mean(slice_2d, axis=0)
+            cov_2d = slice_centered.T @ slice_centered / count
+            eig_vals = np.linalg.eigvalsh(cov_2d)
+            eig_max = max(eig_vals)
+            if eig_max > 1e-12:
+                circularity_values.append(min(eig_vals) / eig_max)
+            else:
+                circularity_values.append(1.0)
+
+    # Circularity: mean eigenvalue ratio across slices
+    if circularity_values:
+        cross_section_circularity = round(float(np.mean(circularity_values)), 4)
+    else:
+        cross_section_circularity = None
+
+    # Uniformity: 1 - CV of slice counts
+    if len(slice_counts) >= 2:
+        counts_arr = np.array(slice_counts, dtype=np.float64)
+        mean_count = np.mean(counts_arr)
+        if mean_count > 0:
+            cv = float(np.std(counts_arr) / mean_count)
+            cross_section_uniformity = round(max(0.0, 1.0 - cv), 4)
+        else:
+            cross_section_uniformity = None
+    else:
+        cross_section_uniformity = None
+
+    return (cross_section_circularity, cross_section_uniformity)
 
 
 def get_voxel_group_center(
@@ -958,6 +1048,20 @@ def get_voxel_group_axial_lengths(
         count=len(voxel_indices),
     )
     return _get_voxel_group_axial_lengths_from_indices(voxel_index_array, voxel_grid)
+
+
+def get_cross_section_metrics(
+    voxel_indices: set[int], voxel_grid: VoxelGrid
+) -> tuple[float | None, float | None]:
+    """
+    Compute cross-section circularity and uniformity for a set of voxel indices.
+    """
+    voxel_index_array = np.fromiter(
+        voxel_indices,
+        dtype=np.int64,
+        count=len(voxel_indices),
+    )
+    return _compute_cross_section_metrics_from_indices(voxel_index_array, voxel_grid)
 
 
 def _extract_component_voxels(
@@ -1025,11 +1129,16 @@ def _build_voxel_group_from_component_indices(
     if voxel_index_array.size == 0:
         center = np.array([0.0, 0.0, 0.0])
         axial_lengths = [0.0, 0.0, 0.0]
+        cross_section_circularity = None
+        cross_section_uniformity = None
     else:
         center = _get_voxel_group_center_from_indices(voxel_index_array, voxel_grid)
         axial_lengths = _get_voxel_group_axial_lengths_from_indices(
             voxel_index_array,
             voxel_grid,
+        )
+        cross_section_circularity, cross_section_uniformity = (
+            _compute_cross_section_metrics_from_indices(voxel_index_array, voxel_grid)
         )
 
     num_voxels = int(len(voxel_index_array))
@@ -1042,6 +1151,8 @@ def _build_voxel_group_from_component_indices(
         volume=compute_voxel_group_volume(num_voxels),
         center=center,
         axial_lengths=axial_lengths,
+        cross_section_circularity=cross_section_circularity,
+        cross_section_uniformity=cross_section_uniformity,
     )
 
 
@@ -1295,6 +1406,7 @@ def get_pores_pockets_cavities_occluded(
         # get the voxel indices
         volume_indices = compute_voxel_indices(volume_voxels, voxel_grid.x_y_z)
         # create the voxelgroup
+        cs_circ, cs_unif = get_cross_section_metrics(volume_indices, voxel_grid)
         voxel_group = VoxelGroup(
             voxels=volume_voxels,
             indices=volume_indices,
@@ -1304,6 +1416,8 @@ def get_pores_pockets_cavities_occluded(
             volume=compute_voxel_group_volume(len(volume_indices)),
             center=get_voxel_group_center(volume_indices, voxel_grid),
             axial_lengths=get_voxel_group_axial_lengths(volume_indices, voxel_grid),
+            cross_section_circularity=cs_circ,
+            cross_section_uniformity=cs_unif,
         )
 
         # add the voxelgroup depending on type and increment the type counter

@@ -185,6 +185,14 @@ def annotate_structure_volumes(
             pore_dimensions={i: pore.axial_lengths for i, pore in pores.items()},
             cavity_dimensions={i: cavity.axial_lengths for i, cavity in cavities.items()},
             pocket_dimensions={i: pocket.axial_lengths for i, pocket in pockets.items()},
+            hub_cross_section_circularity={i: hub.cross_section_circularity for i, hub in hubs.items()},
+            pore_cross_section_circularity={i: pore.cross_section_circularity for i, pore in pores.items()},
+            cavity_cross_section_circularity={i: cavity.cross_section_circularity for i, cavity in cavities.items()},
+            pocket_cross_section_circularity={i: pocket.cross_section_circularity for i, pocket in pockets.items()},
+            hub_cross_section_uniformity={i: hub.cross_section_uniformity for i, hub in hubs.items()},
+            pore_cross_section_uniformity={i: pore.cross_section_uniformity for i, pore in pores.items()},
+            cavity_cross_section_uniformity={i: cavity.cross_section_uniformity for i, cavity in cavities.items()},
+            pocket_cross_section_uniformity={i: pocket.cross_section_uniformity for i, pocket in pockets.items()},
         )
 
     annotation = _timed_call(stage_timings, "build_annotation", _build_annotation)

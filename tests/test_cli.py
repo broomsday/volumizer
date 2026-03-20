@@ -29,6 +29,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "cluster_method": None,
         "cluster_allow_all_methods": False,
         "cluster_max_resolution": None,
+        "cluster_max_residues": 10000,
         "metadata_cache": None,
         "no_metadata_cache": False,
         "checkpoint": None,

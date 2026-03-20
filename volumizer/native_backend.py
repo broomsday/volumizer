@@ -18,7 +18,7 @@ BACKEND_AUTO = "auto"
 BACKEND_NATIVE = "native"
 BACKEND_PYTHON = "python"
 VALID_BACKENDS = {BACKEND_AUTO, BACKEND_NATIVE, BACKEND_PYTHON}
-DEFAULT_BACKEND = BACKEND_PYTHON
+DEFAULT_BACKEND = BACKEND_AUTO
 
 
 def _load_native_module_from_local_artifact() -> ModuleType | None:
