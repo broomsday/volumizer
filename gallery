@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="${VOLUMIZER_GALLERY_DB:-data/gallery.db}"
+
+usage() {
+  cat <<EOF
+Usage: ./gallery [RUN_PATH] [--force-thumbnails] [--host HOST] [--port PORT]
+
+Rebuild the gallery index, render missing thumbnails, and serve the web UI.
+
+  RUN_PATH  Path to a run directory or run.summary.json file.
+            If omitted, the run under data/runs/ with the most files is used.
+
+Options:
+  --force-thumbnails   Re-render all thumbnails even if they already exist
+  --host HOST          Host to bind the server to (default: 127.0.0.1)
+  --port PORT          Port to bind the server to (default: 8000)
+  -h, --help           Show this help message
+EOF
+}
+
+# --- Parse arguments ---
+RUN_PATH=""
+FORCE_THUMBNAILS=""
+HOST="127.0.0.1"
+PORT="8000"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --force-thumbnails)
+      FORCE_THUMBNAILS="--force"
+      shift
+      ;;
+    --host)
+      HOST="${2:?--host requires a value}"
+      shift 2
+      ;;
+    --port)
+      PORT="${2:?--port requires a value}"
+      shift 2
+      ;;
+    *)
+      RUN_PATH="$1"
+      shift
+      ;;
+  esac
+done
+
+# --- Resolve summary file ---
+resolve_summary() {
+  local path="$1"
+
+  # If it's a file, use it directly
+  if [[ -f "$path" ]]; then
+    echo "$path"
+    return
+  fi
+
+  # If it's a directory, look for run.summary.json inside it
+  if [[ -d "$path" ]]; then
+    local summary="$path/run.summary.json"
+    if [[ -f "$summary" ]]; then
+      echo "$summary"
+      return
+    fi
+    echo "Error: No run.summary.json found in $path" >&2
+    exit 1
+  fi
+
+  echo "Error: Path does not exist: $path" >&2
+  exit 1
+}
+
+if [[ -n "$RUN_PATH" ]]; then
+  SUMMARY_PATH="$(resolve_summary "$RUN_PATH")"
+else
+  # Pick the run directory with the most files
+  RUNS_DIR="$SCRIPT_DIR/data/runs"
+  if [[ ! -d "$RUNS_DIR" ]]; then
+    echo "Error: No runs directory found at $RUNS_DIR" >&2
+    exit 1
+  fi
+
+  BEST_DIR=""
+  BEST_COUNT=0
+  for dir in "$RUNS_DIR"/*/; do
+    [[ -d "$dir" ]] || continue
+    count=$(find "$dir" -maxdepth 1 -type f | wc -l)
+    if [[ "$count" -gt "$BEST_COUNT" ]]; then
+      BEST_COUNT="$count"
+      BEST_DIR="$dir"
+    fi
+  done
+
+  if [[ -z "$BEST_DIR" ]]; then
+    echo "Error: No run directories found in $RUNS_DIR" >&2
+    exit 1
+  fi
+
+  SUMMARY_PATH="$(resolve_summary "$BEST_DIR")"
+  echo "==> Auto-selected run: $(basename "$BEST_DIR") ($BEST_COUNT files)"
+fi
+
+# --- Step 1: Rebuild gallery index ---
+echo "==> Rebuilding gallery index from: $SUMMARY_PATH"
+rm -f "$DB_PATH"
+uv run python -m volumizer.gallery_index --summary "$SUMMARY_PATH" --db "$DB_PATH"
+
+# --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
+echo "==> Rendering thumbnails (skipping up-to-date)..."
+uv run python -m volumizer.gallery_render --db "$DB_PATH" $FORCE_THUMBNAILS
+
+# --- Step 3: Serve the gallery ---
+echo "==> Starting gallery server at http://$HOST:$PORT"
+uv run python -m volumizer.web.app --db "$DB_PATH" --host "$HOST" --port "$PORT"

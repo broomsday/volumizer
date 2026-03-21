@@ -2,8 +2,22 @@
 set -euo pipefail
 
 DB_PATH="${VOLUMIZER_GALLERY_DB:-data/gallery.db}"
-SUMMARY_PATH="${1:?Usage: $0 <path/to/run.summary.json> [run-id]}"
+RAW_PATH="${1:?Usage: $0 <path/to/run-dir-or-summary.json> [run-id]}"
 RUN_ID="${2:-}"
+
+# Accept either a directory or a file
+if [[ -d "$RAW_PATH" ]]; then
+  SUMMARY_PATH="$RAW_PATH/run.summary.json"
+  if [[ ! -f "$SUMMARY_PATH" ]]; then
+    echo "Error: No run.summary.json found in $RAW_PATH" >&2
+    exit 1
+  fi
+elif [[ -f "$RAW_PATH" ]]; then
+  SUMMARY_PATH="$RAW_PATH"
+else
+  echo "Error: Path does not exist: $RAW_PATH" >&2
+  exit 1
+fi
 
 RUN_ID_ARGS=()
 if [[ -n "$RUN_ID" ]]; then
