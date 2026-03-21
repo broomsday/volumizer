@@ -238,6 +238,65 @@ def _extract_chain_sequences(structure) -> dict[str, tuple[str, ...]]:
     }
 
 
+def _sequence_overlap(seq1: tuple[str, ...], seq2: tuple[str, ...]) -> float:
+    """
+    Compute fractional overlap between two residue-name sequences.
+
+    Uses best-offset alignment to handle terminal truncation: slides the
+    shorter sequence along the longer one and returns the best match ratio
+    relative to the longer sequence length.
+    """
+    len1, len2 = len(seq1), len(seq2)
+    max_len = max(len1, len2)
+    if max_len == 0:
+        return 1.0
+
+    # Ensure seq1 is the longer one
+    if len1 < len2:
+        seq1, seq2 = seq2, seq1
+        len1, len2 = len2, len1
+
+    best_matches = 0
+    # Slide seq2 along seq1 at each possible offset
+    for offset in range(len1 - len2 + 1):
+        matches = sum(1 for i in range(len2) if seq1[offset + i] == seq2[i])
+        if matches > best_matches:
+            best_matches = matches
+            if best_matches == len2:
+                break
+
+    return best_matches / max_len
+
+
+def _count_sequence_unique_chains(
+    chain_sequences: dict[str, tuple[str, ...]],
+    identity_threshold: float = 0.95,
+) -> int:
+    """
+    Count sequence-unique chains using fuzzy matching.
+
+    Chains with >= identity_threshold fractional overlap are considered
+    the same, which handles minor terminal truncation differences between
+    symmetry copies.
+    """
+    sequences = list(chain_sequences.values())
+    if len(sequences) == 0:
+        return 0
+
+    # Greedy clustering: assign each sequence to the first matching cluster
+    cluster_reps: list[tuple[str, ...]] = [sequences[0]]
+    for seq in sequences[1:]:
+        matched = False
+        for rep in cluster_reps:
+            if _sequence_overlap(seq, rep) >= identity_threshold:
+                matched = True
+                break
+        if not matched:
+            cluster_reps.append(seq)
+
+    return len(cluster_reps)
+
+
 def _compute_structure_metrics(
     input_path: Path,
     assembly_policy: str,
@@ -255,7 +314,7 @@ def _compute_structure_metrics(
 
     num_chains = len(chain_sequences)
     num_residues = int(sum(len(sequence) for sequence in chain_sequences.values()))
-    num_sequence_unique_chains = len(set(chain_sequences.values()))
+    num_sequence_unique_chains = _count_sequence_unique_chains(chain_sequences)
 
     return num_chains, num_residues, num_sequence_unique_chains
 

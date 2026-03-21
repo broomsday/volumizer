@@ -182,6 +182,89 @@ def _can_use_identity_assembly_shortcut_cif(file: pdbx.PDBxFile) -> bool:
     return assembly_asym_ids == all_asym_ids
 
 
+def _generate_chain_id_pool() -> list[str]:
+    """Return a pool of unique chain ID labels (A-Z, a-z, 0-9, then AA, AB, ...)."""
+    import string
+
+    pool: list[str] = []
+    pool.extend(string.ascii_uppercase)
+    pool.extend(string.ascii_lowercase)
+    pool.extend(string.digits)
+    for first in string.ascii_uppercase:
+        for second in string.ascii_uppercase:
+            pool.append(first + second)
+    return pool
+
+
+def _deduplicate_assembly_chain_ids(structure: bts.AtomArray) -> bts.AtomArray:
+    """
+    Assign unique chain IDs to symmetry copies produced by assembly expansion.
+
+    Biotite's get_assembly() reuses the original chain IDs for each copy.
+    This function detects repeated chain ID blocks and renames them so every
+    physical chain has a distinct ID.
+    """
+    chain_ids = structure.chain_id
+    n = len(chain_ids)
+    if n == 0:
+        return structure
+
+    # Identify contiguous chain blocks: [(chain_id, start, end), ...]
+    blocks: list[tuple[str, int, int]] = []
+    block_start = 0
+    for i in range(1, n):
+        if chain_ids[i] != chain_ids[i - 1]:
+            blocks.append((chain_ids[block_start], block_start, i))
+            block_start = i
+    blocks.append((chain_ids[block_start], block_start, n))
+
+    # Detect copy boundaries: a chain ID reappearing after we've moved past it
+    # within the current copy means a new copy started.
+    seen_in_copy: set[str] = set()
+    copy_index = 0
+    block_copy: list[int] = []
+
+    for block_id, _, _ in blocks:
+        if block_id in seen_in_copy:
+            copy_index += 1
+            seen_in_copy.clear()
+        seen_in_copy.add(block_id)
+        block_copy.append(copy_index)
+
+    num_copies = copy_index + 1
+    if num_copies <= 1:
+        return structure
+
+    # Build mapping: (original_chain_id, copy_index) -> new_chain_id
+    original_ids_ordered: list[str] = []
+    seen_originals: set[str] = set()
+    for block_id, _, _ in blocks:
+        if block_id not in seen_originals:
+            seen_originals.add(block_id)
+            original_ids_ordered.append(block_id)
+
+    pool = _generate_chain_id_pool()
+    # Reserve the original IDs for copy 0, assign new ones for copies 1+
+    used: set[str] = set(original_ids_ordered)
+    pool_iter = iter(cid for cid in pool if cid not in used)
+
+    rename_map: dict[tuple[str, int], str] = {}
+    for orig_id in original_ids_ordered:
+        rename_map[(orig_id, 0)] = orig_id
+        for ci in range(1, num_copies):
+            rename_map[(orig_id, ci)] = next(pool_iter)
+
+    # Apply renaming
+    new_chain_ids = chain_ids.copy()
+    for (block_id, start, end), ci in zip(blocks, block_copy):
+        new_id = rename_map[(block_id, ci)]
+        new_chain_ids[start:end] = new_id
+
+    structure = structure.copy()
+    structure.chain_id = new_chain_ids
+    return structure
+
+
 def load_structure(
     file_path: Path,
     assembly_policy: str = DEFAULT_ASSEMBLY_POLICY,
@@ -225,7 +308,7 @@ def load_structure(
                 perf_counter() - assembly_start,
             )
             assembly_recorded = True
-            return structure
+            return _deduplicate_assembly_chain_ids(structure)
 
         if suffix in {".cif", ".mmcif"}:
             file = pdbx.PDBxFile.read(file_path)
@@ -250,7 +333,7 @@ def load_structure(
                 perf_counter() - assembly_start,
             )
             assembly_recorded = True
-            return structure
+            return _deduplicate_assembly_chain_ids(structure)
 
         if suffix == ".mmtf":
             file = mmtf.MMTFFile.read(file_path)
@@ -272,7 +355,7 @@ def load_structure(
                 perf_counter() - assembly_start,
             )
             assembly_recorded = True
-            return structure
+            return _deduplicate_assembly_chain_ids(structure)
 
         structure = biotite_load_structure(file_path)
         _accumulate_stage_timing(
