@@ -4,7 +4,8 @@ import sqlite3
 
 import pytest
 
-from volumizer import gallery_index
+from volumizer import gallery_index, pdb
+from volumizer.gallery_index import _sequence_overlap, _count_sequence_unique_chains
 from volumizer.paths import TEST_DIR
 
 
@@ -280,3 +281,85 @@ def test_build_gallery_index_infers_pdb_id_from_source_when_missing(tmp_path: Pa
         ).fetchone()
 
     assert row == ("1dzf", "1DZF")
+
+
+class TestSequenceOverlap:
+    def test_identical_sequences(self):
+        seq = ("ALA", "GLY", "VAL")
+        assert _sequence_overlap(seq, seq) == 1.0
+
+    def test_empty_sequences(self):
+        assert _sequence_overlap((), ()) == 1.0
+
+    def test_one_empty(self):
+        assert _sequence_overlap(("ALA",), ()) == 0.0
+
+    def test_prefix_truncation(self):
+        full = ("GLY", "GLY", "MET", "GLU", "LYS", "ALA", "VAL", "THR", "PRO", "LEU")
+        truncated = ("MET", "GLU", "LYS", "ALA", "VAL", "THR", "PRO", "LEU")
+        overlap = _sequence_overlap(full, truncated)
+        # 8 matches out of 10 max length = 0.8
+        assert overlap == pytest.approx(0.8)
+
+    def test_suffix_truncation(self):
+        full = ("ALA", "GLY", "VAL", "LEU", "ILE")
+        truncated = ("ALA", "GLY", "VAL")
+        overlap = _sequence_overlap(full, truncated)
+        assert overlap == pytest.approx(0.6)
+
+    def test_completely_different(self):
+        seq1 = ("ALA", "ALA", "ALA")
+        seq2 = ("GLY", "GLY", "GLY")
+        assert _sequence_overlap(seq1, seq2) == 0.0
+
+
+class TestCountSequenceUniqueChains:
+    def test_all_identical(self):
+        seqs = {
+            "A": ("ALA", "GLY", "VAL"),
+            "B": ("ALA", "GLY", "VAL"),
+            "C": ("ALA", "GLY", "VAL"),
+        }
+        assert _count_sequence_unique_chains(seqs) == 1
+
+    def test_all_different(self):
+        seqs = {
+            "A": ("ALA",) * 100,
+            "B": ("GLY",) * 100,
+        }
+        assert _count_sequence_unique_chains(seqs) == 2
+
+    def test_fuzzy_match_terminal_truncation(self):
+        # 100-residue chain, one copy missing 3 N-terminal residues
+        base = tuple(["ALA"] * 50 + ["GLY"] * 50)
+        truncated = base[3:]
+        seqs = {"A": base, "B": truncated}
+        # 97/100 = 0.97 > 0.95 threshold
+        assert _count_sequence_unique_chains(seqs) == 1
+
+    def test_below_threshold_counted_as_different(self):
+        base = tuple(["ALA"] * 100)
+        # Differ by 6 residues at the start -> 94/100 = 0.94 < 0.95
+        different = tuple(["GLY"] * 6 + ["ALA"] * 94)
+        seqs = {"A": base, "B": different}
+        assert _count_sequence_unique_chains(seqs) == 2
+
+    def test_empty(self):
+        assert _count_sequence_unique_chains({}) == 0
+
+    def test_single_chain(self):
+        assert _count_sequence_unique_chains({"A": ("ALA",)}) == 1
+
+
+RCSB_2ZBT = Path("data/runs/rcsb70/downloads/2ZBT.cif")
+
+
+@pytest.mark.skipif(not RCSB_2ZBT.exists(), reason="2ZBT test data not available")
+class TestBiologicalAssemblyMetrics2ZBT:
+    def test_2zbt_has_12_chains_1_unique(self):
+        chains, residues, unique = gallery_index._compute_structure_metrics(
+            RCSB_2ZBT, "biological"
+        )
+        assert chains == 12
+        assert unique == 1
+        assert residues is not None and residues > 3000

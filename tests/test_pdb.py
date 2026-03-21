@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import biotite.structure as bts
 import numpy as np
 import pytest
 from biotite.structure.io import pdbx
@@ -232,3 +233,86 @@ def test_compute_sse_fractions_returns_valid_fractions():
     non_none = [v for v in result.values() if v is not None]
     if non_none:
         assert abs(sum(non_none) - 1.0) < 0.01
+
+
+class TestDeduplicateAssemblyChainIds:
+    def _make_atom_array(self, chain_ids: list[str]) -> bts.AtomArray:
+        """Build a minimal AtomArray with the given chain_id sequence."""
+        n = len(chain_ids)
+        atoms = bts.AtomArray(n)
+        atoms.chain_id = np.array(chain_ids, dtype="U4")
+        atoms.coord = np.zeros((n, 3), dtype=np.float32)
+        atoms.atom_name = np.full(n, "CA", dtype="U4")
+        atoms.res_name = np.full(n, "ALA", dtype="U4")
+        atoms.res_id = np.arange(n, dtype=np.int32)
+        atoms.element = np.full(n, "C", dtype="U2")
+        return atoms
+
+    def test_single_copy_is_noop(self):
+        atoms = self._make_atom_array(["A", "A", "B", "B", "C"])
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        assert list(result.chain_id) == ["A", "A", "B", "B", "C"]
+
+    def test_two_copies_get_unique_ids(self):
+        # Simulate 2 copies of A,B
+        atoms = self._make_atom_array(["A", "A", "B", "B", "A", "A", "B", "B"])
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        chain_ids = list(result.chain_id)
+        # Copy 0 keeps A, B; copy 1 gets new unique IDs
+        assert chain_ids[:4] == ["A", "A", "B", "B"]
+        assert chain_ids[4] != "A" and chain_ids[4] != "B"
+        assert chain_ids[6] != "A" and chain_ids[6] != "B"
+        assert chain_ids[4] == chain_ids[5]  # same new ID within block
+        assert chain_ids[6] == chain_ids[7]
+        assert chain_ids[4] != chain_ids[6]  # different for A-copy vs B-copy
+        # Total unique IDs = 4
+        assert len(set(chain_ids)) == 4
+
+    def test_three_copies_trimer(self):
+        # Simulate 3 copies of A,B,C,D (like 2ZBT pattern)
+        pattern = ["A"] * 3 + ["B"] * 3 + ["C"] * 3 + ["D"] * 3
+        atoms = self._make_atom_array(pattern * 3)
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        chain_ids = list(result.chain_id)
+        # Should have 12 unique chain IDs
+        assert len(set(chain_ids)) == 12
+        # Copy 0 retains original IDs
+        assert chain_ids[0] == "A"
+        assert chain_ids[3] == "B"
+        assert chain_ids[6] == "C"
+        assert chain_ids[9] == "D"
+
+    def test_empty_structure(self):
+        atoms = self._make_atom_array([])
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        assert len(result) == 0
+
+    def test_original_not_mutated(self):
+        atoms = self._make_atom_array(["A", "B", "A", "B"])
+        original_ids = list(atoms.chain_id)
+        pdb._deduplicate_assembly_chain_ids(atoms)
+        assert list(atoms.chain_id) == original_ids
+
+
+RCSB_2ZBT = Path("data/runs/rcsb70/downloads/2ZBT.cif")
+
+
+@pytest.mark.skipif(not RCSB_2ZBT.exists(), reason="2ZBT test data not available")
+class TestBiologicalAssembly2ZBT:
+    def test_biological_assembly_has_12_unique_chains(self):
+        structure = pdb.load_structure(RCSB_2ZBT, assembly_policy="biological")
+        cleaned = pdb.clean_structure(structure)
+        chain_ids = set(cleaned.chain_id)
+        assert len(chain_ids) == 12
+
+    def test_biological_assembly_has_3x_asymmetric_atoms(self):
+        bio = pdb.load_structure(RCSB_2ZBT, assembly_policy="biological")
+        asym = pdb.load_structure(RCSB_2ZBT, assembly_policy="asymmetric")
+        # Assembly should be exactly 3x the asymmetric unit
+        assert len(bio) == 3 * len(asym)
+
+    def test_asymmetric_unit_has_4_chains(self):
+        structure = pdb.load_structure(RCSB_2ZBT, assembly_policy="asymmetric")
+        cleaned = pdb.clean_structure(structure)
+        chain_ids = set(cleaned.chain_id)
+        assert len(chain_ids) == 4
