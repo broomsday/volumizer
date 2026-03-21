@@ -62,7 +62,7 @@ a {
   gap: 1.5rem;
   justify-content: space-between;
   align-items: flex-start;
-  padding: 1.4rem 1.6rem;
+  padding: 0.9rem 1.6rem;
   background: linear-gradient(135deg, rgba(255, 250, 241, 0.95), rgba(240, 233, 220, 0.82));
   border: 1px solid var(--line);
   border-radius: calc(var(--radius) + 4px);
@@ -73,16 +73,9 @@ a {
   max-width: 52rem;
 }
 
-.masthead h1 {
-  font-size: clamp(2rem, 3.2vw, 3.4rem);
-  line-height: 0.95;
-}
-
-.lede {
-  margin-top: 0.8rem;
-  color: var(--muted);
-  font-size: 1.02rem;
-  line-height: 1.5;
+.masthead-title {
+  font-size: 1.3rem;
+  margin: 0;
 }
 
 .eyebrow,
@@ -92,6 +85,10 @@ a {
   letter-spacing: 0.16em;
   font-size: 0.74rem;
   font-weight: 700;
+}
+
+.section-title {
+  font-size: 0.92rem;
 }
 
 .masthead-pills {
@@ -147,9 +144,44 @@ a {
   margin-bottom: 1rem;
 }
 
-.filters-panel h2,
-.results-panel h2 {
-  font-size: 1.6rem;
+.browse-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.display-props-button {
+  font-size: 0.78rem;
+  padding: 0.45rem 0.8rem;
+}
+
+.display-props-popup {
+  position: relative;
+  margin-bottom: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(47, 35, 16, 0.1);
+}
+
+.display-props-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.4rem 1rem;
+}
+
+.display-props-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.84rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.display-props-grid input[type="checkbox"] {
+  accent-color: var(--brand);
 }
 
 .filters-form {

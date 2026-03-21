@@ -1,3 +1,19 @@
+const CARD_METRICS = [
+  { key: 'num_pores', label: 'Pores', format: 'int' },
+  { key: 'num_pockets', label: 'Pockets', format: 'int' },
+  { key: 'num_cavities', label: 'Cavities', format: 'int' },
+  { key: 'num_hubs', label: 'Hubs', format: 'int' },
+  { key: 'num_chains', label: 'Chains', format: 'int' },
+  { key: 'num_residues', label: 'Residues', format: 'int' },
+  { key: 'frac_alpha', label: 'Alpha', format: 'percent' },
+  { key: 'frac_beta', label: 'Beta', format: 'percent' },
+  { key: 'frac_coil', label: 'Coil', format: 'percent' },
+  { key: 'largest_pore_circularity', label: 'Pore circ.', format: 'float2' },
+  { key: 'largest_pore_uniformity', label: 'Pore unif.', format: 'float2' },
+  { key: 'largest_pocket_circularity', label: 'Pocket circ.', format: 'float2' },
+  { key: 'largest_pocket_uniformity', label: 'Pocket unif.', format: 'float2' },
+];
+
 const state = {
   currentOffset: 0,
   totalCount: 0,
@@ -27,6 +43,8 @@ const elements = {
   detailMetrics: document.getElementById('detail-metrics'),
   detailVolumes: document.getElementById('detail-volumes'),
   viewerHost: document.getElementById('viewer-host'),
+  displayPropsToggle: document.getElementById('display-props-toggle'),
+  displayPropsPopup: document.getElementById('display-props-popup'),
 };
 
 function numericInputValue(name) {
@@ -171,6 +189,21 @@ function prettyPercent(value) {
   return `${(Number(value) * 100).toFixed(0)}%`;
 }
 
+function getVisibleMetricKeys() {
+  const keys = new Set();
+  for (const checkbox of elements.displayPropsPopup.querySelectorAll('input[data-metric]')) {
+    if (checkbox.checked) keys.add(checkbox.dataset.metric);
+  }
+  return keys;
+}
+
+function formatMetricValue(value, format) {
+  if (format === 'int') return prettyNumber(value, 0);
+  if (format === 'percent') return prettyPercent(value);
+  if (format === 'float2') return prettyNumber(value, 2);
+  return prettyNumber(value, 1);
+}
+
 function renderResults(rows) {
   elements.resultsGrid.innerHTML = '';
   for (const row of rows) {
@@ -203,19 +236,12 @@ function renderResults(rows) {
 
     const metrics = document.createElement('div');
     metrics.className = 'metric-grid';
-    metrics.append(
-      renderMetric('Pores', prettyNumber(row.num_pores, 0)),
-      renderMetric('Pockets', prettyNumber(row.num_pockets, 0)),
-      renderMetric('Cavities', prettyNumber(row.num_cavities, 0)),
-      renderMetric('Hubs', prettyNumber(row.num_hubs, 0)),
-      renderMetric('Chains', prettyNumber(row.num_chains, 0)),
-      renderMetric('Residues', prettyNumber(row.num_residues, 0)),
-      renderMetric('Alpha', prettyPercent(row.frac_alpha)),
-      renderMetric('Beta', prettyPercent(row.frac_beta)),
-      renderMetric('Coil', prettyPercent(row.frac_coil)),
-      renderMetric('Pore circ.', prettyNumber(row.largest_pore_circularity, 2)),
-      renderMetric('Pore unif.', prettyNumber(row.largest_pore_uniformity, 2)),
-    );
+    const visibleKeys = getVisibleMetricKeys();
+    for (const metric of CARD_METRICS) {
+      if (visibleKeys.has(metric.key)) {
+        metrics.append(renderMetric(metric.label, formatMetricValue(row[metric.key], metric.format)));
+      }
+    }
 
     const actions = document.createElement('div');
     actions.className = 'card-actions';
@@ -420,6 +446,14 @@ function wireEvents() {
     state.currentOffset += state.currentLimit;
     await search();
   });
+
+  elements.displayPropsToggle.addEventListener('click', () => {
+    elements.displayPropsPopup.hidden = !elements.displayPropsPopup.hidden;
+  });
+
+  for (const checkbox of elements.displayPropsPopup.querySelectorAll('input[data-metric]')) {
+    checkbox.addEventListener('change', () => search());
+  }
 
   elements.closeDetailButton.addEventListener('click', closeDetail);
   elements.detailDialog.addEventListener('click', (event) => {

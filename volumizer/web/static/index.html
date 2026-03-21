@@ -13,12 +13,7 @@
   <div class="page-shell">
     <header class="masthead">
       <div class="masthead-copy">
-        <p class="eyebrow">Local Gallery</p>
-        <h1>Volumizer Gallery</h1>
-        <p class="lede">
-          Browse indexed structures, cached renders, and annotated volume outputs without
-          leaving the local run directory.
-        </p>
+        <h1 class="eyebrow masthead-title">Volumizer Gallery</h1>
       </div>
       <div class="masthead-pills">
         <div class="pill">
@@ -35,8 +30,7 @@
     <main class="workspace">
       <aside class="filters-panel">
         <div class="panel-heading">
-          <p class="panel-kicker">Filters</p>
-          <h2>Refine The Gallery</h2>
+          <p class="panel-kicker section-title">Filters</p>
         </div>
 
         <form id="filters-form" class="filters-form">
@@ -313,14 +307,32 @@
 
       <section class="results-panel">
         <div class="results-toolbar">
-          <div>
-            <p class="panel-kicker">Browse</p>
-            <h2>Indexed Structures</h2>
+          <div class="browse-heading">
+            <p class="panel-kicker section-title">Browse</p>
+            <button type="button" class="secondary-button display-props-button" id="display-props-toggle">Display Properties</button>
           </div>
           <div class="pagination-controls">
             <button type="button" class="secondary-button" id="prev-page">Previous</button>
             <span id="page-status">Page 1</span>
             <button type="button" class="secondary-button" id="next-page">Next</button>
+          </div>
+        </div>
+
+        <div id="display-props-popup" class="display-props-popup" hidden>
+          <div class="display-props-grid">
+            <label><input type="checkbox" data-metric="num_pores" checked /> Pores</label>
+            <label><input type="checkbox" data-metric="num_pockets" /> Pockets</label>
+            <label><input type="checkbox" data-metric="num_cavities" /> Cavities</label>
+            <label><input type="checkbox" data-metric="num_hubs" /> Hubs</label>
+            <label><input type="checkbox" data-metric="num_chains" checked /> Chains</label>
+            <label><input type="checkbox" data-metric="num_residues" /> Residues</label>
+            <label><input type="checkbox" data-metric="frac_alpha" checked /> Alpha</label>
+            <label><input type="checkbox" data-metric="frac_beta" checked /> Beta</label>
+            <label><input type="checkbox" data-metric="frac_coil" /> Coil</label>
+            <label><input type="checkbox" data-metric="largest_pore_circularity" checked /> Pore circ.</label>
+            <label><input type="checkbox" data-metric="largest_pore_uniformity" checked /> Pore unif.</label>
+            <label><input type="checkbox" data-metric="largest_pocket_circularity" /> Pocket circ.</label>
+            <label><input type="checkbox" data-metric="largest_pocket_uniformity" /> Pocket unif.</label>
           </div>
         </div>
 
