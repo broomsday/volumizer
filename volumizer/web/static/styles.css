@@ -218,6 +218,54 @@ a {
   color: var(--muted);
 }
 
+.filter-section {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  margin: 0;
+}
+
+.filter-section-toggle {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--brand);
+  letter-spacing: 0.04em;
+  padding: 0.65rem 0.7rem;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  user-select: none;
+}
+
+.filter-section-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.filter-section-toggle::before {
+  content: "";
+  display: inline-block;
+  width: 0.45em;
+  height: 0.45em;
+  border-right: 2px solid var(--brand);
+  border-bottom: 2px solid var(--brand);
+  transform: rotate(-45deg);
+  transition: transform 150ms ease;
+  flex-shrink: 0;
+}
+
+.filter-section[open] > .filter-section-toggle::before {
+  transform: rotate(45deg);
+}
+
+.filter-section > .filter-group {
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 0.6rem 0.7rem 0.7rem;
+  margin: 0;
+}
+
 .filter-group {
   border: 1px solid var(--line);
   border-radius: 16px;

@@ -6,7 +6,7 @@ DB_PATH="${VOLUMIZER_GALLERY_DB:-data/gallery.db}"
 
 usage() {
   cat <<EOF
-Usage: ./gallery [RUN_PATH] [--force-thumbnails] [--host HOST] [--port PORT]
+Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--host HOST] [--port PORT]
 
 Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 
@@ -14,6 +14,7 @@ Rebuild the gallery index, render missing thumbnails, and serve the web UI.
             If omitted, the run under data/runs/ with the most files is used.
 
 Options:
+  --force-index        Rebuild the index even if it is up to date
   --force-thumbnails   Re-render all thumbnails even if they already exist
   --host HOST          Host to bind the server to (default: 127.0.0.1)
   --port PORT          Port to bind the server to (default: 8000)
@@ -23,6 +24,7 @@ EOF
 
 # --- Parse arguments ---
 RUN_PATH=""
+FORCE_INDEX=false
 FORCE_THUMBNAILS=""
 HOST="127.0.0.1"
 PORT="8000"
@@ -32,6 +34,10 @@ while [[ $# -gt 0 ]]; do
     -h|--help)
       usage
       exit 0
+      ;;
+    --force-index)
+      FORCE_INDEX=true
+      shift
       ;;
     --force-thumbnails)
       FORCE_THUMBNAILS="--force"
@@ -107,10 +113,20 @@ else
   echo "==> Auto-selected run: $(basename "$BEST_DIR") ($BEST_COUNT files)"
 fi
 
-# --- Step 1: Rebuild gallery index ---
-echo "==> Rebuilding gallery index from: $SUMMARY_PATH"
-rm -f "$DB_PATH"
-uv run python -m volumizer.gallery_index --summary "$SUMMARY_PATH" --db "$DB_PATH"
+# --- Step 1: Rebuild gallery index (skip if up to date) ---
+NEED_REBUILD=true
+if [[ "$FORCE_INDEX" == false && -f "$DB_PATH" ]]; then
+  if [[ "$DB_PATH" -nt "$SUMMARY_PATH" ]]; then
+    NEED_REBUILD=false
+    echo "==> Index is up to date ($(basename "$DB_PATH") newer than $(basename "$SUMMARY_PATH")), skipping rebuild"
+  fi
+fi
+
+if [[ "$NEED_REBUILD" == true ]]; then
+  echo "==> Rebuilding gallery index from: $SUMMARY_PATH"
+  rm -f "$DB_PATH"
+  uv run python -m volumizer.gallery_index --summary "$SUMMARY_PATH" --db "$DB_PATH"
+fi
 
 # --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
 echo "==> Rendering thumbnails (skipping up-to-date)..."
