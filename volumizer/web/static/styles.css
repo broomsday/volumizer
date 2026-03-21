@@ -165,6 +165,25 @@ a {
   box-shadow: 0 8px 24px rgba(47, 35, 16, 0.1);
 }
 
+.display-props-group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.5rem 0.7rem 0.45rem;
+  margin: 0 0 0.45rem;
+}
+
+.display-props-group:last-child {
+  margin-bottom: 0;
+}
+
+.display-props-group legend {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--brand);
+  letter-spacing: 0.04em;
+  padding: 0 0.3rem;
+}
+
 .display-props-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));

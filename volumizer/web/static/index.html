@@ -319,21 +319,65 @@
         </div>
 
         <div id="display-props-popup" class="display-props-popup" hidden>
-          <div class="display-props-grid">
-            <label><input type="checkbox" data-metric="num_pores" checked /> Pores</label>
-            <label><input type="checkbox" data-metric="num_pockets" /> Pockets</label>
-            <label><input type="checkbox" data-metric="num_cavities" /> Cavities</label>
-            <label><input type="checkbox" data-metric="num_hubs" /> Hubs</label>
-            <label><input type="checkbox" data-metric="num_chains" checked /> Chains</label>
-            <label><input type="checkbox" data-metric="num_residues" /> Residues</label>
-            <label><input type="checkbox" data-metric="frac_alpha" checked /> Alpha</label>
-            <label><input type="checkbox" data-metric="frac_beta" checked /> Beta</label>
-            <label><input type="checkbox" data-metric="frac_coil" /> Coil</label>
-            <label><input type="checkbox" data-metric="largest_pore_circularity" checked /> Pore circ.</label>
-            <label><input type="checkbox" data-metric="largest_pore_uniformity" checked /> Pore unif.</label>
-            <label><input type="checkbox" data-metric="largest_pocket_circularity" /> Pocket circ.</label>
-            <label><input type="checkbox" data-metric="largest_pocket_uniformity" /> Pocket unif.</label>
-          </div>
+          <fieldset class="display-props-group">
+            <legend>Protein</legend>
+            <div class="display-props-grid">
+              <label><input type="checkbox" data-metric="num_chains" checked /> Chains</label>
+              <label><input type="checkbox" data-metric="num_residues" /> Residues</label>
+              <label><input type="checkbox" data-metric="num_sequence_unique_chains" /> Unique chains</label>
+              <label><input type="checkbox" data-metric="frac_alpha" checked /> Alpha</label>
+              <label><input type="checkbox" data-metric="frac_beta" checked /> Beta</label>
+              <label><input type="checkbox" data-metric="frac_coil" /> Coil</label>
+            </div>
+          </fieldset>
+          <fieldset class="display-props-group">
+            <legend>Pores</legend>
+            <div class="display-props-grid">
+              <label><input type="checkbox" data-metric="num_pores" checked /> Count</label>
+              <label><input type="checkbox" data-metric="largest_pore_volume_a3" /> Volume</label>
+              <label><input type="checkbox" data-metric="largest_pore_length_a" /> Length</label>
+              <label><input type="checkbox" data-metric="largest_pore_min_diameter_a" /> Min diam.</label>
+              <label><input type="checkbox" data-metric="largest_pore_max_diameter_a" /> Max diam.</label>
+              <label><input type="checkbox" data-metric="largest_pore_circularity" checked /> Circularity</label>
+              <label><input type="checkbox" data-metric="largest_pore_uniformity" checked /> Uniformity</label>
+            </div>
+          </fieldset>
+          <fieldset class="display-props-group">
+            <legend>Pockets</legend>
+            <div class="display-props-grid">
+              <label><input type="checkbox" data-metric="num_pockets" /> Count</label>
+              <label><input type="checkbox" data-metric="largest_pocket_volume_a3" /> Volume</label>
+              <label><input type="checkbox" data-metric="largest_pocket_length_a" /> Length</label>
+              <label><input type="checkbox" data-metric="largest_pocket_min_diameter_a" /> Min diam.</label>
+              <label><input type="checkbox" data-metric="largest_pocket_max_diameter_a" /> Max diam.</label>
+              <label><input type="checkbox" data-metric="largest_pocket_circularity" /> Circularity</label>
+              <label><input type="checkbox" data-metric="largest_pocket_uniformity" /> Uniformity</label>
+            </div>
+          </fieldset>
+          <fieldset class="display-props-group">
+            <legend>Cavities</legend>
+            <div class="display-props-grid">
+              <label><input type="checkbox" data-metric="num_cavities" /> Count</label>
+              <label><input type="checkbox" data-metric="largest_cavity_volume_a3" /> Volume</label>
+              <label><input type="checkbox" data-metric="largest_cavity_length_a" /> Length</label>
+              <label><input type="checkbox" data-metric="largest_cavity_min_diameter_a" /> Min diam.</label>
+              <label><input type="checkbox" data-metric="largest_cavity_max_diameter_a" /> Max diam.</label>
+              <label><input type="checkbox" data-metric="largest_cavity_circularity" /> Circularity</label>
+              <label><input type="checkbox" data-metric="largest_cavity_uniformity" /> Uniformity</label>
+            </div>
+          </fieldset>
+          <fieldset class="display-props-group">
+            <legend>Hubs</legend>
+            <div class="display-props-grid">
+              <label><input type="checkbox" data-metric="num_hubs" /> Count</label>
+              <label><input type="checkbox" data-metric="largest_hub_volume_a3" /> Volume</label>
+              <label><input type="checkbox" data-metric="largest_hub_length_a" /> Length</label>
+              <label><input type="checkbox" data-metric="largest_hub_min_diameter_a" /> Min diam.</label>
+              <label><input type="checkbox" data-metric="largest_hub_max_diameter_a" /> Max diam.</label>
+              <label><input type="checkbox" data-metric="largest_hub_circularity" /> Circularity</label>
+              <label><input type="checkbox" data-metric="largest_hub_uniformity" /> Uniformity</label>
+            </div>
+          </fieldset>
         </div>
 
         <div id="loading-state" class="status-banner">Loading gallery…</div>

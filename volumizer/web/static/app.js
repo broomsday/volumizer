@@ -1,17 +1,38 @@
 const CARD_METRICS = [
-  { key: 'num_pores', label: 'Pores', format: 'int' },
-  { key: 'num_pockets', label: 'Pockets', format: 'int' },
-  { key: 'num_cavities', label: 'Cavities', format: 'int' },
-  { key: 'num_hubs', label: 'Hubs', format: 'int' },
   { key: 'num_chains', label: 'Chains', format: 'int' },
   { key: 'num_residues', label: 'Residues', format: 'int' },
+  { key: 'num_sequence_unique_chains', label: 'Unique chains', format: 'int' },
   { key: 'frac_alpha', label: 'Alpha', format: 'percent' },
   { key: 'frac_beta', label: 'Beta', format: 'percent' },
   { key: 'frac_coil', label: 'Coil', format: 'percent' },
+  { key: 'num_pores', label: 'Pores', format: 'int' },
+  { key: 'largest_pore_volume_a3', label: 'Pore vol.', format: 'float0' },
+  { key: 'largest_pore_length_a', label: 'Pore len.', format: 'float1' },
+  { key: 'largest_pore_min_diameter_a', label: 'Pore d-min', format: 'float1' },
+  { key: 'largest_pore_max_diameter_a', label: 'Pore d-max', format: 'float1' },
   { key: 'largest_pore_circularity', label: 'Pore circ.', format: 'float2' },
   { key: 'largest_pore_uniformity', label: 'Pore unif.', format: 'float2' },
+  { key: 'num_pockets', label: 'Pockets', format: 'int' },
+  { key: 'largest_pocket_volume_a3', label: 'Pocket vol.', format: 'float0' },
+  { key: 'largest_pocket_length_a', label: 'Pocket len.', format: 'float1' },
+  { key: 'largest_pocket_min_diameter_a', label: 'Pocket d-min', format: 'float1' },
+  { key: 'largest_pocket_max_diameter_a', label: 'Pocket d-max', format: 'float1' },
   { key: 'largest_pocket_circularity', label: 'Pocket circ.', format: 'float2' },
   { key: 'largest_pocket_uniformity', label: 'Pocket unif.', format: 'float2' },
+  { key: 'num_cavities', label: 'Cavities', format: 'int' },
+  { key: 'largest_cavity_volume_a3', label: 'Cavity vol.', format: 'float0' },
+  { key: 'largest_cavity_length_a', label: 'Cavity len.', format: 'float1' },
+  { key: 'largest_cavity_min_diameter_a', label: 'Cavity d-min', format: 'float1' },
+  { key: 'largest_cavity_max_diameter_a', label: 'Cavity d-max', format: 'float1' },
+  { key: 'largest_cavity_circularity', label: 'Cavity circ.', format: 'float2' },
+  { key: 'largest_cavity_uniformity', label: 'Cavity unif.', format: 'float2' },
+  { key: 'num_hubs', label: 'Hubs', format: 'int' },
+  { key: 'largest_hub_volume_a3', label: 'Hub vol.', format: 'float0' },
+  { key: 'largest_hub_length_a', label: 'Hub len.', format: 'float1' },
+  { key: 'largest_hub_min_diameter_a', label: 'Hub d-min', format: 'float1' },
+  { key: 'largest_hub_max_diameter_a', label: 'Hub d-max', format: 'float1' },
+  { key: 'largest_hub_circularity', label: 'Hub circ.', format: 'float2' },
+  { key: 'largest_hub_uniformity', label: 'Hub unif.', format: 'float2' },
 ];
 
 const state = {
@@ -200,6 +221,8 @@ function getVisibleMetricKeys() {
 function formatMetricValue(value, format) {
   if (format === 'int') return prettyNumber(value, 0);
   if (format === 'percent') return prettyPercent(value);
+  if (format === 'float0') return prettyNumber(value, 0);
+  if (format === 'float1') return prettyNumber(value, 1);
   if (format === 'float2') return prettyNumber(value, 2);
   return prettyNumber(value, 1);
 }
