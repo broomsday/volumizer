@@ -166,6 +166,11 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         help="Overwrite existing downloaded/output files.",
     )
     write_group.add_argument(
+        "--reannotate",
+        action="store_true",
+        help="Re-run annotation on existing downloads without re-downloading.",
+    )
+    write_group.add_argument(
         "--resume",
         action="store_true",
         help="Skip already completed structures (by checkpoint and/or output files).",
@@ -2029,7 +2034,7 @@ def _analyze_structures(
                         output_dir=output_dir,
                         min_voxels=int(args.min_voxels),
                         min_volume=args.min_volume,
-                        overwrite=bool(args.overwrite),
+                        overwrite=bool(args.overwrite or args.reannotate),
                         assembly_policy=str(args.assembly_policy),
                     )
                 )
@@ -2092,7 +2097,7 @@ def _analyze_structures(
                 output_dir=output_dir,
                 min_voxels=int(args.min_voxels),
                 min_volume=args.min_volume,
-                overwrite=bool(args.overwrite),
+                overwrite=bool(args.overwrite or args.reannotate),
                 assembly_policy=str(args.assembly_policy),
             ): (index, source_label, input_path)
             for index, (source_label, input_path) in enumerate(pending_structures)
@@ -2306,6 +2311,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "retries": args.retries,
             "retry_delay": args.retry_delay,
             "overwrite": args.overwrite,
+            "reannotate": args.reannotate,
             "resume": args.resume,
             "dry_run": args.dry_run,
         },
