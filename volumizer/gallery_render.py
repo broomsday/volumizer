@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 from typing import Any, Callable
 
 
@@ -191,8 +192,10 @@ def render_gallery_thumbnails(
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(query, params).fetchall()
+        num_rows = len(rows)
+        is_tty = sys.stderr.isatty()
 
-        for row in rows:
+        for row_index, row in enumerate(rows, start=1):
             if normalized_limit is not None and total_jobs >= normalized_limit:
                 break
 
@@ -221,6 +224,13 @@ def render_gallery_thumbnails(
             )
             if not should_render:
                 skipped_jobs += 1
+                if is_tty:
+                    pct = row_index * 100 // num_rows
+                    print(
+                        f"\r  [{row_index}/{num_rows}] {pct}%  "
+                        f"rendered={rendered_jobs} skipped={skipped_jobs} failed={failed_jobs}",
+                        end="", file=sys.stderr, flush=True,
+                    )
                 continue
 
             total_jobs += 1
@@ -241,6 +251,13 @@ def render_gallery_thumbnails(
                         structure_id,
                     ),
                 )
+                if is_tty:
+                    pct = row_index * 100 // num_rows
+                    print(
+                        f"\r  [{row_index}/{num_rows}] {pct}%  "
+                        f"rendered={rendered_jobs} skipped={skipped_jobs} failed={failed_jobs}",
+                        end="", file=sys.stderr, flush=True,
+                    )
                 continue
 
             try:
@@ -303,8 +320,18 @@ def render_gallery_thumbnails(
                         structure_id,
                     ),
                 )
+            if is_tty:
+                pct = row_index * 100 // num_rows
+                print(
+                    f"\r  [{row_index}/{num_rows}] {pct}%  "
+                    f"rendered={rendered_jobs} skipped={skipped_jobs} failed={failed_jobs}",
+                    end="", file=sys.stderr, flush=True,
+                )
 
         connection.commit()
+
+    if is_tty and num_rows > 0:
+        print(file=sys.stderr)
 
     return {
         "db": str(db_path),
