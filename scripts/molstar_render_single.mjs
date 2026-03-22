@@ -100,6 +100,78 @@ async function readStructure(structurePath, format) {
   };
 }
 
+/**
+ * Clip a text CIF file by removing atom_site records on the camera side
+ * of the clipping plane (coordinate > 0 along the given axis).
+ *
+ * @param {string} cifText  Full CIF file text
+ * @param {number} axisIdx  0 = x, 1 = y, 2 = z
+ * @returns {string} CIF text with atoms filtered
+ */
+function clipCifByAxis(cifText, axisIdx) {
+  const axisField = ['Cartn_x', 'Cartn_y', 'Cartn_z'][axisIdx];
+  const lines = cifText.split('\n');
+  const result = [];
+  let inAtomSite = false;
+  let readingFields = false;
+  const fieldNames = [];
+  let coordColIdx = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (inAtomSite) {
+      if (readingFields && trimmed.startsWith('_atom_site.')) {
+        const fieldName = trimmed.split(/\s+/)[0].replace('_atom_site.', '');
+        fieldNames.push(fieldName);
+        if (fieldName === axisField) {
+          coordColIdx = fieldNames.length - 1;
+        }
+        result.push(line);
+      } else if (readingFields) {
+        // Transition from field names to data rows
+        readingFields = false;
+        // Fall through to data handling below
+      }
+
+      if (!readingFields) {
+        if (
+          trimmed === '' ||
+          trimmed.startsWith('#') ||
+          trimmed.startsWith('_') ||
+          trimmed === 'loop_'
+        ) {
+          // End of atom_site data block
+          inAtomSite = false;
+          result.push(line);
+        } else if (coordColIdx >= 0) {
+          const cols = trimmed.split(/\s+/);
+          const coord = parseFloat(cols[coordColIdx]);
+          if (!isNaN(coord) && coord <= 0) {
+            result.push(line);
+          }
+          // Skip atoms with coord > 0 (the camera-facing half)
+        } else {
+          result.push(line);
+        }
+      }
+    } else {
+      if (trimmed === 'loop_') {
+        const nextLine = (lines[i + 1] || '').trim();
+        if (nextLine.startsWith('_atom_site.')) {
+          inAtomSite = true;
+          readingFields = true;
+          fieldNames.length = 0;
+          coordColIdx = -1;
+        }
+      }
+      result.push(line);
+    }
+  }
+  return result.join('\n');
+}
+
 async function setupViewer(page, width, height, backgroundHex) {
   const molstarJsUrl = process.env.MOLSTAR_VIEWER_JS_URL || 'https://unpkg.com/molstar/build/viewer/molstar.js';
   const molstarCssUrl = process.env.MOLSTAR_VIEWER_CSS_URL || 'https://unpkg.com/molstar/build/viewer/molstar.css';
@@ -159,6 +231,20 @@ async function waitForViewerReady(page, timeoutMs = 15000) {
     },
     { timeout: timeoutMs },
   );
+}
+
+async function clearViewer(page) {
+  await page.evaluate(async () => {
+    const viewer = globalThis.__volumizerViewer;
+    if (!viewer) return;
+    const state = viewer.plugin.state.data;
+    const root = state.tree.root.ref;
+    const build = state.build();
+    for (const child of state.tree.children.get(root)?.toArray() || []) {
+      build.delete(child);
+    }
+    await build.commit();
+  });
 }
 
 async function loadStructureIntoViewer(page, structureData) {
@@ -291,17 +377,28 @@ async function renderThumbnails(args) {
     const page = await context.newPage();
 
     await setupViewer(page, args.width, args.height, style.background_hex || '#ffffff');
-    await loadStructureIntoViewer(page, structureData);
 
     try {
       await waitForViewerReady(page, 15000);
     } catch {
-      // Continue and still emit screenshots; camera orientation may not be available.
+      // Continue; camera orientation may not be available.
     }
 
     const axes = ['x', 'y', 'z'];
+    const axisCoordIndex = { x: 0, y: 1, z: 2 };
+
     for (const axis of axes) {
+      // Clip the CIF data: remove atoms on the camera side of the center plane
+      let axisData = structureData;
+      if (!structureData.isBinary && structureData.textData) {
+        const clippedText = clipCifByAxis(structureData.textData, axisCoordIndex[axis]);
+        axisData = { ...structureData, textData: clippedText };
+      }
+
+      await clearViewer(page);
+      await loadStructureIntoViewer(page, axisData);
       await setAxisView(page, axis);
+
       const outPath = path.join(outDir, `${axis}.png`);
       await page.screenshot({ path: outPath, type: 'png' });
     }
