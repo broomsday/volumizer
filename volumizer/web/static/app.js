@@ -375,7 +375,8 @@ function renderDetail(detail, viewerData) {
   );
 
   elements.detailVolumes.innerHTML = '';
-  for (const volume of detail.volumes) {
+  const sortedVolumes = [...detail.volumes].sort((a, b) => (b.volume_a3 ?? 0) - (a.volume_a3 ?? 0));
+  for (const volume of sortedVolumes) {
     const row = document.createElement('tr');
     row.innerHTML = [
       `<td>${volume.kind}</td>`,
