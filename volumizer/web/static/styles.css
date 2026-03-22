@@ -203,6 +203,51 @@ a {
   accent-color: var(--brand);
 }
 
+.preset-bar {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.preset-select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(32, 28, 21, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0.5rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.preset-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(25, 75, 72, 0.08);
+  color: var(--brand);
+  transition: transform 120ms ease, background 120ms ease;
+  white-space: nowrap;
+}
+
+.preset-button:hover {
+  transform: translateY(-1px);
+  background: rgba(25, 75, 72, 0.14);
+}
+
+.preset-button-danger {
+  color: #9d3e3e;
+  background: rgba(157, 62, 62, 0.08);
+}
+
+.preset-button-danger:hover {
+  background: rgba(157, 62, 62, 0.14);
+}
+
 .filters-form {
   display: grid;
   gap: 0.9rem;

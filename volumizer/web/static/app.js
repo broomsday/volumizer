@@ -35,6 +35,9 @@ const CARD_METRICS = [
   { key: 'largest_hub_uniformity', label: 'Hub unif.', format: 'float2' },
 ];
 
+const FILTER_PRESETS_KEY = 'volumizer_filter_presets';
+const DISPLAY_PRESETS_KEY = 'volumizer_display_presets';
+
 const state = {
   currentOffset: 0,
   totalCount: 0,
@@ -66,6 +69,14 @@ const elements = {
   viewerHost: document.getElementById('viewer-host'),
   displayPropsToggle: document.getElementById('display-props-toggle'),
   displayPropsPopup: document.getElementById('display-props-popup'),
+  filterPresetSelect: document.getElementById('filter-preset-select'),
+  filterPresetLoad: document.getElementById('filter-preset-load'),
+  filterPresetSave: document.getElementById('filter-preset-save'),
+  filterPresetDelete: document.getElementById('filter-preset-delete'),
+  displayPresetSelect: document.getElementById('display-preset-select'),
+  displayPresetLoad: document.getElementById('display-preset-load'),
+  displayPresetSave: document.getElementById('display-preset-save'),
+  displayPresetDelete: document.getElementById('display-preset-delete'),
 };
 
 function numericInputValue(name) {
@@ -443,6 +454,142 @@ function closeDetail() {
   }
 }
 
+/* ---- Presets ---- */
+
+function loadPresetsMap(storageKey) {
+  try {
+    return JSON.parse(localStorage.getItem(storageKey)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function savePresetsMap(storageKey, map) {
+  localStorage.setItem(storageKey, JSON.stringify(map));
+}
+
+function populatePresetSelect(selectEl, storageKey) {
+  const map = loadPresetsMap(storageKey);
+  const previousValue = selectEl.value;
+  selectEl.innerHTML = '<option value="">Presets\u2026</option>';
+  for (const name of Object.keys(map).sort()) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    selectEl.append(opt);
+  }
+  if ([...selectEl.options].some((o) => o.value === previousValue)) {
+    selectEl.value = previousValue;
+  }
+}
+
+function captureFilterState() {
+  const data = {};
+  for (const el of elements.filtersForm.elements) {
+    if (el.name) data[el.name] = el.value;
+  }
+  return data;
+}
+
+function applyFilterState(data) {
+  for (const el of elements.filtersForm.elements) {
+    if (el.name && data[el.name] !== undefined) {
+      el.value = data[el.name];
+    }
+  }
+  state.currentLimit = Number(elements.limitSelect.value);
+  state.currentOffset = 0;
+}
+
+function captureDisplayState() {
+  const keys = [];
+  for (const cb of elements.displayPropsPopup.querySelectorAll('input[data-metric]')) {
+    if (cb.checked) keys.push(cb.dataset.metric);
+  }
+  return keys;
+}
+
+function applyDisplayState(keys) {
+  const set = new Set(keys);
+  for (const cb of elements.displayPropsPopup.querySelectorAll('input[data-metric]')) {
+    cb.checked = set.has(cb.dataset.metric);
+  }
+}
+
+function promptPresetName(action) {
+  const name = prompt(`Enter a name to ${action}:`);
+  if (!name || !name.trim()) return null;
+  return name.trim();
+}
+
+function wirePresets() {
+  // Filter presets
+  populatePresetSelect(elements.filterPresetSelect, FILTER_PRESETS_KEY);
+
+  elements.filterPresetSave.addEventListener('click', () => {
+    const name = promptPresetName('save this filter preset');
+    if (!name) return;
+    const map = loadPresetsMap(FILTER_PRESETS_KEY);
+    if (map[name] && !confirm(`Overwrite existing preset "${name}"?`)) return;
+    map[name] = captureFilterState();
+    savePresetsMap(FILTER_PRESETS_KEY, map);
+    populatePresetSelect(elements.filterPresetSelect, FILTER_PRESETS_KEY);
+    elements.filterPresetSelect.value = name;
+  });
+
+  elements.filterPresetLoad.addEventListener('click', () => {
+    const name = elements.filterPresetSelect.value;
+    if (!name) return;
+    const map = loadPresetsMap(FILTER_PRESETS_KEY);
+    if (!map[name]) return;
+    applyFilterState(map[name]);
+    search();
+  });
+
+  elements.filterPresetDelete.addEventListener('click', () => {
+    const name = elements.filterPresetSelect.value;
+    if (!name) return;
+    if (!confirm(`Delete preset "${name}"?`)) return;
+    const map = loadPresetsMap(FILTER_PRESETS_KEY);
+    delete map[name];
+    savePresetsMap(FILTER_PRESETS_KEY, map);
+    populatePresetSelect(elements.filterPresetSelect, FILTER_PRESETS_KEY);
+  });
+
+  // Display property presets
+  populatePresetSelect(elements.displayPresetSelect, DISPLAY_PRESETS_KEY);
+
+  elements.displayPresetSave.addEventListener('click', () => {
+    const name = promptPresetName('save this display preset');
+    if (!name) return;
+    const map = loadPresetsMap(DISPLAY_PRESETS_KEY);
+    if (map[name] && !confirm(`Overwrite existing preset "${name}"?`)) return;
+    map[name] = captureDisplayState();
+    savePresetsMap(DISPLAY_PRESETS_KEY, map);
+    populatePresetSelect(elements.displayPresetSelect, DISPLAY_PRESETS_KEY);
+    elements.displayPresetSelect.value = name;
+  });
+
+  elements.displayPresetLoad.addEventListener('click', () => {
+    const name = elements.displayPresetSelect.value;
+    if (!name) return;
+    const map = loadPresetsMap(DISPLAY_PRESETS_KEY);
+    if (!map[name]) return;
+    applyDisplayState(map[name]);
+    search();
+  });
+
+  elements.displayPresetDelete.addEventListener('click', () => {
+    const name = elements.displayPresetSelect.value;
+    if (!name) return;
+    if (!confirm(`Delete preset "${name}"?`)) return;
+    const map = loadPresetsMap(DISPLAY_PRESETS_KEY);
+    delete map[name];
+    savePresetsMap(DISPLAY_PRESETS_KEY, map);
+    populatePresetSelect(elements.displayPresetSelect, DISPLAY_PRESETS_KEY);
+  });
+}
+
 function wireEvents() {
   elements.filtersForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -494,6 +641,7 @@ function wireEvents() {
 
 async function init() {
   wireEvents();
+  wirePresets();
   await loadHealth();
   await loadRuns();
   await search();

@@ -33,6 +33,15 @@
           <p class="panel-kicker section-title">Filters</p>
         </div>
 
+        <div class="preset-bar" id="filter-preset-bar">
+          <select id="filter-preset-select" class="preset-select">
+            <option value="">Presets…</option>
+          </select>
+          <button type="button" class="preset-button" id="filter-preset-load" title="Load selected preset">Load</button>
+          <button type="button" class="preset-button" id="filter-preset-save" title="Save current filters as a preset">Save</button>
+          <button type="button" class="preset-button preset-button-danger" id="filter-preset-delete" title="Delete selected preset">Del</button>
+        </div>
+
         <form id="filters-form" class="filters-form">
           <label>
             <span>Run</span>
@@ -341,6 +350,14 @@
         </div>
 
         <div id="display-props-popup" class="display-props-popup" hidden>
+          <div class="preset-bar" id="display-preset-bar">
+            <select id="display-preset-select" class="preset-select">
+              <option value="">Presets…</option>
+            </select>
+            <button type="button" class="preset-button" id="display-preset-load" title="Load selected preset">Load</button>
+            <button type="button" class="preset-button" id="display-preset-save" title="Save current display properties as a preset">Save</button>
+            <button type="button" class="preset-button preset-button-danger" id="display-preset-delete" title="Delete selected preset">Del</button>
+          </div>
           <fieldset class="display-props-group">
             <legend>Protein</legend>
             <div class="display-props-grid">
