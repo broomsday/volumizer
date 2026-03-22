@@ -184,6 +184,47 @@ async function loadStructureIntoViewer(page, structureData) {
     } finally {
       URL.revokeObjectURL(blobUrl);
     }
+
+    // Render volumes as gaussian surface instead of ball-and-stick
+    try {
+      const plugin = viewer.plugin;
+      if (plugin && plugin.managers && plugin.managers.structure) {
+        const structures = plugin.managers.structure.hierarchy.current.structures;
+        if (structures && structures.length > 0) {
+          const structRef = structures[0];
+
+          const build = plugin.state.data.build();
+          for (const comp of structRef.components) {
+            build.delete(comp.cell.transform.ref);
+          }
+          await build.commit();
+
+          const polymer = await plugin.builders.structure.tryCreateComponentStatic(
+            structRef.cell, 'polymer', { label: 'Protein' },
+          );
+          if (polymer) {
+            await plugin.builders.structure.representation.addRepresentation(
+              polymer, { type: 'cartoon' },
+            );
+          }
+
+          for (const componentType of ['ligand', 'non-standard']) {
+            const comp = await plugin.builders.structure.tryCreateComponentStatic(
+              structRef.cell, componentType, { label: 'Volumes' },
+            );
+            if (comp) {
+              await plugin.builders.structure.representation.addRepresentation(
+                comp, { type: 'gaussian-surface' },
+              );
+            }
+          }
+
+          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        }
+      }
+    } catch (styleError) {
+      console.warn('Volume surface styling failed:', styleError);
+    }
   }, structureData);
 }
 

@@ -428,6 +428,55 @@ async function mountViewer(viewerData) {
     viewerData.structure_format,
     viewerData.structure_format === 'bcif',
   );
+  await applyVolumeStyle(viewer);
+}
+
+async function applyVolumeStyle(viewer) {
+  try {
+    const plugin = viewer.plugin;
+    if (!plugin || !plugin.managers || !plugin.managers.structure) return;
+
+    const structures = plugin.managers.structure.hierarchy.current.structures;
+    if (!structures || structures.length === 0) return;
+
+    const structRef = structures[0];
+
+    // Remove all default components and their representations
+    const build = plugin.state.data.build();
+    for (const comp of structRef.components) {
+      build.delete(comp.cell.transform.ref);
+    }
+    await build.commit();
+
+    // Add protein with cartoon representation
+    const polymer = await plugin.builders.structure.tryCreateComponentStatic(
+      structRef.cell, 'polymer', { label: 'Protein' },
+    );
+    if (polymer) {
+      await plugin.builders.structure.representation.addRepresentation(
+        polymer, { type: 'cartoon' },
+      );
+    }
+
+    // Add volumes with gaussian-surface representation.
+    // Volumes whose chain IDs don't collide with protein chains get their own
+    // CIF entity (type=non-polymer) and are matched by 'ligand'.  Volumes that
+    // share a chain/entity with protein atoms are classified as polymer but
+    // have non-standard residue names, so 'non-standard' catches those.
+    for (const componentType of ['ligand', 'non-standard']) {
+      const comp = await plugin.builders.structure.tryCreateComponentStatic(
+        structRef.cell, componentType, { label: 'Volumes' },
+      );
+      if (comp) {
+        await plugin.builders.structure.representation.addRepresentation(
+          comp, { type: 'gaussian-surface' },
+        );
+      }
+    }
+  } catch (error) {
+    // Fall back to default representations if styling fails
+    console.warn('Volume surface styling failed:', error);
+  }
 }
 
 async function openDetail(structureId) {
