@@ -293,8 +293,46 @@ class TestDeduplicateAssemblyChainIds:
         pdb._deduplicate_assembly_chain_ids(atoms)
         assert list(atoms.chain_id) == original_ids
 
+    def _make_single_chain_copies(self, atoms_per_copy: int, num_copies: int) -> bts.AtomArray:
+        """Build an AtomArray simulating multiple copies of a single chain."""
+        total = atoms_per_copy * num_copies
+        atoms = bts.AtomArray(total)
+        atoms.chain_id = np.full(total, "A", dtype="U4")
+        atoms.coord = np.zeros((total, 3), dtype=np.float32)
+        atoms.atom_name = np.full(total, "CA", dtype="U4")
+        atoms.res_name = np.full(total, "ALA", dtype="U4")
+        atoms.element = np.full(total, "C", dtype="U2")
+        # Each copy restarts res_id from 1
+        res_ids = np.tile(np.arange(1, atoms_per_copy + 1), num_copies)
+        atoms.res_id = res_ids.astype(np.int32)
+        return atoms
+
+    def test_single_chain_copies_get_unique_ids(self):
+        # Simulate 6 copies of a single chain (like 3R1K pattern)
+        atoms = self._make_single_chain_copies(atoms_per_copy=100, num_copies=6)
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        chain_ids = list(result.chain_id)
+        assert len(set(chain_ids)) == 6
+        # Copy 0 keeps original chain ID
+        assert chain_ids[0] == "A"
+        # Other copies get new IDs
+        assert len(set(chain_ids[100:])) == 5
+
+    def test_single_chain_copies_8x(self):
+        # Simulate 8 copies of a single chain (like 6L7D pattern)
+        atoms = self._make_single_chain_copies(atoms_per_copy=50, num_copies=8)
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        assert len(set(result.chain_id)) == 8
+
+    def test_single_chain_no_copies_is_noop(self):
+        atoms = self._make_single_chain_copies(atoms_per_copy=100, num_copies=1)
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        assert list(result.chain_id) == ["A"] * 100
+
 
 RCSB_2ZBT = Path("data/runs/rcsb70/downloads/2ZBT.cif")
+RCSB_6L7D = Path("data/runs/rcsb70/downloads/6L7D.cif")
+RCSB_3R1K = Path("data/runs/rcsb70/downloads/3R1K.cif")
 
 
 @pytest.mark.skipif(not RCSB_2ZBT.exists(), reason="2ZBT test data not available")
@@ -316,3 +354,39 @@ class TestBiologicalAssembly2ZBT:
         cleaned = pdb.clean_structure(structure)
         chain_ids = set(cleaned.chain_id)
         assert len(chain_ids) == 4
+
+
+@pytest.mark.skipif(not RCSB_6L7D.exists(), reason="6L7D test data not available")
+class TestBiologicalAssembly6L7D:
+    """6L7D has 1 protein chain in the asymmetric unit and 8 symmetry copies."""
+
+    def test_biological_assembly_has_8_unique_chains(self):
+        structure = pdb.load_structure(RCSB_6L7D, assembly_policy="biological")
+        cleaned = pdb.clean_structure(structure)
+        chain_ids = set(cleaned.chain_id)
+        assert len(chain_ids) == 8
+
+    def test_biological_assembly_has_8x_asymmetric_atoms(self):
+        bio = pdb.load_structure(RCSB_6L7D, assembly_policy="biological")
+        asym = pdb.load_structure(RCSB_6L7D, assembly_policy="asymmetric")
+        bio_protein = bio[bts.filter_amino_acids(bio)]
+        asym_protein = asym[bts.filter_amino_acids(asym)]
+        assert len(bio_protein) == 8 * len(asym_protein)
+
+
+@pytest.mark.skipif(not RCSB_3R1K.exists(), reason="3R1K test data not available")
+class TestBiologicalAssembly3R1K:
+    """3R1K has 1 protein chain in the asymmetric unit and 6 symmetry copies."""
+
+    def test_biological_assembly_has_6_unique_chains(self):
+        structure = pdb.load_structure(RCSB_3R1K, assembly_policy="biological")
+        cleaned = pdb.clean_structure(structure)
+        chain_ids = set(cleaned.chain_id)
+        assert len(chain_ids) == 6
+
+    def test_biological_assembly_has_6x_asymmetric_atoms(self):
+        bio = pdb.load_structure(RCSB_3R1K, assembly_policy="biological")
+        asym = pdb.load_structure(RCSB_3R1K, assembly_policy="asymmetric")
+        bio_protein = bio[bts.filter_amino_acids(bio)]
+        asym_protein = asym[bts.filter_amino_acids(asym)]
+        assert len(bio_protein) == 6 * len(asym_protein)

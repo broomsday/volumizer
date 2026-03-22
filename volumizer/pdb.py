@@ -233,7 +233,26 @@ def _deduplicate_assembly_chain_ids(structure: bts.AtomArray) -> bts.AtomArray:
 
     num_copies = copy_index + 1
     if num_copies <= 1:
-        return structure
+        # Chain-block detection failed — happens when the asymmetric unit has
+        # only one chain so all copies share a single contiguous chain ID.
+        # Fall back to splitting by residue-ID resets (res_id jumping backwards
+        # by more than a small gap marks a copy boundary).
+        if len(blocks) == 1:
+            block_id, block_start, block_end = blocks[0]
+            res_ids = structure.res_id[block_start:block_end]
+            drops = np.where(np.diff(res_ids) < -10)[0]
+            if len(drops) > 0:
+                # Re-build blocks and block_copy from the detected boundaries
+                split_points = [block_start] + [block_start + int(d) + 1 for d in drops] + [block_end]
+                blocks = [
+                    (block_id, split_points[i], split_points[i + 1])
+                    for i in range(len(split_points) - 1)
+                ]
+                block_copy = list(range(len(blocks)))
+                num_copies = len(blocks)
+
+        if num_copies <= 1:
+            return structure
 
     # Build mapping: (original_chain_id, copy_index) -> new_chain_id
     original_ids_ordered: list[str] = []
