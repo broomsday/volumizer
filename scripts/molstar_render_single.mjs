@@ -271,7 +271,7 @@ async function loadStructureIntoViewer(page, structureData) {
       URL.revokeObjectURL(blobUrl);
     }
 
-    // Render volumes as gaussian surface instead of ball-and-stick
+    // Apply colored volume and protein styling
     try {
       const plugin = viewer.plugin;
       if (plugin && plugin.managers && plugin.managers.structure) {
@@ -285,23 +285,68 @@ async function loadStructureIntoViewer(page, structureData) {
           }
           await build.commit();
 
+          // Protein in green/grey shades
+          const proteinPalette = [
+            0x2E8B57, 0x808080, 0x3CB371, 0xA0A0A0,
+            0x228B22, 0x6B6B6B, 0x006400, 0xB5B5B5,
+            0x4CAF50, 0x959595, 0x66BB6A, 0x7A7A7A,
+          ];
           const polymer = await plugin.builders.structure.tryCreateComponentStatic(
             structRef.cell, 'polymer', { label: 'Protein' },
           );
           if (polymer) {
             await plugin.builders.structure.representation.addRepresentation(
-              polymer, { type: 'cartoon' },
+              polymer, {
+                type: 'cartoon',
+                color: 'chain-id',
+                colorParams: {
+                  palette: {
+                    name: 'colors',
+                    params: {
+                      list: { kind: 'set', colors: proteinPalette },
+                    },
+                  },
+                },
+              },
             );
           }
 
-          for (const componentType of ['ligand', 'non-standard']) {
-            const comp = await plugin.builders.structure.tryCreateComponentStatic(
-              structRef.cell, componentType, { label: 'Volumes' },
-            );
-            if (comp) {
-              await plugin.builders.structure.representation.addRepresentation(
-                comp, { type: 'gaussian-surface' },
+          // Per-type volume components with distinct colors
+          const volumeTypes = [
+            { id: 'HUB', color: 0xCC3333, label: 'Hubs' },
+            { id: 'POR', color: 0xDD8833, label: 'Pores' },
+            { id: 'POK', color: 0x3366CC, label: 'Pockets' },
+            { id: 'CAV', color: 0xCC33CC, label: 'Cavities' },
+          ];
+
+          for (const vt of volumeTypes) {
+            try {
+              const comp = await plugin.builders.structure.tryCreateComponent(
+                structRef.cell,
+                {
+                  type: {
+                    name: 'script',
+                    params: {
+                      language: 'mol-script',
+                      expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${vt.id}))`,
+                    },
+                  },
+                  nullIfEmpty: true,
+                  label: vt.label,
+                },
+                `volume-${vt.id.toLowerCase()}`,
               );
+              if (comp) {
+                await plugin.builders.structure.representation.addRepresentation(
+                  comp, {
+                    type: 'gaussian-surface',
+                    color: 'uniform',
+                    colorParams: { value: vt.color },
+                  },
+                );
+              }
+            } catch (err) {
+              console.warn(`Failed to create ${vt.id} volume component:`, err);
             }
           }
 

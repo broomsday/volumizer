@@ -38,6 +38,36 @@ const CARD_METRICS = [
 const FILTER_PRESETS_KEY = 'volumizer_filter_presets';
 const DISPLAY_PRESETS_KEY = 'volumizer_display_presets';
 
+const VOLUME_COLORS = {
+  HUB: 0xCC3333,  // red
+  POR: 0xDD8833,  // orange
+  POK: 0x3366CC,  // blue
+  CAV: 0xCC33CC,  // magenta
+};
+
+const VOLUME_LABELS = { HUB: 'Hubs', POR: 'Pores', POK: 'Pockets', CAV: 'Cavities' };
+
+const PROTEIN_PALETTE = [
+  0x2E8B57, 0x808080, 0x3CB371, 0xA0A0A0,
+  0x228B22, 0x6B6B6B, 0x006400, 0xB5B5B5,
+  0x4CAF50, 0x959595, 0x66BB6A, 0x7A7A7A,
+];
+
+// MolScript text expression selecting atoms by label_comp_id
+function compIdScript(compId) {
+  return {
+    type: {
+      name: 'script',
+      params: {
+        language: 'mol-script',
+        expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${compId}))`,
+      },
+    },
+    nullIfEmpty: true,
+    label: VOLUME_LABELS[compId] || compId,
+  };
+}
+
 const state = {
   currentOffset: 0,
   totalCount: 0,
@@ -448,33 +478,49 @@ async function applyVolumeStyle(viewer) {
     }
     await build.commit();
 
-    // Add protein with cartoon representation
+    // Add protein with cartoon representation in green/grey shades
     const polymer = await plugin.builders.structure.tryCreateComponentStatic(
       structRef.cell, 'polymer', { label: 'Protein' },
     );
     if (polymer) {
       await plugin.builders.structure.representation.addRepresentation(
-        polymer, { type: 'cartoon' },
+        polymer, {
+          type: 'cartoon',
+          color: 'chain-id',
+          colorParams: {
+            palette: {
+              name: 'colors',
+              params: {
+                list: { kind: 'set', colors: PROTEIN_PALETTE },
+              },
+            },
+          },
+        },
       );
     }
 
-    // Add volumes with gaussian-surface representation.
-    // Volumes whose chain IDs don't collide with protein chains get their own
-    // CIF entity (type=non-polymer) and are matched by 'ligand'.  Volumes that
-    // share a chain/entity with protein atoms are classified as polymer but
-    // have non-standard residue names, so 'non-standard' catches those.
-    for (const componentType of ['ligand', 'non-standard']) {
-      const comp = await plugin.builders.structure.tryCreateComponentStatic(
-        structRef.cell, componentType, { label: 'Volumes' },
-      );
-      if (comp) {
-        await plugin.builders.structure.representation.addRepresentation(
-          comp, { type: 'gaussian-surface' },
+    // Add per-type volume components with distinct colors
+    for (const [compId, color] of Object.entries(VOLUME_COLORS)) {
+      try {
+        const comp = await plugin.builders.structure.tryCreateComponent(
+          structRef.cell,
+          compIdScript(compId),
+          `volume-${compId.toLowerCase()}`,
         );
+        if (comp) {
+          await plugin.builders.structure.representation.addRepresentation(
+            comp, {
+              type: 'gaussian-surface',
+              color: 'uniform',
+              colorParams: { value: color },
+            },
+          );
+        }
+      } catch (err) {
+        console.warn(`Failed to create ${compId} volume component:`, err);
       }
     }
   } catch (error) {
-    // Fall back to default representations if styling fails
     console.warn('Volume surface styling failed:', error);
   }
 }
