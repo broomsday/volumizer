@@ -948,7 +948,7 @@ def _load_metadata_cache(cache_path: Path | None) -> tuple[dict[str, dict], dict
 
     try:
         raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return {}, {}
 
     if not isinstance(raw_payload, dict):
