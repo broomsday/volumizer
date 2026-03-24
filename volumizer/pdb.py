@@ -409,6 +409,48 @@ def load_structure(
         return structure
 
 
+_VOLUME_RES_NAMES = frozenset(VOXEL_TYPE_CHAIN_MAP.keys())
+
+
+def _add_entity_table(
+    pdbx_file: pdbx.PDBxFile,
+    data_block: str = "structure",
+) -> None:
+    """
+    Write an ``_entity`` category so that Mol* can distinguish polymer
+    chains from volume pseudo-atoms.  Without this table Mol* must guess
+    entity types, and structures starting with modified residues (e.g.
+    FME) are misclassified as non-polymer.
+    """
+    try:
+        atom_site = pdbx_file.get_category("atom_site", block=data_block)
+    except KeyError:
+        return
+
+    if "label_entity_id" not in atom_site or "label_comp_id" not in atom_site:
+        return
+
+    entity_ids = np.asarray(atom_site["label_entity_id"])
+    comp_ids = np.asarray(atom_site["label_comp_id"])
+
+    unique_eids = sorted(set(entity_ids), key=lambda x: (int(x) if x.isdigit() else 0, x))
+    entity_types = []
+
+    for eid in unique_eids:
+        names = set(comp_ids[entity_ids == eid])
+        # If any residue is NOT a volume pseudo-atom → polymer
+        if names - _VOLUME_RES_NAMES:
+            entity_types.append("polymer")
+        else:
+            entity_types.append("non-polymer")
+
+    pdbx_file.set_category(
+        "entity",
+        {"id": np.array(unique_eids), "type": np.array(entity_types)},
+        block=data_block,
+    )
+
+
 def save_structure(structure: bts.AtomArray, output: Path | str) -> None:
     """
     Save a structure to PDB or CIF based on file suffix.
@@ -425,6 +467,7 @@ def save_structure(structure: bts.AtomArray, output: Path | str) -> None:
     if suffix in {".cif", ".mmcif"}:
         pdbx_file = pdbx.PDBxFile()
         pdbx.set_structure(pdbx_file, structure, data_block="structure")
+        _add_entity_table(pdbx_file, data_block="structure")
         pdbx_file.write(output_path)
         return
 

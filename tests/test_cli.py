@@ -47,6 +47,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "retries": 0,
         "retry_delay": 0.0,
         "overwrite": False,
+        "reannotate": False,
         "resume": False,
         "dry_run": False,
         "fail_fast": False,

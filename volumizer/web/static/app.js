@@ -478,9 +478,29 @@ async function applyVolumeStyle(viewer) {
     }
     await build.commit();
 
-    // Add protein with cartoon representation in green/grey shades
-    const polymer = await plugin.builders.structure.tryCreateComponentStatic(
-      structRef.cell, 'polymer', { label: 'Protein' },
+    // Add protein with cartoon representation in green/grey shades.
+    // Use an explicit MolScript "not volume" selection instead of the
+    // built-in 'polymer' preset, because Mol* cannot infer polymer
+    // status without _entity_poly / _struct_asym tables (which biotite
+    // does not write).
+    const volumeIds = Object.keys(VOLUME_COLORS).concat(['OCC']);
+    const notVolumeExpr = volumeIds
+      .map(id => `(= atom.label_comp_id ${id})`)
+      .join(' ');
+    const polymer = await plugin.builders.structure.tryCreateComponent(
+      structRef.cell,
+      {
+        type: {
+          name: 'script',
+          params: {
+            language: 'mol-script',
+            expression: `(sel.atom.atom-groups :residue-test (not (or ${notVolumeExpr})))`,
+          },
+        },
+        nullIfEmpty: true,
+        label: 'Protein',
+      },
+      'protein',
     );
     if (polymer) {
       await plugin.builders.structure.representation.addRepresentation(

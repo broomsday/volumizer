@@ -285,14 +285,32 @@ async function loadStructureIntoViewer(page, structureData) {
           }
           await build.commit();
 
-          // Protein in green/grey shades
+          // Protein in green/grey shades — use explicit "not volume"
+          // MolScript selection instead of 'polymer' preset because
+          // biotite CIF lacks _entity_poly / _struct_asym tables.
           const proteinPalette = [
             0x2E8B57, 0x808080, 0x3CB371, 0xA0A0A0,
             0x228B22, 0x6B6B6B, 0x006400, 0xB5B5B5,
             0x4CAF50, 0x959595, 0x66BB6A, 0x7A7A7A,
           ];
-          const polymer = await plugin.builders.structure.tryCreateComponentStatic(
-            structRef.cell, 'polymer', { label: 'Protein' },
+          const volumeIds = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
+          const notVolumeExpr = volumeIds
+            .map(id => `(= atom.label_comp_id ${id})`)
+            .join(' ');
+          const polymer = await plugin.builders.structure.tryCreateComponent(
+            structRef.cell,
+            {
+              type: {
+                name: 'script',
+                params: {
+                  language: 'mol-script',
+                  expression: `(sel.atom.atom-groups :residue-test (not (or ${notVolumeExpr})))`,
+                },
+              },
+              nullIfEmpty: true,
+              label: 'Protein',
+            },
+            'protein',
           );
           if (polymer) {
             await plugin.builders.structure.representation.addRepresentation(
