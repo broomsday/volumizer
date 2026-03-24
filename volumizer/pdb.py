@@ -659,6 +659,40 @@ def volume_to_structure(
     return volume_structure
 
 
+def _build_volume_chain_map(
+    existing_chain_ids: set[str],
+) -> dict[str, str]:
+    """
+    Return a voxel-type → chain-ID mapping that avoids *existing_chain_ids*.
+
+    Falls back to the default ``VOXEL_TYPE_CHAIN_MAP`` when there is no
+    collision.  When a collision exists the next available single-character
+    ID is chosen from ``A-Z``, ``a-z``, ``0-9``.
+    """
+    candidates = (
+        [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+        + [chr(c) for c in range(ord("a"), ord("z") + 1)]
+        + [chr(c) for c in range(ord("0"), ord("9") + 1)]
+    )
+
+    used = set(existing_chain_ids)
+    chain_map: dict[str, str] = {}
+
+    for vtype, default_id in VOXEL_TYPE_CHAIN_MAP.items():
+        if default_id not in used:
+            chain_map[vtype] = default_id
+        else:
+            for cand in candidates:
+                if cand not in used:
+                    chain_map[vtype] = cand
+                    break
+            else:
+                chain_map[vtype] = default_id  # last resort
+        used.add(chain_map[vtype])
+
+    return chain_map
+
+
 def volumes_to_structure(
     voxel_grid: VoxelGrid,
     hubs: dict[int, VoxelGroup],
@@ -666,10 +700,21 @@ def volumes_to_structure(
     pockets: dict[int, VoxelGroup],
     cavities: dict[int, VoxelGroup],
     occluded: dict[int, VoxelGroup],
+    existing_chain_ids: set[str] | None = None,
 ) -> bts.AtomArray:
     """
     Convert the voxels of all volumes into a set atoms in a biotite AtomArray.
+
+    *existing_chain_ids*, when provided, is the set of chain IDs already
+    used by the protein structure.  Volume pseudo-atoms will be assigned
+    chain IDs that do not collide with these.
     """
+    chain_map = (
+        _build_volume_chain_map(existing_chain_ids)
+        if existing_chain_ids
+        else VOXEL_TYPE_CHAIN_MAP
+    )
+
     grouped_volumes = [
         ("HUB", hubs),
         ("POR", pores),
@@ -730,7 +775,7 @@ def volumes_to_structure(
         all_atom_names[cursor:next_cursor] = VOXEL_TYPE_ATOM_MAP[voxel_type]
         all_res_names[cursor:next_cursor] = voxel_type
         all_res_ids[cursor:next_cursor] = voxel_group_index
-        all_chain_ids[cursor:next_cursor] = VOXEL_TYPE_CHAIN_MAP[voxel_type]
+        all_chain_ids[cursor:next_cursor] = chain_map[voxel_type]
         all_elements[cursor:next_cursor] = VOXEL_TYPE_ELEMENT_MAP[voxel_type]
 
         cursor = next_cursor

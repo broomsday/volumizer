@@ -213,6 +213,7 @@ def annotate_structure_volumes(
         pockets,
         cavities,
         occluded,
+        existing_chain_ids=set(structure.chain_id),
     )
 
     return annotation_df, annotation_structure
