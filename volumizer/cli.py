@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version as package_version
 import json
 import os
@@ -16,13 +17,60 @@ import sys
 import time
 from typing import Sequence
 
-from volumizer import native_backend, pdb, rcsb, utils, volumizer
+from volumizer import rcsb
 
 
-DEFAULT_METADATA_CACHE_FILENAME = "entry_metadata_cache.json"
-METADATA_CACHE_FORMAT_VERSION = 2
+DEFAULT_METADATA_STORE_DIRNAME = "entry_metadata"
+METADATA_RECORD_FORMAT_VERSION = 1
 DEFAULT_CHECKPOINT_FILENAME = "run.checkpoint.json"
 MANIFEST_FORMAT_VERSION = 1
+BACKEND_ENV = "VOLUMIZER_BACKEND"
+BACKEND_AUTO = "auto"
+BACKEND_NATIVE = "native"
+BACKEND_PYTHON = "python"
+VALID_BACKENDS = (BACKEND_AUTO, BACKEND_NATIVE, BACKEND_PYTHON)
+DEFAULT_ASSEMBLY_POLICY = "biological"
+VALID_ASSEMBLY_POLICIES = (
+    "biological",
+    "asymmetric",
+    "auto",
+)
+_UNSET = object()
+
+
+@lru_cache(maxsize=1)
+def _native_backend_module():
+    from volumizer import native_backend
+
+    return native_backend
+
+
+@lru_cache(maxsize=1)
+def _pdb_module():
+    from volumizer import pdb
+
+    return pdb
+
+
+@lru_cache(maxsize=1)
+def _utils_module():
+    from volumizer import utils
+
+    return utils
+
+
+@lru_cache(maxsize=1)
+def _volumizer_module():
+    from volumizer import volumizer
+
+    return volumizer
+
+
+def _requested_backend_label() -> str:
+    backend = os.getenv(BACKEND_ENV, BACKEND_AUTO).strip().lower()
+    if backend not in VALID_BACKENDS:
+        return BACKEND_AUTO
+    return backend
 
 
 def _resolve_cli_version() -> str:
@@ -116,14 +164,14 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--backend",
-        choices=sorted(native_backend.VALID_BACKENDS),
+        choices=sorted(VALID_BACKENDS),
         default=None,
         help="Override backend mode for this run (python|auto|native).",
     )
     parser.add_argument(
         "--assembly-policy",
-        choices=pdb.VALID_ASSEMBLY_POLICIES,
-        default=pdb.DEFAULT_ASSEMBLY_POLICY,
+        choices=VALID_ASSEMBLY_POLICIES,
+        default=DEFAULT_ASSEMBLY_POLICY,
         help=(
             "Structure assembly policy for load stage: "
             "biological (default), asymmetric, or auto."
@@ -173,7 +221,7 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
     write_group.add_argument(
         "--resume",
         action="store_true",
-        help="Skip already completed structures (by checkpoint and/or output files).",
+        help="Skip structures that already have annotated CIF + JSON outputs.",
     )
 
     checkpoint_group = parser.add_mutually_exclusive_group()
@@ -310,14 +358,14 @@ def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
         type=Path,
         default=None,
         help=(
-            "Path for cluster entry-metadata cache JSON "
-            f"(default: <output-dir>/{DEFAULT_METADATA_CACHE_FILENAME})."
+            "Legacy option name for the per-entry metadata-store directory "
+            f"(default: <output-dir>/{DEFAULT_METADATA_STORE_DIRNAME})."
         ),
     )
     parser.add_argument(
         "--no-metadata-cache",
         action="store_true",
-        help="Disable metadata-cache read/write for cluster runs.",
+        help="Disable metadata-store read/write for cluster runs.",
     )
 
 
@@ -421,24 +469,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     cache_inspect_parser = cache_subparsers.add_parser(
         "inspect",
-        help="Print metadata cache summary.",
+        help="Print metadata-store summary.",
     )
     cache_inspect_parser.add_argument(
         "--metadata-cache",
         type=Path,
         required=True,
-        help="Path to metadata cache JSON.",
+        help="Path to metadata-store directory.",
     )
 
     cache_clear_negative_parser = cache_subparsers.add_parser(
         "clear-negative",
-        help="Remove negative metadata-cache entries in place.",
+        help="Remove negative metadata-store records in place.",
     )
     cache_clear_negative_parser.add_argument(
         "--metadata-cache",
         type=Path,
         required=True,
-        help="Path to metadata cache JSON.",
+        help="Path to metadata-store directory.",
     )
 
     return parser
@@ -658,10 +706,6 @@ def _resolve_manifest_structures(
             continue
 
         normalized_id = str(entry["pdb_id"])
-        if args.resume and _has_complete_outputs(output_dir, source_label):
-            structures.append((source_label, download_dir / f"{normalized_id}.cif"))
-            continue
-
         if args.dry_run:
             structures.append((source_label, download_dir / f"{normalized_id}.cif"))
             continue
@@ -762,11 +806,11 @@ def _write_cluster_manifest(
     filtered_missing_resolution: int,
     filtered_by_residue_count: int,
     metadata_errors: int,
-    cache_hits: int,
-    negative_cache_hits: int,
-    cache_misses: int,
-    cache_updates: int,
-    negative_cache_updates: int,
+    metadata_hits: int,
+    negative_metadata_hits: int,
+    metadata_misses: int,
+    metadata_updates: int,
+    negative_metadata_updates: int,
 ) -> None:
     payload = {
         "manifest_format": MANIFEST_FORMAT_VERSION,
@@ -790,11 +834,11 @@ def _write_cluster_manifest(
             "missing_resolution": filtered_missing_resolution,
             "filtered_by_residue_count": filtered_by_residue_count,
             "metadata_errors": metadata_errors,
-            "cache_hits": cache_hits,
-            "negative_cache_hits": negative_cache_hits,
-            "cache_misses": cache_misses,
-            "cache_updates": cache_updates,
-            "negative_cache_updates": negative_cache_updates,
+            "metadata_hits": metadata_hits,
+            "negative_metadata_hits": negative_metadata_hits,
+            "metadata_misses": metadata_misses,
+            "metadata_updates": metadata_updates,
+            "negative_metadata_updates": negative_metadata_updates,
         },
         "structures": [
             {
@@ -863,7 +907,7 @@ def _resolve_metadata_cache_path(
     if args.metadata_cache is not None:
         return Path(args.metadata_cache)
 
-    return output_dir / DEFAULT_METADATA_CACHE_FILENAME
+    return output_dir / DEFAULT_METADATA_STORE_DIRNAME
 
 
 def _resolve_checkpoint_path(
@@ -942,69 +986,134 @@ def _make_checkpoint_signature(
     }
 
 
-def _load_metadata_cache(cache_path: Path | None) -> tuple[dict[str, dict], dict[str, dict]]:
-    if cache_path is None or not cache_path.is_file():
-        return {}, {}
+def _metadata_record_path(metadata_store_dir: Path | None, pdb_id: str) -> Path | None:
+    if metadata_store_dir is None:
+        return None
+    normalized_id = rcsb.normalize_pdb_id(pdb_id)
+    return metadata_store_dir / f"{normalized_id}.json"
+
+
+def _parse_metadata_record_payload(payload: object) -> tuple[dict | None, dict | None]:
+    if not isinstance(payload, dict):
+        return None, None
+
+    record_kind = payload.get("kind")
+    if record_kind == "entry":
+        entry_metadata = payload.get("entry_metadata")
+        if isinstance(entry_metadata, dict):
+            return entry_metadata, None
+        return None, None
+
+    if record_kind == "negative":
+        negative_entry = payload.get("negative_entry")
+        if isinstance(negative_entry, dict):
+            return None, negative_entry
+        return None, None
+
+    if payload.get("reason") == "permanent_metadata_error":
+        return None, payload
+
+    return payload, None
+
+
+def _load_metadata_record(
+    metadata_store_dir: Path | None,
+    pdb_id: str,
+) -> tuple[dict | None, dict | None]:
+    record_path = _metadata_record_path(metadata_store_dir, pdb_id)
+    if record_path is None or not record_path.is_file():
+        return None, None
 
     try:
-        raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        return {}, {}
+        payload = json.loads(record_path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        try:
+            payload = json.loads(record_path.read_text(encoding="utf-8", errors="replace"))
+        except (json.JSONDecodeError, OSError):
+            return None, None
+    except (json.JSONDecodeError, OSError):
+        return None, None
 
-    if not isinstance(raw_payload, dict):
-        return {}, {}
+    return _parse_metadata_record_payload(payload)
 
-    if "entries" in raw_payload or "negative_entries" in raw_payload:
-        raw_entries = raw_payload.get("entries")
-        raw_negative_entries = raw_payload.get("negative_entries")
+
+def _write_metadata_record(
+    metadata_store_dir: Path | None,
+    pdb_id: str,
+    *,
+    entry_metadata: dict | None = None,
+    negative_entry: dict | None = None,
+) -> None:
+    if metadata_store_dir is None:
+        return
+    if (entry_metadata is None) == (negative_entry is None):
+        raise ValueError("Provide exactly one of entry_metadata or negative_entry.")
+
+    record_path = _metadata_record_path(metadata_store_dir, pdb_id)
+    if record_path is None:
+        return
+
+    metadata_store_dir.mkdir(parents=True, exist_ok=True)
+    normalized_id = rcsb.normalize_pdb_id(pdb_id)
+    payload = {
+        "metadata_record_format": METADATA_RECORD_FORMAT_VERSION,
+        "pdb_id": normalized_id,
+    }
+    if entry_metadata is not None:
+        payload["kind"] = "entry"
+        payload["entry_metadata"] = entry_metadata
     else:
-        raw_entries = raw_payload
-        raw_negative_entries = {}
+        payload["kind"] = "negative"
+        payload["negative_entry"] = negative_entry
 
-    if not isinstance(raw_entries, dict):
-        raw_entries = {}
-    if not isinstance(raw_negative_entries, dict):
-        raw_negative_entries = {}
+    temp_path = record_path.with_name(f".{record_path.name}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+            handle.write("\n")
+        os.replace(temp_path, record_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
 
+
+def _load_metadata_cache(cache_path: Path | None) -> tuple[dict[str, dict], dict[str, dict]]:
     entries: dict[str, dict] = {}
     negative_entries: dict[str, dict] = {}
+    if cache_path is None or not cache_path.is_dir():
+        return entries, negative_entries
 
-    for key, value in raw_entries.items():
-        if not isinstance(key, str) or not isinstance(value, dict):
-            continue
+    for record_path in sorted(cache_path.glob("*.json")):
         try:
-            normalized_key = rcsb.normalize_pdb_id(key)
+            normalized_id = rcsb.normalize_pdb_id(record_path.stem)
         except ValueError:
             continue
-        entries[normalized_key] = value
-
-    for key, value in raw_negative_entries.items():
-        if not isinstance(key, str) or not isinstance(value, dict):
-            continue
-        try:
-            normalized_key = rcsb.normalize_pdb_id(key)
-        except ValueError:
-            continue
-        negative_entries[normalized_key] = value
+        entry_metadata, negative_entry = _load_metadata_record(cache_path, normalized_id)
+        if entry_metadata is not None:
+            entries[normalized_id] = entry_metadata
+        elif negative_entry is not None:
+            negative_entries[normalized_id] = negative_entry
 
     return entries, negative_entries
 
 
-def _save_metadata_cache(
-    cache_path: Path,
-    entries: dict[str, dict],
-    negative_entries: dict[str, dict],
-) -> None:
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "cache_format": METADATA_CACHE_FORMAT_VERSION,
-        "entries": dict(sorted(entries.items())),
-        "negative_entries": dict(sorted(negative_entries.items())),
-    }
-    cache_path.write_text(
-        json.dumps(payload, indent=2),
-        encoding="utf-8",
-    )
+def _clear_negative_metadata_records(cache_path: Path | None) -> int:
+    if cache_path is None or not cache_path.is_dir():
+        return 0
+
+    removed = 0
+    for record_path in sorted(cache_path.glob("*.json")):
+        try:
+            payload = json.loads(record_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue
+        _, negative_entry = _parse_metadata_record_payload(payload)
+        if negative_entry is None:
+            continue
+        record_path.unlink(missing_ok=True)
+        removed += 1
+
+    return removed
 
 
 class _RunTracker:
@@ -1038,67 +1147,13 @@ class _RunTracker:
         }
 
         self._init_progress_stream()
-        self._load_checkpoint_if_resuming()
 
     def _init_progress_stream(self) -> None:
         if self.progress_jsonl_path is None:
             return
 
         self.progress_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.resume:
-            self.progress_jsonl_path.write_text("", encoding="utf-8")
-
-    def _load_checkpoint_if_resuming(self) -> None:
-        if not self.resume:
-            return
-        if self.checkpoint_path is None or not self.checkpoint_path.is_file():
-            return
-
-        try:
-            payload = json.loads(self.checkpoint_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-
-        if not isinstance(payload, dict):
-            return
-
-        checkpoint_signature = payload.get("signature")
-        if checkpoint_signature != self.signature:
-            print(
-                "checkpoint signature mismatch; starting with empty run-state.",
-                file=sys.stderr,
-            )
-            return
-
-        for kind in ("results", "errors", "skipped", "planned"):
-            raw_list = payload.get(kind, [])
-            if not isinstance(raw_list, list):
-                continue
-            for entry in raw_list:
-                if not isinstance(entry, dict):
-                    continue
-                source = entry.get("source")
-                if not isinstance(source, str):
-                    continue
-                self._set_entry(kind, entry)
-
-        loaded_count = (
-            len(self.results)
-            + len(self.errors)
-            + len(self.skipped)
-            + len(self.planned)
-        )
-        if loaded_count > 0:
-            print(
-                (
-                    "loaded checkpoint state: "
-                    f"results={len(self.results)}, "
-                    f"errors={len(self.errors)}, "
-                    f"skipped={len(self.skipped)}, "
-                    f"planned={len(self.planned)}"
-                ),
-                file=sys.stderr,
-            )
+        self.progress_jsonl_path.write_text("", encoding="utf-8")
 
     def _remove_source_from_kind(self, kind: str, source: str) -> None:
         if source in self._entries[kind]:
@@ -1277,18 +1332,18 @@ def _build_negative_cache_entry(
 def _fetch_metadata_for_ids(
     representative_ids: list[str],
     args: argparse.Namespace,
-    negative_entries: dict[str, dict],
-) -> tuple[dict[str, dict], int, int, list[dict]]:
+    suppress_progress: bool = False,
+) -> tuple[dict[str, dict], int, dict[str, dict], list[dict]]:
     fetched: dict[str, dict] = {}
     errors = 0
-    negative_updates = 0
+    negative_updates: dict[str, dict] = {}
     error_entries: list[dict] = []
 
     total_ids = len(representative_ids)
     if total_ids == 0:
         return fetched, errors, negative_updates, error_entries
 
-    progress_interval = float(args.progress_interval)
+    progress_interval = float(args.progress_interval) if not suppress_progress else 0
     processed = 0
     progress_started_at = time.monotonic()
     last_progress_emit = progress_started_at
@@ -1306,11 +1361,10 @@ def _fetch_metadata_for_ids(
                 errors += 1
                 is_permanent, status_code = _is_permanent_metadata_error(error)
                 if is_permanent:
-                    negative_entries[representative_id] = _build_negative_cache_entry(
+                    negative_updates[representative_id] = _build_negative_cache_entry(
                         error,
                         status_code,
                     )
-                    negative_updates += 1
                 error_entries.append(
                     {
                         "pdb_id": representative_id,
@@ -1357,7 +1411,7 @@ def _fetch_metadata_for_ids(
             started_at=progress_started_at,
             last_emitted_at=last_progress_emit,
             interval=progress_interval,
-            force=True,
+            force=not suppress_progress,
         )
         return fetched, errors, negative_updates, error_entries
 
@@ -1382,11 +1436,10 @@ def _fetch_metadata_for_ids(
                 errors += 1
                 is_permanent, status_code = _is_permanent_metadata_error(error)
                 if is_permanent:
-                    negative_entries[representative_id] = _build_negative_cache_entry(
+                    negative_updates[representative_id] = _build_negative_cache_entry(
                         error,
                         status_code,
                     )
-                    negative_updates += 1
                 error_entries.append(
                     {
                         "pdb_id": representative_id,
@@ -1433,7 +1486,7 @@ def _fetch_metadata_for_ids(
         started_at=progress_started_at,
         last_emitted_at=last_progress_emit,
         interval=progress_interval,
-        force=True,
+        force=not suppress_progress,
     )
     return fetched, errors, negative_updates, error_entries
 
@@ -1444,17 +1497,19 @@ def _download_cluster_structures(
     download_dir: Path,
     output_dir: Path,
 ) -> dict[str, Path]:
+    del output_dir
     ids_to_download = []
+    downloaded_paths: dict[str, Path] = {}
     for representative_id in selected_ids:
-        source_label = _sanitize_label(representative_id)
-        if args.resume and _has_complete_outputs(output_dir, source_label):
-            continue
-        ids_to_download.append(representative_id)
+        existing_path = download_dir / f"{representative_id}.cif"
+        if existing_path.is_file() and not args.overwrite:
+            downloaded_paths[representative_id] = existing_path
+        else:
+            ids_to_download.append(representative_id)
 
     if len(ids_to_download) == 0:
-        return {}
+        return downloaded_paths
 
-    downloaded_paths: dict[str, Path] = {}
     progress_interval = float(args.progress_interval)
     total_downloads = len(ids_to_download)
     completed = 0
@@ -1547,6 +1602,7 @@ def resolve_input_structures(
     args: argparse.Namespace,
     download_dir: Path,
     output_dir: Path,
+    metadata_cache_path: Path | None | object = _UNSET,
 ) -> list[tuple[str, Path]]:
     """
     Resolve CLI source arguments into labeled local structure paths.
@@ -1582,9 +1638,6 @@ def resolve_input_structures(
         normalized_id = rcsb.normalize_pdb_id(args.pdb_id)
         source_label = _sanitize_label(normalized_id)
 
-        if args.resume and _has_complete_outputs(output_dir, source_label):
-            return [(source_label, download_dir / f"{normalized_id}.cif")]
-
         if args.dry_run:
             return [(source_label, download_dir / f"{normalized_id}.cif")]
 
@@ -1600,9 +1653,19 @@ def resolve_input_structures(
 
     if args.cluster_identity is not None:
         cluster_method_filters = _resolve_cluster_method_filters(args)
-        metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
-        metadata_entries, negative_entries = _load_metadata_cache(metadata_cache_path)
+        if metadata_cache_path is _UNSET:
+            resolved_metadata_cache_path = _resolve_metadata_cache_path(args, output_dir)
+        else:
+            resolved_metadata_cache_path = metadata_cache_path
+        if resolved_metadata_cache_path is None:
+            print("metadata store: disabled", file=sys.stderr)
+        else:
+            print(f"metadata store: {resolved_metadata_cache_path}", file=sys.stderr)
 
+        print(
+            f"fetching cluster representatives for identity={args.cluster_identity}...",
+            file=sys.stderr,
+        )
         representative_ids = rcsb.fetch_cluster_representative_entry_ids(
             identity=args.cluster_identity,
             max_structures=None,
@@ -1653,15 +1716,21 @@ def resolve_input_structures(
         filtered_missing_resolution = 0
         filtered_by_residue_count = 0
         metadata_errors = 0
-        cache_hits = 0
-        negative_cache_hits = 0
-        cache_misses = 0
-        cache_updates = 0
-        negative_cache_updates = 0
+        metadata_hits = 0
+        negative_metadata_hits = 0
+        metadata_misses = 0
+        metadata_updates = 0
+        negative_metadata_updates = 0
         manifest_rejections: list[dict] = []
 
         batch_size = max(1, int(args.jobs))
-        for batch_start in range(0, len(representative_ids), batch_size):
+        total_representatives = len(representative_ids)
+        progress_interval = float(args.progress_interval)
+        meta_progress_started_at = time.monotonic()
+        meta_last_progress_emit = meta_progress_started_at
+        meta_processed = 0
+
+        for batch_start in range(0, total_representatives, batch_size):
             if len(selected_ids) >= target_selection:
                 break
 
@@ -1670,46 +1739,59 @@ def resolve_input_structures(
             missing_ids: list[str] = []
 
             for representative_id in batch_ids:
-                cached_metadata = metadata_entries.get(representative_id)
+                cached_metadata, cached_negative = _load_metadata_record(
+                    resolved_metadata_cache_path,
+                    representative_id,
+                )
                 if isinstance(cached_metadata, dict):
                     batch_metadata[representative_id] = cached_metadata
-                    cache_hits += 1
+                    metadata_hits += 1
                     continue
 
-                cached_negative = negative_entries.get(representative_id)
                 if isinstance(cached_negative, dict):
-                    negative_cache_hits += 1
+                    negative_metadata_hits += 1
                     manifest_rejections.append(
                         {
                             "pdb_id": representative_id,
-                            "reason": "negative_metadata_cache",
+                            "reason": "negative_metadata_store",
                             "status_code": cached_negative.get("status_code"),
                             "detail": cached_negative.get("reason"),
                         }
                     )
                     continue
 
-                cache_misses += 1
+                metadata_misses += 1
                 missing_ids.append(representative_id)
 
             (
                 fetched_metadata,
                 batch_errors,
-                batch_negative_updates,
+                batch_negative_entries,
                 batch_error_entries,
             ) = _fetch_metadata_for_ids(
                 missing_ids,
                 args,
-                negative_entries,
+                suppress_progress=True,
             )
             metadata_errors += batch_errors
-            negative_cache_updates += batch_negative_updates
+            negative_metadata_updates += len(batch_negative_entries)
             manifest_rejections.extend(batch_error_entries)
 
             for representative_id, metadata in fetched_metadata.items():
                 batch_metadata[representative_id] = metadata
-                metadata_entries[representative_id] = metadata
-                cache_updates += 1
+                metadata_updates += 1
+                _write_metadata_record(
+                    resolved_metadata_cache_path,
+                    representative_id,
+                    entry_metadata=metadata,
+                )
+
+            for representative_id, negative_entry in batch_negative_entries.items():
+                _write_metadata_record(
+                    resolved_metadata_cache_path,
+                    representative_id,
+                    negative_entry=negative_entry,
+                )
 
             for representative_id in batch_ids:
                 if len(selected_ids) >= target_selection:
@@ -1745,14 +1827,27 @@ def resolve_input_structures(
 
                 selected_ids.append(representative_id)
 
-        if metadata_cache_path is not None and (
-            cache_updates > 0 or negative_cache_updates > 0
-        ):
-            _save_metadata_cache(
-                metadata_cache_path,
-                entries=metadata_entries,
-                negative_entries=negative_entries,
+            meta_processed = batch_start + len(batch_ids)
+            meta_last_progress_emit = _emit_stage_progress(
+                stage="metadata",
+                completed=meta_processed,
+                total=total_representatives,
+                failed=metadata_errors,
+                started_at=meta_progress_started_at,
+                last_emitted_at=meta_last_progress_emit,
+                interval=progress_interval,
             )
+
+        _emit_stage_progress(
+            stage="metadata",
+            completed=meta_processed,
+            total=total_representatives,
+            failed=metadata_errors,
+            started_at=meta_progress_started_at,
+            last_emitted_at=meta_last_progress_emit,
+            interval=progress_interval,
+            force=True,
+        )
 
         if args.write_manifest is not None:
             _write_cluster_manifest(
@@ -1767,11 +1862,11 @@ def resolve_input_structures(
                 filtered_missing_resolution=filtered_missing_resolution,
                 filtered_by_residue_count=filtered_by_residue_count,
                 metadata_errors=metadata_errors,
-                cache_hits=cache_hits,
-                negative_cache_hits=negative_cache_hits,
-                cache_misses=cache_misses,
-                cache_updates=cache_updates,
-                negative_cache_updates=negative_cache_updates,
+                metadata_hits=metadata_hits,
+                negative_metadata_hits=negative_metadata_hits,
+                metadata_misses=metadata_misses,
+                metadata_updates=metadata_updates,
+                negative_metadata_updates=negative_metadata_updates,
             )
 
         if len(selected_ids) == 0:
@@ -1799,11 +1894,11 @@ def resolve_input_structures(
             f"methods={method_label}, "
             f"max_resolution={args.cluster_max_resolution}, "
             f"max_residues={args.cluster_max_residues}, "
-            f"cache_hits={cache_hits}, "
-            f"negative_cache_hits={negative_cache_hits}, "
-            f"cache_misses={cache_misses}, "
-            f"cache_updates={cache_updates}, "
-            f"negative_cache_updates={negative_cache_updates}, "
+            f"metadata_hits={metadata_hits}, "
+            f"negative_metadata_hits={negative_metadata_hits}, "
+            f"metadata_misses={metadata_misses}, "
+            f"metadata_updates={metadata_updates}, "
+            f"negative_metadata_updates={negative_metadata_updates}, "
             f"filtered_by_method={filtered_by_method}, "
             f"filtered_by_resolution={filtered_by_resolution}, "
             f"missing_resolution={filtered_missing_resolution}, "
@@ -1825,15 +1920,10 @@ def resolve_input_structures(
             output_dir,
         )
 
-        structures = []
-        for representative_id in selected_ids:
-            source_label = _sanitize_label(representative_id)
-            if args.resume and _has_complete_outputs(output_dir, source_label):
-                structures.append((source_label, download_dir / f"{representative_id}.cif"))
-            else:
-                structures.append((source_label, downloaded_paths[representative_id]))
-
-        return structures
+        return [
+            (_sanitize_label(representative_id), downloaded_paths[representative_id])
+            for representative_id in selected_ids
+        ]
 
     raise RuntimeError("No input source selected.")
 
@@ -1845,6 +1935,7 @@ def _build_annotation_payload(
     annotation_df,
     prepared_structure=None,
 ) -> dict:
+    utils = _utils_module()
     volumes = json.loads(annotation_df.to_json(orient="records"))
     payload = {
         "source": source_label,
@@ -1858,6 +1949,7 @@ def _build_annotation_payload(
         "volumes": volumes,
     }
     if prepared_structure is not None:
+        pdb = _pdb_module()
         payload.update(pdb.compute_sse_fractions(prepared_structure))
     return payload
 
@@ -1878,7 +1970,7 @@ def analyze_structure_file(
     min_voxels: int,
     min_volume: float | None,
     overwrite: bool,
-    assembly_policy: str = pdb.DEFAULT_ASSEMBLY_POLICY,
+    assembly_policy: str = DEFAULT_ASSEMBLY_POLICY,
 ) -> dict:
     """
     Run volumizer on one structure file and write outputs.
@@ -1897,6 +1989,9 @@ def analyze_structure_file(
         raise FileExistsError(
             f"Output annotation already exists: {annotation_output_path}. Use --overwrite."
         )
+
+    pdb = _pdb_module()
+    volumizer = _volumizer_module()
 
     input_structure = pdb.load_structure(
         input_path,
@@ -1942,13 +2037,6 @@ def _plan_dry_run(
     planned_now = 0
 
     for source_label, input_path in structures:
-        if args.resume and tracker.has_result(source_label):
-            print(
-                f"skipping {source_label}: already completed in checkpoint (--resume)",
-                file=sys.stderr,
-            )
-            continue
-
         if args.resume and _has_complete_outputs(output_dir, source_label):
             print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
             tracker.mark_skipped(
@@ -1984,13 +2072,6 @@ def _analyze_structures(
 ) -> int:
     pending_structures: list[tuple[str, Path]] = []
     for source_label, input_path in structures:
-        if args.resume and tracker.has_result(source_label):
-            print(
-                f"skipping {source_label}: already completed in checkpoint (--resume)",
-                file=sys.stderr,
-            )
-            continue
-
         if args.resume and _has_complete_outputs(output_dir, source_label):
             print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
             tracker.mark_skipped(
@@ -2164,8 +2245,8 @@ def _run_cache_command(args: argparse.Namespace) -> int:
     if args.cache_command == "inspect":
         entries, negative_entries = _load_metadata_cache(cache_path)
         payload = {
-            "metadata_cache": str(cache_path),
-            "exists": cache_path.is_file(),
+            "metadata_store": str(cache_path),
+            "exists": cache_path.is_dir(),
             "entries": len(entries),
             "negative_entries": len(negative_entries),
         }
@@ -2173,16 +2254,9 @@ def _run_cache_command(args: argparse.Namespace) -> int:
         return 0
 
     if args.cache_command == "clear-negative":
-        entries, negative_entries = _load_metadata_cache(cache_path)
-        removed = len(negative_entries)
-        if removed > 0:
-            _save_metadata_cache(
-                cache_path,
-                entries=entries,
-                negative_entries={},
-            )
+        removed = _clear_negative_metadata_records(cache_path)
         print(
-            f"cleared {removed} negative cache entr{'y' if removed == 1 else 'ies'}: {cache_path}",
+            f"cleared {removed} negative metadata record{'s' if removed != 1 else ''}: {cache_path}",
             file=sys.stderr,
         )
         return 0
@@ -2199,10 +2273,10 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
         raise ValueError("--retry-delay must be >= 0.")
     if args.progress_interval < 0:
         raise ValueError("--progress-interval must be >= 0.")
-    if args.assembly_policy not in pdb.VALID_ASSEMBLY_POLICIES:
+    if args.assembly_policy not in VALID_ASSEMBLY_POLICIES:
         raise ValueError(
             "--assembly-policy must be one of: "
-            + ", ".join(pdb.VALID_ASSEMBLY_POLICIES)
+            + ", ".join(VALID_ASSEMBLY_POLICIES)
         )
 
     if args.command == "cluster":
@@ -2217,16 +2291,6 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
                 raise ValueError("--shard-index must be >= 0.")
             if args.shard_index >= args.num_shards:
                 raise ValueError("--shard-index must be < --num-shards.")
-
-    if args.backend is not None:
-        os.environ[native_backend.BACKEND_ENV] = args.backend
-        native_backend.clear_backend_cache()
-
-    utils.set_resolution(float(args.resolution))
-    utils.set_non_protein(bool(args.keep_non_protein))
-
-    active_backend = native_backend.active_backend()
-    print(f"[volumizer] backend: {active_backend}", file=sys.stderr)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2258,13 +2322,34 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
         resume=args.resume,
     )
 
-    structures = resolve_input_structures(args, download_dir, output_dir)
+    if args.command == "cluster":
+        structures = resolve_input_structures(
+            args,
+            download_dir,
+            output_dir,
+            metadata_cache_path=metadata_cache_path,
+        )
+    else:
+        structures = resolve_input_structures(args, download_dir, output_dir)
     tracker.mark_run_start(total_structures=len(structures), dry_run=args.dry_run)
 
+    active_backend = None
     if args.dry_run:
         _plan_dry_run(structures, args, output_dir, tracker)
         analysis_workers = 0
     else:
+        native_backend = _native_backend_module()
+        utils = _utils_module()
+
+        if args.backend is not None:
+            os.environ[native_backend.BACKEND_ENV] = args.backend
+            native_backend.clear_backend_cache()
+
+        utils.set_resolution(float(args.resolution))
+        utils.set_non_protein(bool(args.keep_non_protein))
+
+        active_backend = native_backend.active_backend()
+        print(f"[volumizer] backend: {active_backend}", file=sys.stderr)
         analysis_workers = _analyze_structures(structures, args, output_dir, tracker)
 
     summary = {
@@ -2303,7 +2388,11 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "assembly_policy": args.assembly_policy,
             "min_voxels": args.min_voxels,
             "min_volume": args.min_volume,
-            "backend": args.backend if args.backend is not None else utils.get_active_backend(),
+            "backend": (
+                active_backend
+                if active_backend is not None
+                else (args.backend if args.backend is not None else _requested_backend_label())
+            ),
             "keep_non_protein": args.keep_non_protein,
             "jobs": args.jobs,
             "analysis_workers": analysis_workers,

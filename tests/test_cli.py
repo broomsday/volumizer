@@ -506,18 +506,15 @@ def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: P
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
 
 
-def test_resolve_cluster_identity_uses_metadata_cache(monkeypatch, tmp_path: Path):
-    cache_path = tmp_path / "metadata-cache.json"
-    cache_path.write_text(
-        json.dumps(
-            {
-                "1ABC": {
-                    "exptl": [{"method": "X-RAY DIFFRACTION"}],
-                    "rcsb_entry_info": {"resolution_combined": [2.0]},
-                }
-            }
-        ),
-        encoding="utf-8",
+def test_resolve_cluster_identity_uses_metadata_store(monkeypatch, tmp_path: Path):
+    metadata_store = tmp_path / "entry_metadata"
+    cli._write_metadata_record(
+        metadata_store,
+        "1ABC",
+        entry_metadata={
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
     )
 
     monkeypatch.setattr(
@@ -552,7 +549,7 @@ def test_resolve_cluster_identity_uses_metadata_cache(monkeypatch, tmp_path: Pat
         tmp_path,
         command="cluster",
         cluster_identity=30,
-        metadata_cache=cache_path,
+        metadata_cache=metadata_store,
         jobs=2,
     )
 
@@ -560,35 +557,30 @@ def test_resolve_cluster_identity_uses_metadata_cache(monkeypatch, tmp_path: Pat
     assert len(resolved) == 2
     assert fetch_calls == ["2DEF"]
 
-    updated_cache = json.loads(cache_path.read_text(encoding="utf-8"))
-    assert updated_cache["cache_format"] == 2
-    assert "1ABC" in updated_cache["entries"]
-    assert "2DEF" in updated_cache["entries"]
-    assert updated_cache["negative_entries"] == {}
+    cached_entry, cached_negative = cli._load_metadata_record(metadata_store, "2DEF")
+    assert cached_negative is None
+    assert cached_entry is not None
+    assert cached_entry["rcsb_entry_info"]["resolution_combined"] == [2.6]
 
 
-def test_resolve_cluster_identity_uses_negative_metadata_cache(monkeypatch, tmp_path: Path):
-    cache_path = tmp_path / "metadata-cache.json"
-    cache_path.write_text(
-        json.dumps(
-            {
-                "cache_format": 2,
-                "entries": {
-                    "1ABC": {
-                        "exptl": [{"method": "X-RAY DIFFRACTION"}],
-                        "rcsb_entry_info": {"resolution_combined": [2.0]},
-                    }
-                },
-                "negative_entries": {
-                    "2DEF": {
-                        "reason": "permanent_metadata_error",
-                        "status_code": 404,
-                        "error": "not found",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
+def test_resolve_cluster_identity_uses_negative_metadata_store(monkeypatch, tmp_path: Path):
+    metadata_store = tmp_path / "entry_metadata"
+    cli._write_metadata_record(
+        metadata_store,
+        "1ABC",
+        entry_metadata={
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+    )
+    cli._write_metadata_record(
+        metadata_store,
+        "2DEF",
+        negative_entry={
+            "reason": "permanent_metadata_error",
+            "status_code": 404,
+            "error": "not found",
+        },
     )
 
     monkeypatch.setattr(
@@ -619,7 +611,7 @@ def test_resolve_cluster_identity_uses_negative_metadata_cache(monkeypatch, tmp_
         tmp_path,
         command="cluster",
         cluster_identity=30,
-        metadata_cache=cache_path,
+        metadata_cache=metadata_store,
         max_structures=2,
     )
 
@@ -628,11 +620,11 @@ def test_resolve_cluster_identity_uses_negative_metadata_cache(monkeypatch, tmp_
     assert fetch_calls == []
 
 
-def test_resolve_cluster_identity_updates_negative_cache_on_permanent_failure(
+def test_resolve_cluster_identity_updates_negative_metadata_store_on_permanent_failure(
     monkeypatch,
     tmp_path: Path,
 ):
-    cache_path = tmp_path / "metadata-cache.json"
+    metadata_store = tmp_path / "entry_metadata"
 
     monkeypatch.setattr(
         rcsb,
@@ -671,7 +663,7 @@ def test_resolve_cluster_identity_updates_negative_cache_on_permanent_failure(
         tmp_path,
         command="cluster",
         cluster_identity=30,
-        metadata_cache=cache_path,
+        metadata_cache=metadata_store,
         max_structures=1,
         jobs=1,
     )
@@ -679,8 +671,103 @@ def test_resolve_cluster_identity_updates_negative_cache_on_permanent_failure(
     resolved = cli.resolve_input_structures(args, tmp_path, tmp_path)
     assert resolved == [("1abc", tmp_path / "1ABC.cif")]
 
-    cache_payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    assert cache_payload["negative_entries"]["2DEF"]["status_code"] == 404
+    cached_entry, cached_negative = cli._load_metadata_record(metadata_store, "2DEF")
+    assert cached_entry is None
+    assert cached_negative is not None
+    assert cached_negative["status_code"] == 404
+
+
+def test_load_metadata_cache_scans_metadata_store_directory(tmp_path: Path):
+    metadata_store = tmp_path / "entry_metadata"
+    cli._write_metadata_record(
+        metadata_store,
+        "1ABC",
+        entry_metadata={
+            "exptl": [{"method": "X-RAY DIFFRACTION"}],
+            "rcsb_entry_info": {"resolution_combined": [2.0]},
+        },
+    )
+    cli._write_metadata_record(
+        metadata_store,
+        "2DEF",
+        entry_metadata={
+            "exptl": [{"method": "ELECTRON MICROSCOPY"}],
+            "rcsb_entry_info": {"resolution_combined": [3.1]},
+        },
+    )
+    cli._write_metadata_record(
+        metadata_store,
+        "3GHI",
+        negative_entry={
+            "reason": "permanent_metadata_error",
+            "status_code": 404,
+            "error": "not found",
+        },
+    )
+
+    entries, negative_entries = cli._load_metadata_cache(metadata_store)
+    assert "1ABC" in entries
+    assert "2DEF" in entries
+    assert negative_entries["3GHI"]["status_code"] == 404
+
+
+def test_load_metadata_record_recovers_non_utf8_bytes(tmp_path: Path):
+    metadata_store = tmp_path / "entry_metadata"
+    metadata_store.mkdir()
+    record_path = metadata_store / "2DEF.json"
+    good_json = json.dumps(
+        {
+            "metadata_record_format": 1,
+            "pdb_id": "2DEF",
+            "kind": "entry",
+            "entry_metadata": {
+                "exptl": [{"method": "ELECTRON MICROSCOPY"}],
+                "rcsb_entry_info": {"resolution_combined": [3.1]},
+            },
+        }
+    )
+    raw_bytes = good_json.encode("utf-8")
+    idx = raw_bytes.index(b"ELECTRON")
+    corrupted = raw_bytes[:idx] + b"\x91" + raw_bytes[idx + 1 :]
+    record_path.write_bytes(corrupted)
+
+    entry_metadata, negative_entry = cli._load_metadata_record(metadata_store, "2DEF")
+    assert negative_entry is None
+    assert entry_metadata is not None
+    assert entry_metadata["rcsb_entry_info"]["resolution_combined"] == [3.1]
+
+
+def test_load_metadata_cache_returns_empty_for_non_directory(tmp_path: Path):
+    cache_path = tmp_path / "metadata-cache.json"
+    cache_path.write_text("{}", encoding="utf-8")
+    entries, negative_entries = cli._load_metadata_cache(cache_path)
+    assert entries == {}
+    assert negative_entries == {}
+
+
+def test_download_cluster_structures_reuses_existing_downloads_without_resume(
+    monkeypatch,
+    tmp_path: Path,
+):
+    existing_path = tmp_path / "1ABC.cif"
+    existing_path.write_text("dummy", encoding="utf-8")
+
+    monkeypatch.setattr(
+        rcsb,
+        "download_structure_cif",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("existing download should not be fetched again")
+        ),
+    )
+
+    downloaded = cli._download_cluster_structures(
+        ["1ABC"],
+        _make_args(tmp_path, command="cluster", cluster_identity=30),
+        tmp_path,
+        tmp_path,
+    )
+
+    assert downloaded == {"1ABC": existing_path}
 
 
 def test_analyze_structure_file_writes_cif_and_json(tmp_path: Path):
@@ -940,7 +1027,7 @@ def test_run_cli_writes_progress_jsonl_events(monkeypatch, tmp_path: Path):
     assert event_types[-1] == "run_completed"
 
 
-def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
+def test_run_cli_resume_ignores_checkpoint_state_without_outputs(monkeypatch, tmp_path: Path):
     checkpoint_path = tmp_path / "state.checkpoint.json"
 
     monkeypatch.setattr(
@@ -984,12 +1071,15 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
     first_checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert len(first_checkpoint["results"]) == 1
     assert len(first_checkpoint["errors"]) == 1
+    (tmp_path / "first.annotated.cif").unlink()
+    (tmp_path / "first.annotation.json").unlink()
+
+    analyzed_sources = []
 
     def _analyze_second_pass(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
-        if source_label == "first":
-            raise RuntimeError("first should be skipped on resume")
-        structure_out = output_dir / "second.annotated.cif"
-        annotation_out = output_dir / "second.annotation.json"
+        analyzed_sources.append(source_label)
+        structure_out = output_dir / f"{source_label}.annotated.cif"
+        annotation_out = output_dir / f"{source_label}.annotation.json"
         structure_out.write_text("dummy", encoding="utf-8")
         annotation_out.write_text("{}", encoding="utf-8")
         return {
@@ -1017,19 +1107,25 @@ def test_run_cli_resume_uses_checkpoint_state(monkeypatch, tmp_path: Path):
     summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
     assert summary["num_processed"] == 2
     assert summary["num_failed"] == 0
+    assert analyzed_sources == ["first", "second"]
 
 
 def test_cache_subcommand_inspect_and_clear_negative(tmp_path: Path):
-    cache_path = tmp_path / "metadata-cache.json"
-    cache_path.write_text(
-        json.dumps(
-            {
-                "cache_format": 2,
-                "entries": {"1ABC": {"dummy": 1}},
-                "negative_entries": {"2DEF": {"status_code": 404}},
-            }
-        ),
-        encoding="utf-8",
+    cache_path = tmp_path / "entry_metadata"
+    cli._write_metadata_record(
+        cache_path,
+        "1ABC",
+        entry_metadata={"dummy": 1},
+    )
+    cli._write_metadata_record(
+        cache_path,
+        "2DEF",
+        negative_entry={"status_code": 404, "reason": "permanent_metadata_error"},
+    )
+    cli._write_metadata_record(
+        cache_path,
+        "3GHI",
+        negative_entry={"status_code": 410, "reason": "permanent_metadata_error"},
     )
 
     inspect_exit = cli.main(
@@ -1052,8 +1148,9 @@ def test_cache_subcommand_inspect_and_clear_negative(tmp_path: Path):
     )
     assert clear_exit == 0
 
-    payload = json.loads(cache_path.read_text(encoding="utf-8"))
-    assert payload["negative_entries"] == {}
+    entries, negative_entries = cli._load_metadata_cache(cache_path)
+    assert "1ABC" in entries
+    assert negative_entries == {}
 
 
 def test_cli_main_analyze_subcommand_writes_summary(monkeypatch, tmp_path: Path):
@@ -1156,6 +1253,7 @@ def test_cli_main_analyze_from_summary_failed_writes_summary(monkeypatch, tmp_pa
 
 
 def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
     monkeypatch.setattr(
         rcsb,
         "fetch_cluster_representative_entry_ids",
@@ -1170,6 +1268,34 @@ def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_pat
             "exptl": [{"method": "X-RAY DIFFRACTION"}],
             "rcsb_entry_info": {"resolution_combined": [2.0]},
         },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_native_backend_module",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("dry-run cluster should not initialize backend")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_utils_module",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("dry-run cluster should not import analysis utils")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_pdb_module",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("dry-run cluster should not import pdb helpers")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_volumizer_module",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("dry-run cluster should not import volumizer pipeline")
+        ),
     )
 
     exit_code = cli.main(
@@ -1188,8 +1314,37 @@ def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_pat
     assert summary_path.is_file()
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["config"]["command"] == "cluster"
+    assert summary["config"]["backend"] == cli.BACKEND_AUTO
     assert summary["num_processed"] == 0
     assert summary["num_planned"] == 1
+
+
+def test_run_analysis_command_passes_cluster_metadata_store_dir(monkeypatch, tmp_path: Path):
+    cache_path = tmp_path / "entry_metadata"
+
+    seen: dict[str, Path | None] = {}
+
+    def _resolve_inputs(args, download_dir, output_dir, metadata_cache_path=None):
+        seen["metadata_cache_path"] = metadata_cache_path
+        return []
+
+    monkeypatch.setattr(cli, "resolve_input_structures", _resolve_inputs)
+
+    exit_code = cli._run_analysis_command(
+        _make_args(
+            tmp_path,
+            command="cluster",
+            cluster_identity=30,
+            metadata_cache=cache_path,
+            dry_run=True,
+        )
+    )
+
+    assert exit_code == 0
+    assert seen["metadata_cache_path"] == cache_path
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["config"]["metadata_cache"] == str(cache_path)
 
 
 def test_cli_main_legacy_single_input_writes_summary(monkeypatch, tmp_path: Path):
