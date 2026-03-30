@@ -183,16 +183,22 @@ def _can_use_identity_assembly_shortcut_cif(file: pdbx.PDBxFile) -> bool:
 
 
 def _generate_chain_id_pool() -> list[str]:
-    """Return a pool of unique chain ID labels (A-Z, a-z, 0-9, then AA, AB, ...)."""
+    """
+    Return a deterministic pool of unique chain IDs up to Biotite's `U4` width.
+
+    The biological-assembly path can create hundreds or thousands of chain
+    copies. The older `A-Z`, `a-z`, `0-9`, `AA-ZZ` pool exhausted on larger
+    assemblies such as 8B12/2BBV. Stay within 4 characters so assignments fit
+    the fixed-width chain-id dtype Biotite uses for structure arrays.
+    """
+    import itertools
     import string
 
+    alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
     pool: list[str] = []
-    pool.extend(string.ascii_uppercase)
-    pool.extend(string.ascii_lowercase)
-    pool.extend(string.digits)
-    for first in string.ascii_uppercase:
-        for second in string.ascii_uppercase:
-            pool.append(first + second)
+    for width in range(1, 5):
+        for chars in itertools.product(alphabet, repeat=width):
+            pool.append("".join(chars))
     return pool
 
 
@@ -271,7 +277,14 @@ def _deduplicate_assembly_chain_ids(structure: bts.AtomArray) -> bts.AtomArray:
     for orig_id in original_ids_ordered:
         rename_map[(orig_id, 0)] = orig_id
         for ci in range(1, num_copies):
-            rename_map[(orig_id, ci)] = next(pool_iter)
+            try:
+                rename_map[(orig_id, ci)] = next(pool_iter)
+            except StopIteration as error:
+                raise RuntimeError(
+                    "Exhausted generated chain IDs while deduplicating biological "
+                    f"assembly copies: original_chains={len(original_ids_ordered)}, "
+                    f"copies={num_copies}. Increase chain-ID generation capacity."
+                ) from error
 
     # Apply renaming
     new_chain_ids = chain_ids.copy()
@@ -505,6 +518,13 @@ def clean_structure(structure: bts.AtomArray) -> bts.AtomArray:
         structure = structure[~np.isin(structure.element, ["H"])]
 
     return structure
+
+
+def get_structure_residue_count(structure: bts.AtomArray) -> int:
+    """
+    Return the number of residues represented in a structure.
+    """
+    return int(bts.get_residue_count(structure))
 
 
 def compute_sse_fractions(

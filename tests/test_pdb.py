@@ -329,6 +329,31 @@ class TestDeduplicateAssemblyChainIds:
         result = pdb._deduplicate_assembly_chain_ids(atoms)
         assert list(result.chain_id) == ["A"] * 100
 
+    def test_many_copies_do_not_exhaust_chain_id_pool(self):
+        pattern = []
+        for chain_id in [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E",
+            "F",
+            "G",
+            "H",
+            "I",
+            "J",
+            "K",
+            "L",
+            "M",
+            "N",
+            "O",
+            "P",
+        ]:
+            pattern.extend([chain_id] * 2)
+        atoms = self._make_atom_array(pattern * 120)
+        result = pdb._deduplicate_assembly_chain_ids(atoms)
+        assert len(set(result.chain_id)) == 16 * 120
+
 
 RCSB_2ZBT = Path("data/runs/rcsb70/downloads/2ZBT.cif")
 RCSB_6L7D = Path("data/runs/rcsb70/downloads/6L7D.cif")

@@ -5,16 +5,20 @@ Command-line interface for volumizer.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from datetime import datetime, timezone
 from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version as package_version
+import inspect
 import json
 import os
 from pathlib import Path
 import re
+import signal
+import subprocess
 import sys
 import time
+import traceback
 from typing import Sequence
 
 from volumizer import rcsb
@@ -36,6 +40,28 @@ VALID_ASSEMBLY_POLICIES = (
     "auto",
 )
 _UNSET = object()
+
+
+class PostAssemblyResidueLimitExceeded(RuntimeError):
+    """
+    Runtime size guard for assemblies that expand well beyond deposited-entry metadata.
+    """
+
+    def __init__(
+        self,
+        *,
+        actual_residues: int,
+        max_residues: int,
+        assembly_policy: str,
+    ):
+        self.actual_residues = int(actual_residues)
+        self.max_residues = int(max_residues)
+        self.assembly_policy = str(assembly_policy)
+        super().__init__(
+            "Structure exceeds post-assembly residue limit before annotation: "
+            f"{self.actual_residues} > {self.max_residues} "
+            f"(assembly_policy={self.assembly_policy})"
+        )
 
 
 @lru_cache(maxsize=1)
@@ -73,6 +99,16 @@ def _requested_backend_label() -> str:
     return backend
 
 
+def _get_post_assembly_max_residues(args: argparse.Namespace) -> int | None:
+    if getattr(args, "command", None) != "cluster":
+        return None
+
+    max_residues = getattr(args, "cluster_max_residues", None)
+    if max_residues is None:
+        return None
+    return int(max_residues)
+
+
 def _resolve_cli_version() -> str:
     try:
         return package_version("volumizer")
@@ -105,6 +141,8 @@ def _emit_stage_progress(
     started_at: float,
     last_emitted_at: float,
     interval: float,
+    active: int | None = None,
+    queued: int | None = None,
     force: bool = False,
 ) -> float:
     if interval <= 0:
@@ -119,12 +157,17 @@ def _emit_stage_progress(
     remaining = max(0, total - completed)
     eta_seconds = (remaining / rate) if rate > 0 else None
     percent = (100.0 * completed / total) if total > 0 else 100.0
+    suffix = ""
+    if active is not None:
+        suffix += f", active={active}"
+    if queued is not None:
+        suffix += f", queued={queued}"
 
     print(
         (
             f"{stage} progress: {completed}/{total} ({percent:.1f}%), "
             f"failed={failed}, rate={rate:.2f}/s, "
-            f"eta={_format_eta_seconds(eta_seconds)}"
+            f"eta={_format_eta_seconds(eta_seconds)}{suffix}"
         ),
         file=sys.stderr,
     )
@@ -539,26 +582,494 @@ def _output_paths_for_label(output_dir: Path, source_label: str) -> tuple[Path, 
     return structure_output_path, annotation_output_path
 
 
-def _has_complete_outputs(output_dir: Path, source_label: str) -> bool:
+def _get_output_state(output_dir: Path, source_label: str) -> tuple[Path, Path, bool, bool]:
     structure_output_path, annotation_output_path = _output_paths_for_label(
         output_dir,
         source_label,
     )
-    return structure_output_path.exists() and annotation_output_path.exists()
+    structure_exists = structure_output_path.exists()
+    annotation_exists = annotation_output_path.exists()
+    return (
+        structure_output_path,
+        annotation_output_path,
+        structure_exists,
+        annotation_exists,
+    )
+
+
+def _validate_resume_outputs(
+    output_dir: Path,
+    source_label: str,
+) -> dict[str, object]:
+    structure_output_path, annotation_output_path, structure_exists, annotation_exists = (
+        _get_output_state(
+            output_dir,
+            source_label,
+        )
+    )
+
+    if not structure_exists and not annotation_exists:
+        return {
+            "status": "missing",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": None,
+            "reason": None,
+        }
+
+    if structure_exists != annotation_exists:
+        present_outputs: list[str] = []
+        if structure_exists:
+            present_outputs.append(structure_output_path.name)
+        if annotation_exists:
+            present_outputs.append(annotation_output_path.name)
+        return {
+            "status": "partial",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": None,
+            "reason": ", ".join(present_outputs),
+        }
+
+    for label, path in (
+        ("structure output", structure_output_path),
+        ("annotation output", annotation_output_path),
+    ):
+        if not path.is_file():
+            return {
+                "status": "invalid",
+                "structure_output_path": structure_output_path,
+                "annotation_output_path": annotation_output_path,
+                "payload": None,
+                "reason": f"{label} is not a regular file: {path}",
+            }
+
+        if path.stat().st_size <= 0:
+            return {
+                "status": "invalid",
+                "structure_output_path": structure_output_path,
+                "annotation_output_path": annotation_output_path,
+                "payload": None,
+                "reason": f"{label} is empty: {path}",
+            }
+
+    try:
+        payload = json.loads(annotation_output_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": None,
+            "reason": f"annotation JSON is invalid: {error}",
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": None,
+            "reason": "annotation JSON root must be an object",
+        }
+
+    required_keys = (
+        "source",
+        "input_path",
+        "output_structure_cif",
+        "num_volumes",
+        "volumes",
+    )
+    missing_keys = [key for key in required_keys if key not in payload]
+    if missing_keys:
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": "annotation JSON missing required keys: "
+            + ", ".join(missing_keys),
+        }
+
+    if payload["source"] != source_label:
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": (
+                f"annotation source mismatch: expected {source_label!r}, "
+                f"found {payload['source']!r}"
+            ),
+        }
+
+    raw_structure_output = payload["output_structure_cif"]
+    if not isinstance(raw_structure_output, str) or len(raw_structure_output.strip()) == 0:
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": "annotation output_structure_cif must be a non-empty string",
+        }
+
+    if Path(raw_structure_output).expanduser().resolve() != structure_output_path.resolve():
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": (
+                "annotation output_structure_cif does not match expected path: "
+                f"{raw_structure_output!r}"
+            ),
+        }
+
+    volumes = payload["volumes"]
+    if not isinstance(volumes, list):
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": "annotation volumes must be a list",
+        }
+
+    num_volumes = payload["num_volumes"]
+    if isinstance(num_volumes, bool) or not isinstance(num_volumes, int):
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": "annotation num_volumes must be an integer",
+        }
+
+    if num_volumes != len(volumes):
+        return {
+            "status": "invalid",
+            "structure_output_path": structure_output_path,
+            "annotation_output_path": annotation_output_path,
+            "payload": payload,
+            "reason": (
+                "annotation num_volumes does not match volumes length: "
+                f"{num_volumes} != {len(volumes)}"
+            ),
+        }
+
+    return {
+        "status": "valid",
+        "structure_output_path": structure_output_path,
+        "annotation_output_path": annotation_output_path,
+        "payload": payload,
+        "reason": None,
+    }
+
+
+def _get_resume_action(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    validation = _validate_resume_outputs(
+        output_dir,
+        source_label,
+    )
+    status = validation["status"]
+    if status == "valid":
+        return {
+            "action": "skip",
+            "reason_kind": "valid",
+            "skip_entry": _build_resume_skip_entry(
+                source_label=source_label,
+                input_path=input_path,
+                output_dir=output_dir,
+                annotation_payload=validation["payload"],
+            ),
+            "overwrite_existing_outputs": False,
+            "log_message": None,
+        }
+
+    if status == "partial":
+        return {
+            "action": "analyze",
+            "reason_kind": "partial",
+            "skip_entry": None,
+            "overwrite_existing_outputs": False,
+            "log_message": (
+                f"re-analyzing {source_label}: partial outputs found (--resume): "
+                f"{validation['reason']}"
+            ),
+        }
+
+    if status == "invalid":
+        return {
+            "action": "analyze",
+            "reason_kind": "invalid",
+            "skip_entry": None,
+            "overwrite_existing_outputs": True,
+            "log_message": (
+                f"re-analyzing {source_label}: invalid existing outputs (--resume): "
+                f"{validation['reason']}"
+            ),
+        }
+
+    return {
+        "action": "analyze",
+        "reason_kind": "missing",
+        "skip_entry": None,
+        "overwrite_existing_outputs": False,
+        "log_message": None,
+    }
+
+
+def _format_resume_reason_samples(samples: list[str], total: int) -> str:
+    if total == 0 or len(samples) == 0:
+        return ""
+
+    suffix = ", ..." if total > len(samples) else ""
+    return ", ".join(samples) + suffix
+
+
+def _emit_resume_scan_summary(
+    *,
+    skipped_valid: int,
+    reanalyze_partial: int,
+    reanalyze_invalid: int,
+    partial_samples: list[str],
+    invalid_samples: list[str],
+) -> None:
+    if skipped_valid == 0 and reanalyze_partial == 0 and reanalyze_invalid == 0:
+        return
+
+    print(
+        (
+            "resume scan: "
+            f"skipped_valid={skipped_valid}, "
+            f"reanalyze_partial={reanalyze_partial}, "
+            f"reanalyze_invalid={reanalyze_invalid}"
+        ),
+        file=sys.stderr,
+    )
+
+    partial_summary = _format_resume_reason_samples(partial_samples, reanalyze_partial)
+    if partial_summary:
+        print(
+            f"resume partial examples: {partial_summary}",
+            file=sys.stderr,
+        )
+
+    invalid_summary = _format_resume_reason_samples(invalid_samples, reanalyze_invalid)
+    if invalid_summary:
+        print(
+            f"resume invalid examples: {invalid_summary}",
+            file=sys.stderr,
+        )
+
+
+def _emit_resume_scan_progress(
+    *,
+    processed: int,
+    total: int,
+    skipped_valid: int,
+    reanalyze_partial: int,
+    reanalyze_invalid: int,
+) -> None:
+    percent = (100.0 * processed / total) if total > 0 else 100.0
+    print(
+        (
+            f"resume scan progress: {processed}/{total} ({percent:.1f}%), "
+            f"skipped_valid={skipped_valid}, "
+            f"reanalyze_partial={reanalyze_partial}, "
+            f"reanalyze_invalid={reanalyze_invalid}"
+        ),
+        file=sys.stderr,
+    )
+
+
+def _prepare_pending_structures(
+    *,
+    structures: list[tuple[str, Path]],
+    args: argparse.Namespace,
+    output_dir: Path,
+    tracker: _RunTracker,
+) -> list[tuple[str, Path, bool]]:
+    pending_structures: list[tuple[str, Path, bool]] = []
+    skipped_valid = 0
+    reanalyze_partial = 0
+    reanalyze_invalid = 0
+    partial_samples: list[str] = []
+    invalid_samples: list[str] = []
+    pending_skip_persists = 0
+    progress_interval = float(args.progress_interval)
+    progress_started_at = time.monotonic()
+    last_progress_emit = progress_started_at
+    total_structures = len(structures)
+
+    if args.resume and total_structures > 0:
+        print(
+            f"resume scan: validating existing outputs for {total_structures} structures...",
+            file=sys.stderr,
+        )
+
+    for index, (source_label, input_path) in enumerate(structures, start=1):
+        overwrite_existing_outputs = False
+
+        if args.resume:
+            resume_action = _get_resume_action(
+                source_label=source_label,
+                input_path=input_path,
+                output_dir=output_dir,
+            )
+            reason_kind = str(resume_action["reason_kind"])
+
+            if resume_action["action"] == "skip":
+                tracker.mark_skipped(resume_action["skip_entry"], persist=False)
+                pending_skip_persists += 1
+                skipped_valid += 1
+            else:
+                overwrite_existing_outputs = bool(
+                    resume_action["overwrite_existing_outputs"]
+                )
+                log_message = resume_action["log_message"]
+                if reason_kind == "partial":
+                    reanalyze_partial += 1
+                    if log_message is not None and len(partial_samples) < 3:
+                        partial_samples.append(
+                            log_message.removeprefix(
+                                f"re-analyzing {source_label}: partial outputs found (--resume): "
+                            )
+                        )
+                        partial_samples[-1] = f"{source_label} ({partial_samples[-1]})"
+                elif reason_kind == "invalid":
+                    reanalyze_invalid += 1
+                    if log_message is not None and len(invalid_samples) < 3:
+                        invalid_samples.append(
+                            log_message.removeprefix(
+                                f"re-analyzing {source_label}: invalid existing outputs (--resume): "
+                            )
+                        )
+                        invalid_samples[-1] = f"{source_label} ({invalid_samples[-1]})"
+
+                pending_structures.append(
+                    (source_label, input_path, overwrite_existing_outputs)
+                )
+        else:
+            pending_structures.append(
+                (source_label, input_path, overwrite_existing_outputs)
+            )
+
+        if args.resume and progress_interval > 0:
+            now = time.monotonic()
+            if (now - last_progress_emit) >= progress_interval:
+                _emit_resume_scan_progress(
+                    processed=index,
+                    total=total_structures,
+                    skipped_valid=skipped_valid,
+                    reanalyze_partial=reanalyze_partial,
+                    reanalyze_invalid=reanalyze_invalid,
+                )
+                if pending_skip_persists > 0:
+                    tracker.persist_checkpoint()
+                    pending_skip_persists = 0
+                last_progress_emit = now
+
+    if pending_skip_persists > 0:
+        tracker.persist_checkpoint()
+
+    if args.resume:
+        _emit_resume_scan_summary(
+            skipped_valid=skipped_valid,
+            reanalyze_partial=reanalyze_partial,
+            reanalyze_invalid=reanalyze_invalid,
+            partial_samples=partial_samples,
+            invalid_samples=invalid_samples,
+        )
+
+    return pending_structures
+
+
+def _cleanup_partial_outputs(
+    structure_output_path: Path,
+    annotation_output_path: Path,
+) -> list[Path]:
+    structure_exists = structure_output_path.exists()
+    annotation_exists = annotation_output_path.exists()
+    if structure_exists == annotation_exists:
+        return []
+
+    removed: list[Path] = []
+    for path in (structure_output_path, annotation_output_path):
+        if not path.exists():
+            continue
+        if not path.is_file():
+            raise FileExistsError(
+                f"Partial output path exists but is not a file: {path}"
+            )
+        path.unlink()
+        removed.append(path)
+    return removed
+
+
+def _callable_accepts_keyword(fn, keyword: str) -> bool:
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return True
+
+    if keyword in signature.parameters:
+        return True
+
+    return any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
+def _format_exception_message(error: BaseException) -> str:
+    message = str(error).strip()
+    error_type = type(error).__name__
+    if message:
+        return f"{error_type}: {message}"
+
+    repr_message = repr(error).strip()
+    if repr_message:
+        return repr_message
+    return error_type
+
+
+def _build_error_entry(
+    *,
+    source_label: str,
+    input_path: Path,
+    error: BaseException,
+) -> dict[str, str]:
+    return {
+        "source": source_label,
+        "input_path": str(input_path),
+        "error": _format_exception_message(error),
+        "error_type": type(error).__name__,
+        "error_repr": repr(error),
+        "traceback": "".join(
+            traceback.format_exception(type(error), error, error.__traceback__)
+        ),
+    }
 
 
 def _build_resume_skip_entry(
     source_label: str,
     input_path: Path,
     output_dir: Path,
+    annotation_payload: dict | None = None,
 ) -> dict:
     structure_output_path, annotation_output_path = _output_paths_for_label(
         output_dir,
         source_label,
     )
 
-    payload = {}
-    if annotation_output_path.is_file():
+    payload = annotation_payload if annotation_payload is not None else {}
+    if annotation_payload is None and annotation_output_path.is_file():
         try:
             payload = json.loads(annotation_output_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
@@ -574,6 +1085,30 @@ def _build_resume_skip_entry(
         "num_volumes": payload.get("num_volumes"),
         "largest_type": payload.get("largest_type"),
         "largest_volume": payload.get("largest_volume"),
+    }
+
+
+def _build_post_assembly_residue_limit_skip_entry(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    error: PostAssemblyResidueLimitExceeded,
+) -> dict:
+    structure_output_path, annotation_output_path = _output_paths_for_label(
+        output_dir,
+        source_label,
+    )
+    return {
+        "source": source_label,
+        "pdb_id": _infer_pdb_id_for_result(source_label, input_path),
+        "input_path": str(input_path),
+        "structure_output": str(structure_output_path),
+        "annotation_output": str(annotation_output_path),
+        "reason": "post_assembly_residue_limit",
+        "actual_residues": error.actual_residues,
+        "max_residues": error.max_residues,
+        "assembly_policy": error.assembly_policy,
     }
 
 
@@ -1255,7 +1790,7 @@ class _RunTracker:
         )
         self.persist_checkpoint()
 
-    def mark_skipped(self, entry: dict) -> None:
+    def mark_skipped(self, entry: dict, persist: bool = True) -> None:
         self._set_entry("skipped", entry)
         self.emit_event(
             "structure_skipped",
@@ -1263,7 +1798,8 @@ class _RunTracker:
             input_path=entry["input_path"],
             reason=entry.get("reason"),
         )
-        self.persist_checkpoint()
+        if persist:
+            self.persist_checkpoint()
 
     def mark_started(self, source: str, input_path: Path) -> None:
         self.emit_event(
@@ -1325,7 +1861,7 @@ def _build_negative_cache_entry(
     return {
         "reason": "permanent_metadata_error",
         "status_code": status_code,
-        "error": str(error),
+        "error": _format_exception_message(error),
     }
 
 
@@ -1371,11 +1907,21 @@ def _fetch_metadata_for_ids(
                         "reason": "metadata_error",
                         "status_code": status_code,
                         "permanent": is_permanent,
-                        "error": str(error),
+                        "error": _format_exception_message(error),
+                        "error_type": type(error).__name__,
+                        "error_repr": repr(error),
+                        "traceback": "".join(
+                            traceback.format_exception(
+                                type(error),
+                                error,
+                                error.__traceback__,
+                            )
+                        ),
                     }
                 )
                 print(
-                    f"metadata error for {representative_id}: {error}",
+                    f"metadata error for {representative_id}: "
+                    f"{_format_exception_message(error)}",
                     file=sys.stderr,
                 )
                 processed += 1
@@ -1446,11 +1992,21 @@ def _fetch_metadata_for_ids(
                         "reason": "metadata_error",
                         "status_code": status_code,
                         "permanent": is_permanent,
-                        "error": str(error),
+                        "error": _format_exception_message(error),
+                        "error_type": type(error).__name__,
+                        "error_repr": repr(error),
+                        "traceback": "".join(
+                            traceback.format_exception(
+                                type(error),
+                                error,
+                                error.__traceback__,
+                            )
+                        ),
                     }
                 )
                 print(
-                    f"metadata error for {representative_id}: {error}",
+                    f"metadata error for {representative_id}: "
+                    f"{_format_exception_message(error)}",
                     file=sys.stderr,
                 )
                 processed += 1
@@ -1971,6 +2527,7 @@ def analyze_structure_file(
     min_volume: float | None,
     overwrite: bool,
     assembly_policy: str = DEFAULT_ASSEMBLY_POLICY,
+    max_residues: int | None = None,
 ) -> dict:
     """
     Run volumizer on one structure file and write outputs.
@@ -1979,6 +2536,11 @@ def analyze_structure_file(
     structure_output_path, annotation_output_path = _output_paths_for_label(
         output_dir,
         source_label,
+    )
+
+    _cleanup_partial_outputs(
+        structure_output_path=structure_output_path,
+        annotation_output_path=annotation_output_path,
     )
 
     if not overwrite and structure_output_path.exists():
@@ -1998,6 +2560,14 @@ def analyze_structure_file(
         assembly_policy=assembly_policy,
     )
     prepared_structure = volumizer.prepare_pdb_structure(input_structure)
+    if max_residues is not None:
+        prepared_residue_count = pdb.get_structure_residue_count(prepared_structure)
+        if prepared_residue_count > int(max_residues):
+            raise PostAssemblyResidueLimitExceeded(
+                actual_residues=prepared_residue_count,
+                max_residues=int(max_residues),
+                assembly_policy=assembly_policy,
+            )
     annotation_df, annotation_structure = volumizer.annotate_structure_volumes(
         prepared_structure,
         min_voxels=min_voxels,
@@ -2005,16 +2575,26 @@ def analyze_structure_file(
     )
 
     combined_structure = prepared_structure + annotation_structure
-    pdb.save_structure(combined_structure, structure_output_path)
+    try:
+        pdb.save_structure(combined_structure, structure_output_path)
 
-    payload = _build_annotation_payload(
-        source_label,
-        input_path,
-        structure_output_path,
-        annotation_df,
-        prepared_structure=prepared_structure,
-    )
-    annotation_output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        payload = _build_annotation_payload(
+            source_label,
+            input_path,
+            structure_output_path,
+            annotation_df,
+            prepared_structure=prepared_structure,
+        )
+        annotation_output_path.write_text(
+            json.dumps(payload, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        _cleanup_partial_outputs(
+            structure_output_path=structure_output_path,
+            annotation_output_path=annotation_output_path,
+        )
+        raise
 
     return {
         "source": source_label,
@@ -2028,26 +2608,146 @@ def analyze_structure_file(
     }
 
 
+def _should_use_isolated_analysis_workers(
+    *,
+    args: argparse.Namespace,
+    active_backend: str | None,
+) -> bool:
+    return args.command == "cluster" and active_backend == BACKEND_NATIVE
+
+
+def _invoke_analysis_callable(
+    fn,
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    min_voxels: int,
+    min_volume: float | None,
+    overwrite: bool,
+    assembly_policy: str,
+    max_residues: int | None = None,
+) -> dict:
+    kwargs = {
+        "source_label": source_label,
+        "input_path": input_path,
+        "output_dir": output_dir,
+        "min_voxels": min_voxels,
+        "min_volume": min_volume,
+        "overwrite": overwrite,
+        "assembly_policy": assembly_policy,
+    }
+    if max_residues is not None and _callable_accepts_keyword(fn, "max_residues"):
+        kwargs["max_residues"] = int(max_residues)
+    return fn(**kwargs)
+
+
+def _run_isolated_analysis_worker(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    min_voxels: int,
+    min_volume: float | None,
+    overwrite: bool,
+    assembly_policy: str,
+    resolution: float,
+    keep_non_protein: bool,
+    backend: str | None,
+    max_residues: int | None = None,
+) -> dict:
+    command = [
+        sys.executable,
+        "-m",
+        "volumizer._analysis_worker",
+        "--source-label",
+        source_label,
+        "--input-path",
+        str(input_path),
+        "--output-dir",
+        str(output_dir),
+        "--min-voxels",
+        str(int(min_voxels)),
+        "--assembly-policy",
+        assembly_policy,
+        "--resolution",
+        str(float(resolution)),
+    ]
+    if min_volume is not None:
+        command.extend(["--min-volume", str(float(min_volume))])
+    if overwrite:
+        command.append("--overwrite")
+    if keep_non_protein:
+        command.append("--keep-non-protein")
+    if backend:
+        command.extend(["--backend", backend])
+    if max_residues is not None:
+        command.extend(["--max-residues", str(int(max_residues))])
+
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+
+    if completed.returncode == 0:
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                "analysis worker returned invalid JSON output"
+            ) from error
+        if not isinstance(payload, dict):
+            raise RuntimeError("analysis worker returned non-object JSON output")
+        if payload.get("status") == "skipped_post_assembly_residue_limit":
+            raise PostAssemblyResidueLimitExceeded(
+                actual_residues=int(payload["actual_residues"]),
+                max_residues=int(payload["max_residues"]),
+                assembly_policy=str(payload.get("assembly_policy") or assembly_policy),
+            )
+        return payload
+
+    if completed.returncode < 0:
+        signal_number = -completed.returncode
+        try:
+            signal_name = signal.Signals(signal_number).name
+            signal_label = f"{signal_number} ({signal_name})"
+        except ValueError:
+            signal_label = str(signal_number)
+        detail = (
+            stderr
+            or stdout
+            or "worker terminated without stderr/stdout output"
+        )
+        raise RuntimeError(
+            f"analysis worker terminated by signal {signal_label}: {detail}"
+        )
+
+    detail = stderr or stdout or "worker exited without stderr/stdout output"
+    raise RuntimeError(
+        f"analysis worker failed with exit code {completed.returncode}: {detail}"
+    )
+
+
 def _plan_dry_run(
     structures: list[tuple[str, Path]],
     args: argparse.Namespace,
     output_dir: Path,
     tracker: _RunTracker,
 ) -> None:
+    pending_structures = _prepare_pending_structures(
+        structures=structures,
+        args=args,
+        output_dir=output_dir,
+        tracker=tracker,
+    )
     planned_now = 0
 
-    for source_label, input_path in structures:
-        if args.resume and _has_complete_outputs(output_dir, source_label):
-            print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
-            tracker.mark_skipped(
-                _build_resume_skip_entry(
-                    source_label=source_label,
-                    input_path=input_path,
-                    output_dir=output_dir,
-                )
-            )
-            continue
-
+    for source_label, input_path, _ in pending_structures:
         tracker.mark_planned(
             _build_dry_run_plan_entry(
                 source_label=source_label,
@@ -2069,21 +2769,14 @@ def _analyze_structures(
     args: argparse.Namespace,
     output_dir: Path,
     tracker: _RunTracker,
+    active_backend: str | None = None,
 ) -> int:
-    pending_structures: list[tuple[str, Path]] = []
-    for source_label, input_path in structures:
-        if args.resume and _has_complete_outputs(output_dir, source_label):
-            print(f"skipping {source_label}: outputs already exist (--resume)", file=sys.stderr)
-            tracker.mark_skipped(
-                _build_resume_skip_entry(
-                    source_label=source_label,
-                    input_path=input_path,
-                    output_dir=output_dir,
-                )
-            )
-            continue
-
-        pending_structures.append((source_label, input_path))
+    pending_structures = _prepare_pending_structures(
+        structures=structures,
+        args=args,
+        output_dir=output_dir,
+        tracker=tracker,
+    )
 
     analysis_workers = int(args.jobs)
     if args.fail_fast and analysis_workers > 1:
@@ -2097,37 +2790,73 @@ def _analyze_structures(
         return analysis_workers
 
     total_pending = len(pending_structures)
+    use_isolated_workers = _should_use_isolated_analysis_workers(
+        args=args,
+        active_backend=active_backend,
+    )
+    runtime_max_residues = _get_post_assembly_max_residues(args)
     progress_interval = float(args.progress_interval)
     progress_started_at = time.monotonic()
     last_progress_emit = progress_started_at
 
+    if use_isolated_workers:
+        print(
+            "analysis worker mode: isolated subprocesses",
+            file=sys.stderr,
+        )
+
     if analysis_workers <= 1:
         completed = 0
         failed = 0
-        for source_label, input_path in pending_structures:
+        for source_label, input_path, overwrite_existing_outputs in pending_structures:
             tracker.mark_started(source_label, input_path)
             print(f"analyzing {source_label}: {input_path}", file=sys.stderr)
             try:
-                tracker.mark_result(
-                    analyze_structure_file(
+                if use_isolated_workers:
+                    result = _run_isolated_analysis_worker(
                         source_label=source_label,
                         input_path=input_path,
                         output_dir=output_dir,
                         min_voxels=int(args.min_voxels),
                         min_volume=args.min_volume,
-                        overwrite=bool(args.overwrite or args.reannotate),
+                        overwrite=bool(
+                            args.overwrite
+                            or args.reannotate
+                            or overwrite_existing_outputs
+                        ),
                         assembly_policy=str(args.assembly_policy),
+                        resolution=float(args.resolution),
+                        keep_non_protein=bool(args.keep_non_protein),
+                        backend=active_backend,
+                        max_residues=runtime_max_residues,
+                    )
+                else:
+                    result = _invoke_analysis_callable(
+                        analyze_structure_file,
+                        source_label=source_label,
+                        input_path=input_path,
+                        output_dir=output_dir,
+                        min_voxels=int(args.min_voxels),
+                        min_volume=args.min_volume,
+                        overwrite=bool(
+                            args.overwrite
+                            or args.reannotate
+                            or overwrite_existing_outputs
+                        ),
+                        assembly_policy=str(args.assembly_policy),
+                        max_residues=runtime_max_residues,
+                    )
+                tracker.mark_result(result)
+            except PostAssemblyResidueLimitExceeded as error:
+                tracker.mark_skipped(
+                    _build_post_assembly_residue_limit_skip_entry(
+                        source_label=source_label,
+                        input_path=input_path,
+                        output_dir=output_dir,
+                        error=error,
                     )
                 )
-            except Exception as error:  # pragma: no cover - exercised via CLI integration tests
-                failed += 1
-                error_entry = {
-                    "source": source_label,
-                    "input_path": str(input_path),
-                    "error": str(error),
-                }
-                tracker.mark_error(error_entry)
-                print(f"error for {source_label}: {error}", file=sys.stderr)
+                print(f"skipping {source_label}: {error}", file=sys.stderr)
                 completed += 1
                 last_progress_emit = _emit_stage_progress(
                     stage="analysis",
@@ -2137,6 +2866,33 @@ def _analyze_structures(
                     started_at=progress_started_at,
                     last_emitted_at=last_progress_emit,
                     interval=progress_interval,
+                    active=1 if completed < total_pending else 0,
+                    queued=max(total_pending - completed - 1, 0),
+                )
+                continue
+            except Exception as error:  # pragma: no cover - exercised via CLI integration tests
+                failed += 1
+                error_entry = _build_error_entry(
+                    source_label=source_label,
+                    input_path=input_path,
+                    error=error,
+                )
+                tracker.mark_error(error_entry)
+                print(
+                    f"error for {source_label}: {error_entry['error']}",
+                    file=sys.stderr,
+                )
+                completed += 1
+                last_progress_emit = _emit_stage_progress(
+                    stage="analysis",
+                    completed=completed,
+                    total=total_pending,
+                    failed=failed,
+                    started_at=progress_started_at,
+                    last_emitted_at=last_progress_emit,
+                    interval=progress_interval,
+                    active=1 if completed < total_pending else 0,
+                    queued=max(total_pending - completed - 1, 0),
                 )
                 if args.fail_fast:
                     break
@@ -2151,6 +2907,8 @@ def _analyze_structures(
                 started_at=progress_started_at,
                 last_emitted_at=last_progress_emit,
                 interval=progress_interval,
+                active=1 if completed < total_pending else 0,
+                queued=max(total_pending - completed - 1, 0),
             )
 
         _emit_stage_progress(
@@ -2161,6 +2919,8 @@ def _analyze_structures(
             started_at=progress_started_at,
             last_emitted_at=last_progress_emit,
             interval=progress_interval,
+            active=0,
+            queued=0,
             force=True,
         )
         return analysis_workers
@@ -2172,43 +2932,130 @@ def _analyze_structures(
     with ThreadPoolExecutor(max_workers=analysis_workers) as executor:
         future_to_context = {
             executor.submit(
-                analyze_structure_file,
-                source_label=source_label,
-                input_path=input_path,
-                output_dir=output_dir,
-                min_voxels=int(args.min_voxels),
-                min_volume=args.min_volume,
-                overwrite=bool(args.overwrite or args.reannotate),
-                assembly_policy=str(args.assembly_policy),
+                (
+                    _run_isolated_analysis_worker
+                    if use_isolated_workers
+                    else _invoke_analysis_callable
+                ),
+                **(
+                    {
+                        "source_label": source_label,
+                        "input_path": input_path,
+                        "output_dir": output_dir,
+                        "min_voxels": int(args.min_voxels),
+                        "min_volume": args.min_volume,
+                        "overwrite": bool(
+                            args.overwrite
+                            or args.reannotate
+                            or overwrite_existing_outputs
+                        ),
+                        "assembly_policy": str(args.assembly_policy),
+                        "resolution": float(args.resolution),
+                        "keep_non_protein": bool(args.keep_non_protein),
+                        "backend": active_backend,
+                        "max_residues": runtime_max_residues,
+                    }
+                    if use_isolated_workers
+                    else {
+                        "fn": analyze_structure_file,
+                        "source_label": source_label,
+                        "input_path": input_path,
+                        "output_dir": output_dir,
+                        "min_voxels": int(args.min_voxels),
+                        "min_volume": args.min_volume,
+                        "overwrite": bool(
+                            args.overwrite
+                            or args.reannotate
+                            or overwrite_existing_outputs
+                        ),
+                        "assembly_policy": str(args.assembly_policy),
+                        "max_residues": runtime_max_residues,
+                    }
+                ),
             ): (index, source_label, input_path)
-            for index, (source_label, input_path) in enumerate(pending_structures)
+            for index, (
+                source_label,
+                input_path,
+                overwrite_existing_outputs,
+            ) in enumerate(pending_structures)
         }
 
         for _, source_label, input_path in future_to_context.values():
             tracker.mark_started(source_label, input_path)
 
         ordered_results: dict[int, dict] = {}
+        ordered_skips: dict[int, dict] = {}
         ordered_errors: dict[int, dict] = {}
         completed = 0
         failed = 0
+        pending_futures = set(future_to_context)
+        last_progress_emit = _emit_stage_progress(
+            stage="analysis",
+            completed=completed,
+            total=total_pending,
+            failed=failed,
+            started_at=progress_started_at,
+            last_emitted_at=last_progress_emit,
+            interval=progress_interval,
+            active=min(analysis_workers, total_pending),
+            queued=max(total_pending - min(analysis_workers, total_pending), 0),
+            force=True,
+        )
 
-        for future in as_completed(future_to_context):
-            index, source_label, input_path = future_to_context[future]
-            try:
-                ordered_results[index] = future.result()
-            except Exception as error:  # pragma: no cover - exercised via CLI integration tests
-                failed += 1
-                ordered_errors[index] = {
-                    "source": source_label,
-                    "input_path": str(input_path),
-                    "error": str(error),
-                }
-                print(
-                    f"error for {source_label}: {error}",
-                    file=sys.stderr,
+        wait_timeout = max(0.1, progress_interval) if progress_interval > 0 else None
+
+        while pending_futures:
+            done, not_done = wait(
+                pending_futures,
+                timeout=wait_timeout,
+                return_when=FIRST_COMPLETED,
+            )
+            if len(done) == 0:
+                active = min(len(pending_futures), analysis_workers)
+                queued = max(total_pending - completed - active, 0)
+                last_progress_emit = _emit_stage_progress(
+                    stage="analysis",
+                    completed=completed,
+                    total=total_pending,
+                    failed=failed,
+                    started_at=progress_started_at,
+                    last_emitted_at=last_progress_emit,
+                    interval=progress_interval,
+                    active=active,
+                    queued=queued,
+                    force=True,
                 )
+                continue
 
-            completed += 1
+            pending_futures = set(not_done)
+            for future in done:
+                index, source_label, input_path = future_to_context[future]
+                try:
+                    ordered_results[index] = future.result()
+                except PostAssemblyResidueLimitExceeded as error:
+                    ordered_skips[index] = _build_post_assembly_residue_limit_skip_entry(
+                        source_label=source_label,
+                        input_path=input_path,
+                        output_dir=output_dir,
+                        error=error,
+                    )
+                    print(f"skipping {source_label}: {error}", file=sys.stderr)
+                except Exception as error:  # pragma: no cover - exercised via CLI integration tests
+                    failed += 1
+                    ordered_errors[index] = _build_error_entry(
+                        source_label=source_label,
+                        input_path=input_path,
+                        error=error,
+                    )
+                    print(
+                        f"error for {source_label}: {ordered_errors[index]['error']}",
+                        file=sys.stderr,
+                    )
+
+                completed += 1
+
+            active = min(len(pending_futures), analysis_workers)
+            queued = max(total_pending - completed - active, 0)
             last_progress_emit = _emit_stage_progress(
                 stage="analysis",
                 completed=completed,
@@ -2217,6 +3064,8 @@ def _analyze_structures(
                 started_at=progress_started_at,
                 last_emitted_at=last_progress_emit,
                 interval=progress_interval,
+                active=active,
+                queued=queued,
             )
 
     _emit_stage_progress(
@@ -2227,12 +3076,16 @@ def _analyze_structures(
         started_at=progress_started_at,
         last_emitted_at=last_progress_emit,
         interval=progress_interval,
+        active=0,
+        queued=0,
         force=True,
     )
 
     for index in range(total_pending):
         if index in ordered_results:
             tracker.mark_result(ordered_results[index])
+        elif index in ordered_skips:
+            tracker.mark_skipped(ordered_skips[index])
         elif index in ordered_errors:
             tracker.mark_error(ordered_errors[index])
 
@@ -2350,7 +3203,13 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
 
         active_backend = native_backend.active_backend()
         print(f"[volumizer] backend: {active_backend}", file=sys.stderr)
-        analysis_workers = _analyze_structures(structures, args, output_dir, tracker)
+        analysis_workers = _analyze_structures(
+            structures,
+            args,
+            output_dir,
+            tracker,
+            active_backend=active_backend,
+        )
 
     summary = {
         "config": {

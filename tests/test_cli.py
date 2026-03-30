@@ -1,6 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import time
+
+import pandas as pd
 
 from volumizer import cli, rcsb
 from volumizer.paths import TEST_DIR
@@ -867,6 +870,318 @@ def test_run_cli_parallel_jobs_emits_periodic_progress(
     stderr = capsys.readouterr().err
     assert "analysis progress:" in stderr
     assert "eta=" in stderr
+    assert "active=" in stderr
+    assert "queued=" in stderr
+
+
+def test_run_cli_parallel_jobs_emits_heartbeat_before_first_completion(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        jobs=2,
+        progress_interval=0.01,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
+        time.sleep(0.2)
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    stderr = capsys.readouterr().err
+    assert stderr.count("analysis progress:") >= 2
+
+
+def test_run_cli_cluster_native_uses_isolated_workers(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        jobs=2,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir, metadata_cache_path=None: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "_native_backend_module",
+        lambda: SimpleNamespace(
+            BACKEND_ENV=cli.BACKEND_ENV,
+            clear_backend_cache=lambda: None,
+            active_backend=lambda: "native",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_utils_module",
+        lambda: SimpleNamespace(
+            set_resolution=lambda resolution: None,
+            set_non_protein=lambda keep_non_protein: None,
+        ),
+    )
+    monkeypatch.setattr(cli, "analyze_structure_file", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster native path should use isolated workers")))
+
+    def _worker(**kwargs):
+        source_label = kwargs["source_label"]
+        return {
+            "source": source_label,
+            "input_path": str(kwargs["input_path"]),
+            "structure_output": str(kwargs["output_dir"] / f"{source_label}.annotated.cif"),
+            "annotation_output": str(kwargs["output_dir"] / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "_run_isolated_analysis_worker", _worker)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 2
+    assert summary["num_failed"] == 0
+
+    stderr = capsys.readouterr().err
+    assert "analysis worker mode: isolated subprocesses" in stderr
+
+
+def test_run_cli_cluster_native_records_isolated_worker_failure(
+    monkeypatch,
+    tmp_path: Path,
+):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        jobs=2,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir, metadata_cache_path=None: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_native_backend_module",
+        lambda: SimpleNamespace(
+            BACKEND_ENV=cli.BACKEND_ENV,
+            clear_backend_cache=lambda: None,
+            active_backend=lambda: "native",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_utils_module",
+        lambda: SimpleNamespace(
+            set_resolution=lambda resolution: None,
+            set_non_protein=lambda keep_non_protein: None,
+        ),
+    )
+
+    def _worker(**kwargs):
+        if kwargs["source_label"] == "first":
+            raise RuntimeError("analysis worker terminated by signal 11 (SIGSEGV)")
+        return {
+            "source": kwargs["source_label"],
+            "input_path": str(kwargs["input_path"]),
+            "structure_output": str(kwargs["output_dir"] / "second.annotated.cif"),
+            "annotation_output": str(kwargs["output_dir"] / "second.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "_run_isolated_analysis_worker", _worker)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 1
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 1
+    assert "SIGSEGV" in summary["errors"][0]["error"]
+
+
+def test_run_cli_cluster_native_records_post_assembly_residue_limit_skip(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        jobs=2,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir, metadata_cache_path=None: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_native_backend_module",
+        lambda: SimpleNamespace(
+            BACKEND_ENV=cli.BACKEND_ENV,
+            clear_backend_cache=lambda: None,
+            active_backend=lambda: "native",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_utils_module",
+        lambda: SimpleNamespace(
+            set_resolution=lambda resolution: None,
+            set_non_protein=lambda keep_non_protein: None,
+        ),
+    )
+
+    def _worker(**kwargs):
+        if kwargs["source_label"] == "first":
+            raise cli.PostAssemblyResidueLimitExceeded(
+                actual_residues=12000,
+                max_residues=10000,
+                assembly_policy="biological",
+            )
+        return {
+            "source": kwargs["source_label"],
+            "input_path": str(kwargs["input_path"]),
+            "structure_output": str(kwargs["output_dir"] / "second.annotated.cif"),
+            "annotation_output": str(kwargs["output_dir"] / "second.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "_run_isolated_analysis_worker", _worker)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 0
+    assert summary["num_skipped"] == 1
+    assert summary["skipped"][0]["reason"] == "post_assembly_residue_limit"
+    assert summary["skipped"][0]["actual_residues"] == 12000
+    assert summary["skipped"][0]["max_residues"] == 10000
+
+    stderr = capsys.readouterr().err
+    assert "skipping first:" in stderr
+
+
+def test_run_isolated_analysis_worker_reports_signal(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=-11,
+            stdout="",
+            stderr="",
+        ),
+    )
+
+    try:
+        cli._run_isolated_analysis_worker(
+            source_label="boom",
+            input_path=tmp_path / "boom.cif",
+            output_dir=tmp_path,
+            min_voxels=2,
+            min_volume=None,
+            overwrite=False,
+            assembly_policy="biological",
+            resolution=3.0,
+            keep_non_protein=False,
+            backend="native",
+        )
+        assert False, "expected RuntimeError"
+    except RuntimeError as error:
+        assert "signal 11 (SIGSEGV)" in str(error)
+
+
+def test_run_isolated_analysis_worker_reports_post_assembly_residue_limit(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "status": "skipped_post_assembly_residue_limit",
+                    "actual_residues": 12000,
+                    "max_residues": 10000,
+                    "assembly_policy": "biological",
+                }
+            ),
+            stderr="",
+        ),
+    )
+
+    try:
+        cli._run_isolated_analysis_worker(
+            source_label="boom",
+            input_path=tmp_path / "boom.cif",
+            output_dir=tmp_path,
+            min_voxels=2,
+            min_volume=None,
+            overwrite=False,
+            assembly_policy="biological",
+            resolution=3.0,
+            keep_non_protein=False,
+            backend="native",
+            max_residues=10000,
+        )
+        assert False, "expected PostAssemblyResidueLimitExceeded"
+    except cli.PostAssemblyResidueLimitExceeded as error:
+        assert error.actual_residues == 12000
+        assert error.max_residues == 10000
 
 
 def test_run_cli_progress_interval_zero_disables_periodic_progress(
@@ -1108,6 +1423,139 @@ def test_run_cli_resume_ignores_checkpoint_state_without_outputs(monkeypatch, tm
     assert summary["num_processed"] == 2
     assert summary["num_failed"] == 0
     assert analyzed_sources == ["first", "second"]
+
+
+def test_analyze_structure_file_removes_partial_outputs_before_reanalysis(
+    monkeypatch,
+    tmp_path: Path,
+):
+    input_path = tmp_path / "sample.cif"
+    input_path.write_text("dummy", encoding="utf-8")
+
+    stale_structure_output = tmp_path / "sample.annotated.cif"
+    stale_structure_output.write_text("stale", encoding="utf-8")
+    annotation_output = tmp_path / "sample.annotation.json"
+
+    dummy_pdb = SimpleNamespace(
+        load_structure=lambda input_path, assembly_policy="biological": "input",
+        save_structure=lambda structure, output_path: Path(output_path).write_text(
+            "fresh-structure",
+            encoding="utf-8",
+        ),
+        compute_sse_fractions=lambda prepared_structure: {
+            "frac_alpha": 0.1,
+            "frac_beta": 0.2,
+            "frac_coil": 0.7,
+        },
+    )
+    dummy_volumizer = SimpleNamespace(
+        prepare_pdb_structure=lambda structure: "prepared",
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+            pd.DataFrame([{"id": 1, "type": "pore", "volume": 12.0}]),
+            "annotation",
+        ),
+    )
+    dummy_utils = SimpleNamespace(
+        get_active_backend=lambda: "native",
+        VOXEL_SIZE=3.0,
+    )
+
+    monkeypatch.setattr(cli, "_pdb_module", lambda: dummy_pdb)
+    monkeypatch.setattr(cli, "_volumizer_module", lambda: dummy_volumizer)
+    monkeypatch.setattr(cli, "_utils_module", lambda: dummy_utils)
+
+    result = cli.analyze_structure_file(
+        source_label="sample",
+        input_path=input_path,
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+    )
+
+    assert result["num_volumes"] == 1
+    assert stale_structure_output.read_text(encoding="utf-8") == "fresh-structure"
+    assert annotation_output.is_file()
+
+
+def test_analyze_structure_file_enforces_post_assembly_residue_limit(
+    monkeypatch,
+    tmp_path: Path,
+):
+    input_path = tmp_path / "sample.cif"
+    input_path.write_text("dummy", encoding="utf-8")
+
+    dummy_pdb = SimpleNamespace(
+        load_structure=lambda input_path, assembly_policy="biological": "input",
+        get_structure_residue_count=lambda structure: 10001,
+    )
+    dummy_volumizer = SimpleNamespace(
+        prepare_pdb_structure=lambda structure: "prepared",
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (_ for _ in ()).throw(
+            AssertionError("annotation should not run for oversize assemblies")
+        ),
+    )
+
+    monkeypatch.setattr(cli, "_pdb_module", lambda: dummy_pdb)
+    monkeypatch.setattr(cli, "_volumizer_module", lambda: dummy_volumizer)
+
+    try:
+        cli.analyze_structure_file(
+            source_label="sample",
+            input_path=input_path,
+            output_dir=tmp_path,
+            min_voxels=2,
+            min_volume=None,
+            overwrite=False,
+            assembly_policy="biological",
+            max_residues=10000,
+        )
+        assert False, "expected PostAssemblyResidueLimitExceeded"
+    except cli.PostAssemblyResidueLimitExceeded as error:
+        assert error.actual_residues == 10001
+        assert error.max_residues == 10000
+
+
+def test_run_cli_reports_exception_type_when_message_is_empty(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(tmp_path, command="analyze", jobs=1)
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("blank", tmp_path / "blank.cif"),
+        ],
+    )
+
+    def _analyze(
+        source_label,
+        input_path,
+        output_dir,
+        min_voxels,
+        min_volume,
+        overwrite,
+        assembly_policy="biological",
+    ):
+        raise StopIteration()
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 1
+
+    stderr = capsys.readouterr().err
+    assert "error for blank: StopIteration()" in stderr
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_failed"] == 1
+    assert summary["errors"][0]["error"] == "StopIteration()"
+    assert summary["errors"][0]["error_type"] == "StopIteration"
+    assert "StopIteration" in summary["errors"][0]["traceback"]
 
 
 def test_cache_subcommand_inspect_and_clear_negative(tmp_path: Path):
@@ -1380,7 +1828,10 @@ def test_cli_main_resume_skips_existing_output(monkeypatch, tmp_path: Path):
         json.dumps(
             {
                 "source": "cavity",
+                "input_path": str(TEST_PDB),
+                "output_structure_cif": str(structure_path),
                 "num_volumes": 3,
+                "volumes": [{}, {}, {}],
                 "largest_type": "buried",
                 "largest_volume": 123.0,
             }
@@ -1405,3 +1856,191 @@ def test_cli_main_resume_skips_existing_output(monkeypatch, tmp_path: Path):
     assert summary["num_processed"] == 0
     assert summary["num_failed"] == 0
     assert summary["num_skipped"] == 1
+
+
+def test_run_cli_resume_emits_compact_resume_summary(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(tmp_path, command="analyze", resume=True, jobs=1)
+
+    first_structure = tmp_path / "first.annotated.cif"
+    first_annotation = tmp_path / "first.annotation.json"
+    first_structure.write_text("data_dummy", encoding="utf-8")
+    first_annotation.write_text(
+        json.dumps(
+            {
+                "source": "first",
+                "input_path": str(tmp_path / "first.cif"),
+                "output_structure_cif": str(first_structure),
+                "num_volumes": 1,
+                "volumes": [{}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    second_structure = tmp_path / "second.annotated.cif"
+    second_annotation = tmp_path / "second.annotation.json"
+    second_structure.write_text("data_dummy", encoding="utf-8")
+    second_annotation.write_text(
+        json.dumps(
+            {
+                "source": "second",
+                "input_path": str(tmp_path / "second.cif"),
+                "output_structure_cif": str(second_structure),
+                "num_volumes": 0,
+                "volumes": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "analyze_structure_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("valid resumed outputs should be skipped")
+        ),
+    )
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    stderr = capsys.readouterr().err
+    assert "resume scan: skipped_valid=2, reanalyze_partial=0, reanalyze_invalid=0" in stderr
+    assert "skipping first: outputs already exist (--resume)" not in stderr
+    assert "skipping second: outputs already exist (--resume)" not in stderr
+
+
+def test_run_cli_resume_emits_progress_during_resume_scan(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="analyze",
+        resume=True,
+        jobs=1,
+        progress_interval=0.01,
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+        ],
+    )
+
+    def _resume_action(*, source_label, input_path, output_dir):
+        time.sleep(0.05)
+        return {
+            "action": "skip",
+            "reason_kind": "valid",
+            "skip_entry": {
+                "source": source_label,
+                "input_path": str(input_path),
+                "reason": "resume_existing_outputs",
+            },
+            "overwrite_existing_outputs": False,
+            "log_message": None,
+        }
+
+    monkeypatch.setattr(cli, "_get_resume_action", _resume_action)
+    monkeypatch.setattr(
+        cli,
+        "analyze_structure_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("resume scan should skip all structures")
+        ),
+    )
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    stderr = capsys.readouterr().err
+    assert "resume scan: validating existing outputs for 2 structures..." in stderr
+    assert "resume scan progress:" in stderr
+    assert "resume scan: skipped_valid=2, reanalyze_partial=0, reanalyze_invalid=0" in stderr
+
+
+def test_run_cli_resume_reanalyzes_invalid_existing_outputs(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(tmp_path, command="analyze", resume=True, jobs=1)
+
+    structure_path = tmp_path / "cavity.annotated.cif"
+    annotation_path = tmp_path / "cavity.annotation.json"
+    structure_path.write_text("data_dummy", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "cavity",
+                "input_path": str(TEST_PDB),
+                "output_structure_cif": str(structure_path),
+                "num_volumes": 3,
+                "volumes": [{}],
+                "largest_type": "buried",
+                "largest_volume": 123.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [("cavity", TEST_PDB)],
+    )
+
+    seen_overwrite_flags: list[bool] = []
+
+    def _analyze(
+        source_label,
+        input_path,
+        output_dir,
+        min_voxels,
+        min_volume,
+        overwrite,
+        assembly_policy="biological",
+    ):
+        seen_overwrite_flags.append(bool(overwrite))
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+    assert seen_overwrite_flags == [True]
+
+    stderr = capsys.readouterr().err
+    assert "resume scan: skipped_valid=0, reanalyze_partial=0, reanalyze_invalid=1" in stderr
+    assert "resume invalid examples: cavity (" in stderr
+    assert "annotation num_volumes does not match volumes length" in stderr
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 0
+    assert summary["num_skipped"] == 0
