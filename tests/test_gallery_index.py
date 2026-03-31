@@ -283,6 +283,220 @@ def test_build_gallery_index_infers_pdb_id_from_source_when_missing(tmp_path: Pa
     assert row == ("1dzf", "1DZF")
 
 
+def test_build_gallery_index_includes_resume_skipped_existing_outputs(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    annotation_path = tmp_path / "hit-a.annotation.json"
+    structure_output_path = tmp_path / "hit-a.annotated.cif"
+    db_path = tmp_path / "gallery.db"
+
+    structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "hit-a",
+                "num_volumes": 1,
+                "volumes": [
+                    {
+                        "id": 0,
+                        "type": "pocket",
+                        "volume": 88.0,
+                        "x": 8.0,
+                        "y": 5.0,
+                        "z": 3.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {
+                    "assembly_policy": "biological",
+                    "resolution": 3.0,
+                    "keep_non_protein": False,
+                    "output_dir": str(tmp_path),
+                },
+                "results": [],
+                "errors": [],
+                "skipped": [
+                    {
+                        "source": "hit-a",
+                        "input_path": str(TEST_INPUT_PDB),
+                        "structure_output": str(structure_output_path),
+                        "annotation_output": str(annotation_path),
+                        "reason": "resume_existing_outputs",
+                    },
+                    {
+                        "source": "too-big",
+                        "input_path": str(TEST_INPUT_PDB),
+                        "structure_output": str(tmp_path / "too-big.annotated.cif"),
+                        "annotation_output": str(tmp_path / "too-big.annotation.json"),
+                        "reason": "post_assembly_residue_limit",
+                    },
+                ],
+                "planned": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="resume-summary-test",
+        replace_run=False,
+        strict=True,
+    )
+
+    assert result["indexed_structures"] == 1
+    assert result["indexed_volumes"] == 1
+    assert result["skipped_structures"] == 0
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT source_label, annotation_json_path FROM structures"
+        ).fetchone()
+
+    assert row == ("hit-a", str(annotation_path))
+
+
+def test_build_gallery_index_prefers_results_over_resume_skips(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    annotation_path = tmp_path / "hit-a.annotation.json"
+    structure_output_path = tmp_path / "hit-a.annotated.cif"
+    db_path = tmp_path / "gallery.db"
+
+    structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "hit-a",
+                "num_volumes": 1,
+                "volumes": [
+                    {
+                        "id": 0,
+                        "type": "pore",
+                        "volume": 123.0,
+                        "x": 9.0,
+                        "y": 4.0,
+                        "z": 2.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {
+                    "assembly_policy": "biological",
+                    "resolution": 3.0,
+                    "keep_non_protein": False,
+                    "output_dir": str(tmp_path),
+                },
+                "results": [
+                    {
+                        "source": "hit-a",
+                        "input_path": str(TEST_INPUT_PDB),
+                        "structure_output": str(structure_output_path),
+                        "annotation_output": str(annotation_path),
+                    }
+                ],
+                "errors": [],
+                "skipped": [
+                    {
+                        "source": "hit-a",
+                        "input_path": str(TEST_INPUT_PDB),
+                        "structure_output": str(structure_output_path),
+                        "annotation_output": str(annotation_path),
+                        "reason": "resume_existing_outputs",
+                    }
+                ],
+                "planned": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    result = gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="resume-dedupe-test",
+        replace_run=False,
+        strict=True,
+    )
+
+    assert result["indexed_structures"] == 1
+    assert result["indexed_volumes"] == 1
+
+    with sqlite3.connect(db_path) as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) FROM structures"
+        ).fetchone()[0]
+
+    assert count == 1
+
+
+def test_build_gallery_index_can_skip_structure_metrics(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    annotation_path = tmp_path / "hit-a.annotation.json"
+    structure_output_path = tmp_path / "hit-a.annotated.cif"
+    db_path = tmp_path / "gallery.db"
+
+    structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "hit-a",
+                "num_volumes": 1,
+                "frac_alpha": 0.5,
+                "frac_beta": 0.2,
+                "frac_coil": 0.3,
+                "volumes": [
+                    {
+                        "id": 0,
+                        "type": "pore",
+                        "volume": 100.0,
+                        "x": 10.0,
+                        "y": 4.0,
+                        "z": 2.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_summary(summary_path, annotation_path, structure_output_path)
+
+    result = gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="skip-metrics-test",
+        replace_run=False,
+        strict=True,
+        compute_structure_metrics=False,
+    )
+
+    assert result["indexed_structures"] == 1
+    assert result["indexed_volumes"] == 1
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT num_chains, num_residues, num_sequence_unique_chains,
+                   frac_alpha, frac_beta, frac_coil
+            FROM structures
+            """
+        ).fetchone()
+
+    assert row == (None, None, None, 0.5, 0.2, 0.3)
+
+
 class TestSequenceOverlap:
     def test_identical_sequences(self):
         seq = ("ALA", "GLY", "VAL")

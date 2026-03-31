@@ -18,6 +18,7 @@ from volumizer import pdb, rcsb, utils
 
 
 _VALID_VOLUME_KINDS = {"pore", "pocket", "cavity", "hub"}
+_INDEXABLE_SKIPPED_REASONS = {"resume_existing_outputs"}
 
 
 def _safe_float(value: Any) -> float | None:
@@ -201,6 +202,42 @@ def _normalize_volume_rows(
         grouped[kind].sort(key=lambda row: float(row["volume_a3"]), reverse=True)
 
     return grouped
+
+
+def _collect_summary_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    seen_sources: set[str] = set()
+
+    summary_results = payload.get("results")
+    if not isinstance(summary_results, list):
+        raise ValueError("Summary payload is missing list field: results")
+
+    for entry in summary_results:
+        if not isinstance(entry, dict):
+            collected.append(entry)
+            continue
+        source_label = str(entry.get("source") or "structure")
+        if source_label in seen_sources:
+            continue
+        seen_sources.add(source_label)
+        collected.append(entry)
+
+    summary_skipped = payload.get("skipped")
+    if not isinstance(summary_skipped, list):
+        return collected
+
+    for entry in summary_skipped:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("reason") or "") not in _INDEXABLE_SKIPPED_REASONS:
+            continue
+        source_label = str(entry.get("source") or "structure")
+        if source_label in seen_sources:
+            continue
+        seen_sources.add(source_label)
+        collected.append(entry)
+
+    return collected
 
 
 def _extract_chain_sequences(structure) -> dict[str, tuple[str, ...]]:
@@ -477,6 +514,8 @@ def build_gallery_index(
     run_id: str | None = None,
     replace_run: bool = False,
     strict: bool = False,
+    compute_structure_metrics: bool = True,
+    progress_every: int = 0,
 ) -> dict[str, int | str]:
     summary_path = summary_path.resolve()
     if not summary_path.is_file():
@@ -502,9 +541,7 @@ def build_gallery_index(
     previous_keep_non_protein = bool(utils.KEEP_NON_PROTEIN)
     utils.set_non_protein(requested_keep_non_protein)
 
-    summary_results = payload.get("results")
-    if not isinstance(summary_results, list):
-        raise ValueError("Summary payload is missing list field: results")
+    summary_entries = _collect_summary_entries(payload)
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -516,6 +553,7 @@ def build_gallery_index(
     indexed_structures = 0
     indexed_volumes = 0
     skipped_structures = 0
+    total_entries = len(summary_entries)
 
     input_metric_cache: dict[Path, tuple[int | None, int | None, int | None]] = {}
 
@@ -552,9 +590,17 @@ def build_gallery_index(
                 ),
             )
 
-            for result in summary_results:
+            for entry_index, result in enumerate(summary_entries, start=1):
                 if not isinstance(result, dict):
                     skipped_structures += 1
+                    if progress_every > 0 and (entry_index % progress_every) == 0:
+                        _warn(
+                            "progress: "
+                            f"{entry_index}/{total_entries}, "
+                            f"indexed={indexed_structures}, "
+                            f"skipped={skipped_structures}, "
+                            f"volumes={indexed_volumes}"
+                        )
                     continue
 
                 source_label = str(result.get("source") or "structure")
@@ -588,25 +634,26 @@ def build_gallery_index(
                 num_chains = None
                 num_residues = None
                 num_sequence_unique_chains = None
-                if input_path is None or not input_path.is_file():
-                    _warn(
-                        f"structure metrics unavailable for {source_label}: input path missing ({input_path})"
-                    )
-                    if strict:
-                        raise FileNotFoundError(
-                            f"Missing input structure for {source_label}: {input_path}"
+                if compute_structure_metrics:
+                    if input_path is None or not input_path.is_file():
+                        _warn(
+                            f"structure metrics unavailable for {source_label}: input path missing ({input_path})"
                         )
-                else:
-                    if input_path not in input_metric_cache:
-                        input_metric_cache[input_path] = _compute_structure_metrics(
-                            input_path,
-                            assembly_policy=assembly_policy,
-                        )
-                    (
-                        num_chains,
-                        num_residues,
-                        num_sequence_unique_chains,
-                    ) = input_metric_cache[input_path]
+                        if strict:
+                            raise FileNotFoundError(
+                                f"Missing input structure for {source_label}: {input_path}"
+                            )
+                    else:
+                        if input_path not in input_metric_cache:
+                            input_metric_cache[input_path] = _compute_structure_metrics(
+                                input_path,
+                                assembly_policy=assembly_policy,
+                            )
+                        (
+                            num_chains,
+                            num_residues,
+                            num_sequence_unique_chains,
+                        ) = input_metric_cache[input_path]
 
                 annotation_payload = json.loads(annotation_path.read_text(encoding="utf-8"))
                 frac_alpha = _safe_float(
@@ -770,6 +817,14 @@ def build_gallery_index(
                 )
 
                 indexed_structures += 1
+                if progress_every > 0 and (entry_index % progress_every) == 0:
+                    _warn(
+                        "progress: "
+                        f"{entry_index}/{total_entries}, "
+                        f"indexed={indexed_structures}, "
+                        f"skipped={skipped_structures}, "
+                        f"volumes={indexed_volumes}"
+                    )
 
             connection.commit()
     finally:
@@ -817,6 +872,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Fail on missing input/annotation paths instead of skipping entries.",
     )
+    parser.add_argument(
+        "--skip-structure-metrics",
+        action="store_true",
+        help=(
+            "Do not load source structures to populate chain/residue metrics. "
+            "This is much faster and avoids parser crashes on problematic inputs, "
+            "but leaves num_chains/num_residues/num_sequence_unique_chains null."
+        ),
+    )
+    parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        help=(
+            "Emit progress to stderr every N indexed entries "
+            "(default: 0, disabled)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -828,6 +901,8 @@ def main(argv: list[str] | None = None) -> int:
         run_id=args.run_id,
         replace_run=bool(args.replace_run),
         strict=bool(args.strict),
+        compute_structure_metrics=not bool(args.skip_structure_metrics),
+        progress_every=int(args.progress_every),
     )
 
     print(

@@ -125,7 +125,11 @@ fi
 if [[ "$NEED_REBUILD" == true ]]; then
   echo "==> Rebuilding gallery index from: $SUMMARY_PATH"
   rm -f "$DB_PATH"
-  uv run python -m volumizer.gallery_index --summary "$SUMMARY_PATH" --db "$DB_PATH"
+  uv run python -m volumizer.gallery_index \
+    --summary "$SUMMARY_PATH" \
+    --db "$DB_PATH" \
+    --skip-structure-metrics \
+    --progress-every 500
 fi
 
 # --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
