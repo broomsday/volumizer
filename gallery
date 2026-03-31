@@ -10,7 +10,7 @@ log() {
 
 usage() {
   cat <<EOF
-Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--progress-interval SECONDS] [--host HOST] [--port PORT]
+Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--progress-interval SECONDS] [--jobs N] [--render-backend MODE] [--axis-render-mode MODE] [--worker-timeout-seconds SECONDS] [--timing-jsonl PATH] [--host HOST] [--port PORT]
 
 Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 
@@ -21,6 +21,11 @@ Options:
   --force-index        Rebuild the index even if it is up to date
   --force-thumbnails   Re-render all thumbnails even if they already exist
   --progress-interval  Seconds between thumbnail progress updates (default: 30)
+  --jobs               Parallel thumbnail render workers (default: 1)
+  --render-backend     software, hardware, or auto (default: software)
+  --axis-render-mode   compatibility or fast (default: compatibility)
+  --worker-timeout-seconds  Max seconds per thumbnail job before termination (default: 0, disabled)
+  --timing-jsonl       Optional JSONL path for structured thumbnail timing output
   --host HOST          Host to bind the server to (default: 127.0.0.1)
   --port PORT          Port to bind the server to (default: 8000)
   -h, --help           Show this help message
@@ -30,8 +35,13 @@ EOF
 # --- Parse arguments ---
 RUN_PATH=""
 FORCE_INDEX=false
-FORCE_THUMBNAILS=""
+FORCE_THUMBNAILS=false
 PROGRESS_INTERVAL="30"
+JOBS="1"
+RENDER_BACKEND="software"
+AXIS_RENDER_MODE="compatibility"
+WORKER_TIMEOUT_SECONDS="0"
+TIMING_JSONL=""
 HOST="127.0.0.1"
 PORT="8000"
 
@@ -46,11 +56,31 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --force-thumbnails)
-      FORCE_THUMBNAILS="--force"
+      FORCE_THUMBNAILS=true
       shift
       ;;
     --progress-interval)
       PROGRESS_INTERVAL="${2:?--progress-interval requires a value}"
+      shift 2
+      ;;
+    --jobs)
+      JOBS="${2:?--jobs requires a value}"
+      shift 2
+      ;;
+    --render-backend)
+      RENDER_BACKEND="${2:?--render-backend requires a value}"
+      shift 2
+      ;;
+    --axis-render-mode)
+      AXIS_RENDER_MODE="${2:?--axis-render-mode requires a value}"
+      shift 2
+      ;;
+    --worker-timeout-seconds)
+      WORKER_TIMEOUT_SECONDS="${2:?--worker-timeout-seconds requires a value}"
+      shift 2
+      ;;
+    --timing-jsonl)
+      TIMING_JSONL="${2:?--timing-jsonl requires a value}"
       shift 2
       ;;
     --host)
@@ -144,7 +174,21 @@ fi
 
 # --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
 log "thumbnails: rendering (skipping up-to-date unless forced)"
-uv run python -m volumizer.gallery_render --db "$DB_PATH" --progress-interval "$PROGRESS_INTERVAL" $FORCE_THUMBNAILS
+THUMBNAIL_ARGS=(
+  --db "$DB_PATH"
+  --progress-interval "$PROGRESS_INTERVAL"
+  --jobs "$JOBS"
+  --render-backend "$RENDER_BACKEND"
+  --axis-render-mode "$AXIS_RENDER_MODE"
+  --worker-timeout-seconds "$WORKER_TIMEOUT_SECONDS"
+)
+if [[ "$FORCE_THUMBNAILS" == true ]]; then
+  THUMBNAIL_ARGS+=(--force)
+fi
+if [[ -n "$TIMING_JSONL" ]]; then
+  THUMBNAIL_ARGS+=(--timing-jsonl "$TIMING_JSONL")
+fi
+uv run python -m volumizer.gallery_render "${THUMBNAIL_ARGS[@]}"
 
 # --- Step 3: Serve the gallery ---
 log "server: starting at http://$HOST:$PORT"

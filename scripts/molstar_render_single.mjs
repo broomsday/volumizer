@@ -2,15 +2,27 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { fileURLToPath } from 'node:url';
+
+const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
+const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
+const NODE_TIMING_PREFIX = '__VOLUMIZER_TIMING__ ';
+const VALID_RENDER_BACKENDS = new Set(['software', 'hardware', 'auto']);
+const VALID_AXIS_RENDER_MODES = new Set(['compatibility', 'fast']);
 
 const USAGE = [
   'Usage: node scripts/molstar_render_single.mjs --structure PATH --format mmcif|pdb|bcif --out-dir DIR [options]',
   '',
   'Options:',
-  '  --width N         Output image width (default: 320)',
-  '  --height N        Output image height (default: 240)',
-  '  --style-json JSON Optional style payload passed from Python queue',
-  '  -h, --help        Show this help text',
+  '  --width N                  Output image width (default: 320)',
+  '  --height N                 Output image height (default: 240)',
+  '  --style-json JSON          Optional style payload passed from Python queue',
+  '  --render-backend MODE      software|hardware|auto (default: software)',
+  '  --axis-render-mode MODE    compatibility|fast (default: compatibility)',
+  '  --timing-jsonl PATH        Optional JSONL path for renderer timing output',
+  '  -h, --help                 Show this help text',
 ].join('\n');
 
 function parseArgs(argv) {
@@ -26,6 +38,9 @@ function parseArgs(argv) {
     width: 320,
     height: 240,
     styleJson: '{}',
+    renderBackend: 'software',
+    axisRenderMode: 'compatibility',
+    timingJsonl: null,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -46,6 +61,9 @@ function parseArgs(argv) {
     else if (key === 'width') result.width = Number.parseInt(value, 10);
     else if (key === 'height') result.height = Number.parseInt(value, 10);
     else if (key === 'style-json') result.styleJson = value;
+    else if (key === 'render-backend') result.renderBackend = String(value).toLowerCase();
+    else if (key === 'axis-render-mode') result.axisRenderMode = String(value).toLowerCase();
+    else if (key === 'timing-jsonl') result.timingJsonl = value;
     else throw new Error(`Unknown argument: --${key}`);
 
     index += 1;
@@ -58,6 +76,12 @@ function parseArgs(argv) {
   }
   if (!Number.isFinite(result.height) || result.height <= 0) {
     throw new Error(`Invalid --height value: ${result.height}`);
+  }
+  if (!VALID_RENDER_BACKENDS.has(result.renderBackend)) {
+    throw new Error('Invalid --render-backend value');
+  }
+  if (!VALID_AXIS_RENDER_MODES.has(result.axisRenderMode)) {
+    throw new Error('Invalid --axis-render-mode value');
   }
 
   return result;
@@ -72,9 +96,85 @@ async function loadPlaywright() {
     return playwright.chromium;
   } catch (error) {
     throw new Error(
-      `Playwright is required for thumbnail rendering. Install with: npm install --save-dev playwright. Original error: ${error.message}`,
+      `Playwright is required for thumbnail rendering. Install with: npm install --save-dev playwright molstar. Original error: ${error.message}`,
     );
   }
+}
+
+async function pathExists(candidatePath) {
+  try {
+    await fs.access(candidatePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function appendJsonl(targetPath, payload) {
+  const resolved = path.resolve(targetPath);
+  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await fs.appendFile(resolved, `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+async function resolveMolstarAssets() {
+  const jsOverride = process.env.MOLSTAR_VIEWER_JS_URL || null;
+  const cssOverride = process.env.MOLSTAR_VIEWER_CSS_URL || null;
+  const assetRoot = process.env.MOLSTAR_ASSET_ROOT
+    ? path.resolve(process.env.MOLSTAR_ASSET_ROOT)
+    : path.join(REPO_ROOT, 'node_modules', 'molstar', 'build', 'viewer');
+  const localJsPath = path.join(assetRoot, 'molstar.js');
+  const localCssPath = path.join(assetRoot, 'molstar.css');
+
+  const jsAsset = jsOverride
+    ? { url: jsOverride }
+    : ((await pathExists(localJsPath)) ? { path: localJsPath } : null);
+  const cssAsset = cssOverride
+    ? { url: cssOverride }
+    : ((await pathExists(localCssPath)) ? { path: localCssPath } : null);
+
+  if (!jsAsset || !cssAsset) {
+    throw new Error(
+      `Mol* viewer assets not found. Expected local assets under ${assetRoot}. `
+      + 'Install npm dependencies or set MOLSTAR_ASSET_ROOT / '
+      + 'MOLSTAR_VIEWER_JS_URL / MOLSTAR_VIEWER_CSS_URL.',
+    );
+  }
+
+  return { jsAsset, cssAsset };
+}
+
+async function addScriptAsset(page, asset) {
+  if (asset.path) {
+    await page.addScriptTag({ path: asset.path });
+    return;
+  }
+  await page.addScriptTag({ url: asset.url });
+}
+
+async function addStyleAsset(page, asset) {
+  if (asset.path) {
+    await page.addStyleTag({ path: asset.path });
+    return;
+  }
+  await page.addStyleTag({ url: asset.url });
+}
+
+async function waitForFrames(page, frameCount = 1) {
+  await page.evaluate(async (requestedCount) => {
+    const count = Math.max(1, Number(requestedCount) || 1);
+    await new Promise((resolve) => {
+      let remaining = count;
+      const tick = () => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          resolve(true);
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }, frameCount);
 }
 
 async function readStructure(structurePath, format) {
@@ -100,14 +200,6 @@ async function readStructure(structurePath, format) {
   };
 }
 
-/**
- * Clip a text CIF file by removing atom_site records on the camera side
- * of the clipping plane (coordinate > 0 along the given axis).
- *
- * @param {string} cifText  Full CIF file text
- * @param {number} axisIdx  0 = x, 1 = y, 2 = z
- * @returns {string} CIF text with atoms filtered
- */
 function clipCifByAxis(cifText, axisIdx) {
   const axisField = ['Cartn_x', 'Cartn_y', 'Cartn_z'][axisIdx];
   const lines = cifText.split('\n');
@@ -117,7 +209,7 @@ function clipCifByAxis(cifText, axisIdx) {
   const fieldNames = [];
   let coordColIdx = -1;
 
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i];
     const trimmed = line.trim();
 
@@ -129,59 +221,78 @@ function clipCifByAxis(cifText, axisIdx) {
           coordColIdx = fieldNames.length - 1;
         }
         result.push(line);
-      } else if (readingFields) {
-        // Transition from field names to data rows
-        readingFields = false;
-        // Fall through to data handling below
+        continue;
       }
 
-      if (!readingFields) {
-        if (
-          trimmed === '' ||
-          trimmed.startsWith('#') ||
-          trimmed.startsWith('_') ||
-          trimmed === 'loop_'
-        ) {
-          // End of atom_site data block
-          inAtomSite = false;
-          result.push(line);
-        } else if (coordColIdx >= 0) {
-          const cols = trimmed.split(/\s+/);
-          const coord = parseFloat(cols[coordColIdx]);
-          if (!isNaN(coord) && coord <= 0) {
-            result.push(line);
-          }
-          // Skip atoms with coord > 0 (the camera-facing half)
-        } else {
+      if (readingFields) {
+        readingFields = false;
+      }
+
+      if (
+        trimmed === ''
+        || trimmed.startsWith('#')
+        || trimmed.startsWith('_')
+        || trimmed === 'loop_'
+      ) {
+        inAtomSite = false;
+        result.push(line);
+      } else if (coordColIdx >= 0) {
+        const cols = trimmed.split(/\s+/);
+        const coord = Number.parseFloat(cols[coordColIdx]);
+        if (!Number.isNaN(coord) && coord <= 0) {
           result.push(line);
         }
+      } else {
+        result.push(line);
       }
-    } else {
-      if (trimmed === 'loop_') {
-        const nextLine = (lines[i + 1] || '').trim();
-        if (nextLine.startsWith('_atom_site.')) {
-          inAtomSite = true;
-          readingFields = true;
-          fieldNames.length = 0;
-          coordColIdx = -1;
-        }
-      }
-      result.push(line);
+      continue;
     }
+
+    if (trimmed === 'loop_') {
+      const nextLine = (lines[i + 1] || '').trim();
+      if (nextLine.startsWith('_atom_site.')) {
+        inAtomSite = true;
+        readingFields = true;
+        fieldNames.length = 0;
+        coordColIdx = -1;
+      }
+    }
+    result.push(line);
   }
+
   return result.join('\n');
 }
 
-async function setupViewer(page, width, height, backgroundHex) {
-  const molstarJsUrl = process.env.MOLSTAR_VIEWER_JS_URL || 'https://unpkg.com/molstar/build/viewer/molstar.js';
-  const molstarCssUrl = process.env.MOLSTAR_VIEWER_CSS_URL || 'https://unpkg.com/molstar/build/viewer/molstar.css';
+function buildAxisStructureData(structureData, axisRenderMode) {
+  if (axisRenderMode === 'fast' || structureData.isBinary || !structureData.textData) {
+    return {
+      x: structureData,
+      y: structureData,
+      z: structureData,
+    };
+  }
 
+  return {
+    x: { ...structureData, textData: clipCifByAxis(structureData.textData, 0) },
+    y: { ...structureData, textData: clipCifByAxis(structureData.textData, 1) },
+    z: { ...structureData, textData: clipCifByAxis(structureData.textData, 2) },
+  };
+}
+
+function getBrowserLaunchArgs(renderBackend) {
+  const args = ['--disable-dev-shm-usage'];
+  if (renderBackend === 'software') {
+    args.unshift('--use-angle=swiftshader');
+  }
+  return args;
+}
+
+async function setupViewer(page, width, height, backgroundHex, molstarAssets) {
   const html = [
     '<!doctype html>',
     '<html>',
     '<head>',
     '<meta charset="utf-8" />',
-    `<link rel="stylesheet" href="${molstarCssUrl}" />`,
     '<style>',
     'html, body, #app {',
     '  margin: 0;',
@@ -194,16 +305,18 @@ async function setupViewer(page, width, height, backgroundHex) {
     '</head>',
     '<body>',
     '<div id="app"></div>',
-    `<script src="${molstarJsUrl}"></script>`,
     '</body>',
     '</html>',
   ].join('\n');
 
   await page.setViewportSize({ width, height });
   await page.setContent(html, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => Boolean(globalThis.molstar && globalThis.molstar.Viewer), {
-    timeout: 45_000,
-  });
+  await addStyleAsset(page, molstarAssets.cssAsset);
+  await addScriptAsset(page, molstarAssets.jsAsset);
+  await page.waitForFunction(
+    () => Boolean(globalThis.molstar && globalThis.molstar.Viewer),
+    { timeout: 45_000 },
+  );
 
   await page.evaluate(async () => {
     const viewer = await globalThis.molstar.Viewer.create('app', {
@@ -237,13 +350,7 @@ async function clearViewer(page) {
   await page.evaluate(async () => {
     const viewer = globalThis.__volumizerViewer;
     if (!viewer) return;
-    const state = viewer.plugin.state.data;
-    const root = state.tree.root.ref;
-    const build = state.build();
-    for (const child of state.tree.children.get(root)?.toArray() || []) {
-      build.delete(child);
-    }
-    await build.commit();
+    await viewer.plugin.clear();
   });
 }
 
@@ -266,12 +373,10 @@ async function loadStructureIntoViewer(page, structureData) {
     const blobUrl = URL.createObjectURL(blob);
     try {
       await viewer.loadStructureFromUrl(blobUrl, payload.format, payload.isBinary);
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     } finally {
       URL.revokeObjectURL(blobUrl);
     }
 
-    // Apply colored volume and protein styling
     try {
       const plugin = viewer.plugin;
       if (plugin && plugin.managers && plugin.managers.structure) {
@@ -285,9 +390,6 @@ async function loadStructureIntoViewer(page, structureData) {
           }
           await build.commit();
 
-          // Protein in green/grey shades — use explicit "not volume"
-          // MolScript selection instead of 'polymer' preset because
-          // biotite CIF lacks _entity_poly / _struct_asym tables.
           const proteinPalette = [
             0x2E8B57, 0x808080, 0x3CB371, 0xA0A0A0,
             0x228B22, 0x6B6B6B, 0x006400, 0xB5B5B5,
@@ -295,7 +397,7 @@ async function loadStructureIntoViewer(page, structureData) {
           ];
           const volumeIds = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
           const notVolumeExpr = volumeIds
-            .map(id => `(= atom.label_comp_id ${id})`)
+            .map((id) => `(= atom.label_comp_id ${id})`)
             .join(' ');
           const polymer = await plugin.builders.structure.tryCreateComponent(
             structRef.cell,
@@ -313,8 +415,9 @@ async function loadStructureIntoViewer(page, structureData) {
             'protein',
           );
           if (polymer) {
-            await plugin.builders.structure.representation.addRepresentation(
-              polymer, {
+            const polymerRepr = await plugin.builders.structure.representation.addRepresentation(
+              polymer,
+              {
                 type: 'cartoon',
                 color: 'chain-id',
                 colorParams: {
@@ -329,7 +432,6 @@ async function loadStructureIntoViewer(page, structureData) {
             );
           }
 
-          // Per-type volume components with distinct colors
           const volumeTypes = [
             { id: 'HUB', color: 0xCC3333, label: 'Hubs' },
             { id: 'POR', color: 0xDD8833, label: 'Pores' },
@@ -337,7 +439,7 @@ async function loadStructureIntoViewer(page, structureData) {
             { id: 'CAV', color: 0xCC33CC, label: 'Cavities' },
           ];
 
-          for (const vt of volumeTypes) {
+          for (const volumeType of volumeTypes) {
             try {
               const comp = await plugin.builders.structure.tryCreateComponent(
                 structRef.cell,
@@ -346,44 +448,56 @@ async function loadStructureIntoViewer(page, structureData) {
                     name: 'script',
                     params: {
                       language: 'mol-script',
-                      expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${vt.id}))`,
+                      expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${volumeType.id}))`,
                     },
                   },
                   nullIfEmpty: true,
-                  label: vt.label,
+                  label: volumeType.label,
                 },
-                `volume-${vt.id.toLowerCase()}`,
+                `volume-${volumeType.id.toLowerCase()}`,
               );
               if (comp) {
-                await plugin.builders.structure.representation.addRepresentation(
-                  comp, {
+                const volumeSurfaceTypeParams = {
+                  quality: 'custom',
+                  doubleSided: false,
+                  interior: {
+                    color: volumeType.color,
+                    colorStrength: 1,
+                    substance: { metalness: 0, roughness: 1, bumpiness: 0 },
+                    substanceStrength: 0,
+                  },
+                };
+                const volumeRepr = await plugin.builders.structure.representation.addRepresentation(
+                  comp,
+                  {
                     type: 'gaussian-surface',
+                    typeParams: volumeSurfaceTypeParams,
                     color: 'uniform',
-                    colorParams: { value: vt.color },
+                    colorParams: { value: volumeType.color },
                   },
                 );
               }
             } catch (err) {
-              console.warn(`Failed to create ${vt.id} volume component:`, err);
+              console.warn(`Failed to create ${volumeType.id} volume component:`, err);
             }
           }
-
-          await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         }
       }
     } catch (styleError) {
       console.warn('Volume surface styling failed:', styleError);
     }
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
   }, structureData);
 }
 
-async function setAxisView(page, axis) {
-  return await page.evaluate(async (axisName) => {
+async function setAxisView(page, axis, timeoutMs = 1000) {
+  const snapshot = await page.evaluate((axisName) => {
     const viewer = globalThis.__volumizerViewer;
     const plugin = viewer?.plugin;
     const canvas3d = plugin?.canvas3d || plugin?.canvas3dContext?.canvas3d;
     if (!canvas3d || typeof canvas3d.requestCameraReset !== 'function') {
-      return false;
+      return null;
     }
 
     const sphere = canvas3d.boundingSphereVisible || canvas3d.boundingSphere;
@@ -402,74 +516,249 @@ async function setAxisView(page, axis) {
       up = [0, 1, 0];
     }
 
-    const snapshot = canvas3d.camera.getSnapshot();
-    snapshot.target = [center[0], center[1], center[2]];
-    snapshot.position = [
+    const snapshotValue = canvas3d.camera.getSnapshot();
+    snapshotValue.target = [center[0], center[1], center[2]];
+    snapshotValue.position = [
       center[0] + direction[0] * distance,
       center[1] + direction[1] * distance,
       center[2] + direction[2] * distance,
     ];
-    snapshot.up = up;
+    snapshotValue.up = up;
 
-    canvas3d.requestCameraReset({ snapshot, durationMs: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    return true;
+    canvas3d.requestCameraReset({ snapshot: snapshotValue, durationMs: 0 });
+    return {
+      target: snapshotValue.target,
+      position: snapshotValue.position,
+      up: snapshotValue.up,
+    };
   }, axis);
+
+  if (!snapshot) {
+    return false;
+  }
+
+  try {
+    await page.waitForFunction(
+      (expectedSnapshot) => {
+        const viewer = globalThis.__volumizerViewer;
+        const plugin = viewer?.plugin;
+        const canvas3d = plugin?.canvas3d || plugin?.canvas3dContext?.canvas3d;
+        const current = canvas3d?.camera?.getSnapshot?.();
+        if (!current) return false;
+
+        const nearlyEqual = (left, right) => Math.abs(Number(left) - Number(right)) < 0.01;
+        const sameVector = (left, right) =>
+          Array.isArray(left)
+          && Array.isArray(right)
+          && left.length === right.length
+          && left.every((value, index) => nearlyEqual(value, right[index]));
+
+        return (
+          sameVector(current.position, expectedSnapshot.position)
+          && sameVector(current.target, expectedSnapshot.target)
+          && sameVector(current.up, expectedSnapshot.up)
+        );
+      },
+      snapshot,
+      { timeout: timeoutMs },
+    );
+  } catch {
+    // Fall through to a single frame wait below.
+  }
+
+  await waitForFrames(page, 1);
+  return true;
 }
 
-async function renderThumbnails(args) {
-  const style = JSON.parse(args.styleJson || '{}');
-  const structurePath = path.resolve(args.structure);
-  const outDir = path.resolve(args.outDir);
+async function renderThumbnailsOnce({
+  chromium,
+  args,
+  molstarAssets,
+  structureData,
+  style,
+  renderBackend,
+}) {
+  const timing = {
+    requested_backend: args.renderBackend,
+    backend_used: renderBackend,
+    fallback_used: false,
+    axis_render_mode: args.axisRenderMode,
+    browser_launch_ms: 0,
+    viewer_setup_ms: 0,
+    first_structure_load_ms: null,
+    clip_prep_ms: 0,
+    axes: {},
+  };
 
-  await fs.mkdir(outDir, { recursive: true });
-
-  const chromium = await loadPlaywright();
-  const structureData = await readStructure(structurePath, args.format);
-
+  const browserLaunchStartedAt = performance.now();
   const browser = await chromium.launch({
     headless: true,
-    args: ['--use-angle=swiftshader', '--disable-dev-shm-usage'],
+    args: getBrowserLaunchArgs(renderBackend),
   });
+  timing.browser_launch_ms = performance.now() - browserLaunchStartedAt;
 
   try {
     const context = await browser.newContext({
       viewport: { width: args.width, height: args.height },
       deviceScaleFactor: 1,
     });
-    const page = await context.newPage();
-
-    await setupViewer(page, args.width, args.height, style.background_hex || '#ffffff');
 
     try {
-      await waitForViewerReady(page, 15000);
-    } catch {
-      // Continue; camera orientation may not be available.
-    }
+      const page = await context.newPage();
+      const viewerSetupStartedAt = performance.now();
+      await setupViewer(page, args.width, args.height, style.background_hex || '#ffffff', molstarAssets);
 
-    const axes = ['x', 'y', 'z'];
-    const axisCoordIndex = { x: 0, y: 1, z: 2 };
-
-    for (const axis of axes) {
-      // Clip the CIF data: remove atoms on the camera side of the center plane
-      let axisData = structureData;
-      if (!structureData.isBinary && structureData.textData) {
-        const clippedText = clipCifByAxis(structureData.textData, axisCoordIndex[axis]);
-        axisData = { ...structureData, textData: clippedText };
+      try {
+        await waitForViewerReady(page, 15000);
+      } catch {
+        // Continue; camera orientation may not be available yet.
       }
 
-      await clearViewer(page);
-      await loadStructureIntoViewer(page, axisData);
-      await setAxisView(page, axis);
+      timing.viewer_setup_ms = performance.now() - viewerSetupStartedAt;
 
-      const outPath = path.join(outDir, `${axis}.png`);
-      await page.screenshot({ path: outPath, type: 'png' });
+      const clipPrepStartedAt = performance.now();
+      const axisStructureData = buildAxisStructureData(structureData, args.axisRenderMode);
+      timing.clip_prep_ms = performance.now() - clipPrepStartedAt;
+
+      const axes = ['x', 'y', 'z'];
+      if (args.axisRenderMode === 'fast') {
+        const loadStartedAt = performance.now();
+        await loadStructureIntoViewer(page, structureData);
+        timing.first_structure_load_ms = performance.now() - loadStartedAt;
+
+        for (const axis of axes) {
+          const axisStartedAt = performance.now();
+          await setAxisView(page, axis);
+
+          const outPath = path.join(path.resolve(args.outDir), `${axis}.png`);
+          await page.screenshot({ path: outPath, type: 'png' });
+
+          timing.axes[axis] = {
+            render_ms: performance.now() - axisStartedAt,
+            reloaded_structure: false,
+            structure_load_ms: null,
+            clip_update_ms: 0,
+          };
+        }
+      } else {
+        for (let axisIndex = 0; axisIndex < axes.length; axisIndex += 1) {
+          const axis = axes[axisIndex];
+          const axisStartedAt = performance.now();
+
+          if (axisIndex > 0) {
+            await clearViewer(page);
+          }
+
+          const loadStartedAt = performance.now();
+          await loadStructureIntoViewer(page, axisStructureData[axis]);
+          const structureLoadMs = performance.now() - loadStartedAt;
+          if (timing.first_structure_load_ms === null) {
+            timing.first_structure_load_ms = structureLoadMs;
+          }
+
+          await setAxisView(page, axis);
+
+          const outPath = path.join(path.resolve(args.outDir), `${axis}.png`);
+          await page.screenshot({ path: outPath, type: 'png' });
+
+          timing.axes[axis] = {
+            render_ms: performance.now() - axisStartedAt,
+            reloaded_structure: axisIndex > 0,
+            structure_load_ms: axisIndex > 0 ? structureLoadMs : null,
+            clip_update_ms: 0,
+          };
+        }
+      }
+    } finally {
+      await context.close();
     }
-
-    await context.close();
   } finally {
     await browser.close();
   }
+
+  return timing;
+}
+
+async function renderThumbnails(args) {
+  const style = JSON.parse(args.styleJson || '{}');
+  const structurePath = path.resolve(args.structure);
+  const outDir = path.resolve(args.outDir);
+  const timingJsonlPath = args.timingJsonl ? path.resolve(args.timingJsonl) : null;
+
+  await fs.mkdir(outDir, { recursive: true });
+
+  const [chromium, molstarAssets, structureData] = await Promise.all([
+    loadPlaywright(),
+    resolveMolstarAssets(),
+    readStructure(structurePath, args.format),
+  ]);
+
+  const renderStartedAt = performance.now();
+  let timing = null;
+
+  if (args.renderBackend === 'auto') {
+    try {
+      timing = await renderThumbnailsOnce({
+        chromium,
+        args,
+        molstarAssets,
+        structureData,
+        style,
+        renderBackend: 'hardware',
+      });
+      timing.requested_backend = 'auto';
+      timing.backend_used = 'hardware';
+    } catch (hardwareError) {
+      const hardwareMessage =
+        hardwareError instanceof Error ? hardwareError.message : String(hardwareError);
+      process.stderr.write(
+        `[molstar-render] hardware backend failed, retrying with software: ${hardwareMessage}\n`,
+      );
+      try {
+        timing = await renderThumbnailsOnce({
+          chromium,
+          args,
+          molstarAssets,
+          structureData,
+          style,
+          renderBackend: 'software',
+        });
+      } catch (softwareError) {
+        const softwareMessage =
+          softwareError instanceof Error ? softwareError.message : String(softwareError);
+        throw new Error(
+          `hardware backend failed (${hardwareMessage}); software fallback failed (${softwareMessage})`,
+        );
+      }
+      timing.requested_backend = 'auto';
+      timing.backend_used = 'software';
+      timing.fallback_used = true;
+      timing.fallback_error = hardwareMessage;
+    }
+  } else {
+    timing = await renderThumbnailsOnce({
+      chromium,
+      args,
+      molstarAssets,
+      structureData,
+      style,
+      renderBackend: args.renderBackend,
+    });
+  }
+
+  timing.total_ms = performance.now() - renderStartedAt;
+  timing.structure = structurePath;
+  timing.out_dir = outDir;
+  timing.format = args.format;
+
+  if (timingJsonlPath) {
+    await appendJsonl(timingJsonlPath, {
+      event: 'render',
+      ...timing,
+    });
+  }
+
+  process.stdout.write(`${NODE_TIMING_PREFIX}${JSON.stringify(timing)}\n`);
 }
 
 async function main() {

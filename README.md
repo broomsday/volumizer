@@ -186,6 +186,7 @@ Install the extra local web dependencies:
 
 ```bash
 uv sync --python 3.11 --group test --group web
+npm install
 ```
 
 Build the gallery index from a run summary:
@@ -197,8 +198,10 @@ uv run --python 3.11 python scripts/build_gallery_index.py --summary out/run.sum
 Render cached `x/y/z` thumbnails for indexed hits:
 
 ```bash
-uv run --python 3.11 python scripts/render_gallery_thumbnails.py --db data/gallery.db --render-root data/renders
+uv run --python 3.11 python scripts/render_gallery_thumbnails.py --db data/gallery.db --render-root data/renders --jobs 4 --render-backend auto
 ```
+
+Thumbnail rendering now uses locally installed Mol* assets from `node_modules/molstar` by default, so it no longer depends on runtime CDN fetches. Optional profiling output is available via `--timing-jsonl <path>`. The default `--axis-render-mode compatibility` path reuses one Mol* browser/page/viewer context while loading axis-specific atom-filtered structures for `x/y/z`; `--axis-render-mode fast` keeps one unclipped structure loaded and captures full-structure `x/y/z` views.
 
 Serve the local gallery:
 
