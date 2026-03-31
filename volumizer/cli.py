@@ -26,6 +26,7 @@ from volumizer import rcsb
 
 DEFAULT_METADATA_STORE_DIRNAME = "entry_metadata"
 METADATA_RECORD_FORMAT_VERSION = 1
+STATUS_RECORD_FORMAT_VERSION = 1
 DEFAULT_CHECKPOINT_FILENAME = "run.checkpoint.json"
 MANIFEST_FORMAT_VERSION = 1
 BACKEND_ENV = "VOLUMIZER_BACKEND"
@@ -40,6 +41,16 @@ VALID_ASSEMBLY_POLICIES = (
     "auto",
 )
 _UNSET = object()
+_ANALYSIS_WORKER_THREAD_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "RAYON_NUM_THREADS",
+)
+DEFAULT_ANALYSIS_WORKER_TIMEOUT_SECONDS = 1800.0
 
 
 class PostAssemblyResidueLimitExceeded(RuntimeError):
@@ -109,6 +120,22 @@ def _get_post_assembly_max_residues(args: argparse.Namespace) -> int | None:
     return int(max_residues)
 
 
+def _get_analysis_worker_timeout_seconds(
+    args: argparse.Namespace,
+    *,
+    use_isolated_workers: bool,
+) -> float | None:
+    if not use_isolated_workers:
+        return None
+
+    configured_timeout = getattr(args, "worker_timeout_seconds", None)
+    if configured_timeout is None:
+        return DEFAULT_ANALYSIS_WORKER_TIMEOUT_SECONDS
+    if configured_timeout <= 0:
+        return None
+    return float(configured_timeout)
+
+
 def _resolve_cli_version() -> str:
     try:
         return package_version("volumizer")
@@ -143,6 +170,7 @@ def _emit_stage_progress(
     interval: float,
     active: int | None = None,
     queued: int | None = None,
+    active_sources: Sequence[str] | None = None,
     force: bool = False,
 ) -> float:
     if interval <= 0:
@@ -162,6 +190,8 @@ def _emit_stage_progress(
         suffix += f", active={active}"
     if queued is not None:
         suffix += f", queued={queued}"
+    if active_sources:
+        suffix += f", active_sources={','.join(active_sources)}"
 
     print(
         (
@@ -236,6 +266,17 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         type=float,
         default=60.0,
         help="Network timeout in seconds for RCSB requests (default: 60).",
+    )
+    parser.add_argument(
+        "--worker-timeout-seconds",
+        type=float,
+        default=DEFAULT_ANALYSIS_WORKER_TIMEOUT_SECONDS,
+        help=(
+            "Max seconds per isolated analysis worker attempt before it is "
+            "terminated and treated as failed. Applies to cluster/native "
+            f"isolated workers. (default: {int(DEFAULT_ANALYSIS_WORKER_TIMEOUT_SECONDS)}, "
+            "set <= 0 to disable)"
+        ),
     )
     parser.add_argument(
         "--retries",
@@ -582,6 +623,65 @@ def _output_paths_for_label(output_dir: Path, source_label: str) -> tuple[Path, 
     return structure_output_path, annotation_output_path
 
 
+def _status_record_path_for_label(output_dir: Path, source_label: str) -> Path:
+    return output_dir / f"{source_label}.status.json"
+
+
+def _write_status_record(
+    output_dir: Path,
+    source_label: str,
+    payload: dict,
+) -> Path:
+    status_record_path = _status_record_path_for_label(output_dir, source_label)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = status_record_path.with_name(f".{status_record_path.name}.tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+        os.replace(temp_path, status_record_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+    return status_record_path
+
+
+def _remove_status_record(output_dir: Path, source_label: str) -> None:
+    status_record_path = _status_record_path_for_label(output_dir, source_label)
+    if not status_record_path.exists():
+        return
+    if not status_record_path.is_file():
+        raise FileExistsError(
+            f"Status record path exists but is not a file: {status_record_path}"
+        )
+    status_record_path.unlink()
+
+
+def _load_status_record(
+    output_dir: Path,
+    source_label: str,
+) -> tuple[Path, dict | None]:
+    status_record_path = _status_record_path_for_label(output_dir, source_label)
+    if not status_record_path.is_file():
+        return status_record_path, None
+    if status_record_path.stat().st_size <= 0:
+        return status_record_path, None
+    try:
+        payload = json.loads(status_record_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return status_record_path, None
+    if not isinstance(payload, dict):
+        return status_record_path, None
+    return status_record_path, payload
+
+
+def _resolved_path_matches(raw_path: str, expected_path: Path) -> bool:
+    try:
+        return Path(raw_path).expanduser().resolve() == expected_path.expanduser().resolve()
+    except OSError:
+        return False
+
+
 def _get_output_state(output_dir: Path, source_label: str) -> tuple[Path, Path, bool, bool]:
     structure_output_path, annotation_output_path = _output_paths_for_label(
         output_dir,
@@ -771,6 +871,8 @@ def _get_resume_action(
     source_label: str,
     input_path: Path,
     output_dir: Path,
+    assembly_policy: str,
+    max_residues: int | None,
 ) -> dict[str, object]:
     validation = _validate_resume_outputs(
         output_dir,
@@ -815,6 +917,27 @@ def _get_resume_action(
             ),
         }
 
+    cached_terminal_skip_entry = _get_cached_terminal_skip_entry(
+        source_label=source_label,
+        input_path=input_path,
+        output_dir=output_dir,
+        assembly_policy=assembly_policy,
+        max_residues=max_residues,
+    )
+    if cached_terminal_skip_entry is not None:
+        return {
+            "action": "skip",
+            "reason_kind": "terminal_skip",
+            "skip_entry": cached_terminal_skip_entry,
+            "overwrite_existing_outputs": False,
+            "log_message": (
+                "cached terminal skip (--resume): "
+                f"post_assembly_residue_limit "
+                f"{cached_terminal_skip_entry['actual_residues']} > "
+                f"{cached_terminal_skip_entry['max_residues']}"
+            ),
+        }
+
     return {
         "action": "analyze",
         "reason_kind": "missing",
@@ -835,23 +958,38 @@ def _format_resume_reason_samples(samples: list[str], total: int) -> str:
 def _emit_resume_scan_summary(
     *,
     skipped_valid: int,
+    skipped_terminal: int,
     reanalyze_partial: int,
     reanalyze_invalid: int,
+    terminal_samples: list[str],
     partial_samples: list[str],
     invalid_samples: list[str],
 ) -> None:
-    if skipped_valid == 0 and reanalyze_partial == 0 and reanalyze_invalid == 0:
+    if (
+        skipped_valid == 0
+        and skipped_terminal == 0
+        and reanalyze_partial == 0
+        and reanalyze_invalid == 0
+    ):
         return
 
     print(
         (
             "resume scan: "
             f"skipped_valid={skipped_valid}, "
+            f"skipped_terminal={skipped_terminal}, "
             f"reanalyze_partial={reanalyze_partial}, "
             f"reanalyze_invalid={reanalyze_invalid}"
         ),
         file=sys.stderr,
     )
+
+    terminal_summary = _format_resume_reason_samples(terminal_samples, skipped_terminal)
+    if terminal_summary:
+        print(
+            f"resume terminal examples: {terminal_summary}",
+            file=sys.stderr,
+        )
 
     partial_summary = _format_resume_reason_samples(partial_samples, reanalyze_partial)
     if partial_summary:
@@ -873,6 +1011,7 @@ def _emit_resume_scan_progress(
     processed: int,
     total: int,
     skipped_valid: int,
+    skipped_terminal: int,
     reanalyze_partial: int,
     reanalyze_invalid: int,
 ) -> None:
@@ -881,6 +1020,7 @@ def _emit_resume_scan_progress(
         (
             f"resume scan progress: {processed}/{total} ({percent:.1f}%), "
             f"skipped_valid={skipped_valid}, "
+            f"skipped_terminal={skipped_terminal}, "
             f"reanalyze_partial={reanalyze_partial}, "
             f"reanalyze_invalid={reanalyze_invalid}"
         ),
@@ -897,8 +1037,10 @@ def _prepare_pending_structures(
 ) -> list[tuple[str, Path, bool]]:
     pending_structures: list[tuple[str, Path, bool]] = []
     skipped_valid = 0
+    skipped_terminal = 0
     reanalyze_partial = 0
     reanalyze_invalid = 0
+    terminal_samples: list[str] = []
     partial_samples: list[str] = []
     invalid_samples: list[str] = []
     pending_skip_persists = 0
@@ -906,6 +1048,7 @@ def _prepare_pending_structures(
     progress_started_at = time.monotonic()
     last_progress_emit = progress_started_at
     total_structures = len(structures)
+    runtime_max_residues = _get_post_assembly_max_residues(args)
 
     if args.resume and total_structures > 0:
         print(
@@ -921,13 +1064,23 @@ def _prepare_pending_structures(
                 source_label=source_label,
                 input_path=input_path,
                 output_dir=output_dir,
+                assembly_policy=str(args.assembly_policy),
+                max_residues=runtime_max_residues,
             )
             reason_kind = str(resume_action["reason_kind"])
 
             if resume_action["action"] == "skip":
                 tracker.mark_skipped(resume_action["skip_entry"], persist=False)
                 pending_skip_persists += 1
-                skipped_valid += 1
+                if reason_kind == "terminal_skip":
+                    skipped_terminal += 1
+                    log_message = resume_action["log_message"]
+                    if log_message is not None and len(terminal_samples) < 3:
+                        terminal_samples.append(
+                            f"{source_label} ({log_message.removeprefix('cached terminal skip (--resume): ')})"
+                        )
+                else:
+                    skipped_valid += 1
             else:
                 overwrite_existing_outputs = bool(
                     resume_action["overwrite_existing_outputs"]
@@ -967,6 +1120,7 @@ def _prepare_pending_structures(
                     processed=index,
                     total=total_structures,
                     skipped_valid=skipped_valid,
+                    skipped_terminal=skipped_terminal,
                     reanalyze_partial=reanalyze_partial,
                     reanalyze_invalid=reanalyze_invalid,
                 )
@@ -981,8 +1135,10 @@ def _prepare_pending_structures(
     if args.resume:
         _emit_resume_scan_summary(
             skipped_valid=skipped_valid,
+            skipped_terminal=skipped_terminal,
             reanalyze_partial=reanalyze_partial,
             reanalyze_invalid=reanalyze_invalid,
+            terminal_samples=terminal_samples,
             partial_samples=partial_samples,
             invalid_samples=invalid_samples,
         )
@@ -1109,6 +1265,138 @@ def _build_post_assembly_residue_limit_skip_entry(
         "actual_residues": error.actual_residues,
         "max_residues": error.max_residues,
         "assembly_policy": error.assembly_policy,
+    }
+
+
+def _build_post_assembly_residue_limit_status_payload(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    error: PostAssemblyResidueLimitExceeded,
+) -> dict:
+    skip_entry = _build_post_assembly_residue_limit_skip_entry(
+        source_label=source_label,
+        input_path=input_path,
+        output_dir=output_dir,
+        error=error,
+    )
+    return {
+        "status_record_format": STATUS_RECORD_FORMAT_VERSION,
+        "kind": "terminal_skip",
+        **skip_entry,
+    }
+
+
+def _write_post_assembly_residue_limit_status_record(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    error: PostAssemblyResidueLimitExceeded,
+) -> Path:
+    return _write_status_record(
+        output_dir,
+        source_label,
+        _build_post_assembly_residue_limit_status_payload(
+            source_label=source_label,
+            input_path=input_path,
+            output_dir=output_dir,
+            error=error,
+        ),
+    )
+
+
+def _record_post_assembly_residue_limit_skip(
+    *,
+    tracker: _RunTracker,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    error: PostAssemblyResidueLimitExceeded,
+) -> dict:
+    _write_post_assembly_residue_limit_status_record(
+        source_label=source_label,
+        input_path=input_path,
+        output_dir=output_dir,
+        error=error,
+    )
+    skip_entry = _build_post_assembly_residue_limit_skip_entry(
+        source_label=source_label,
+        input_path=input_path,
+        output_dir=output_dir,
+        error=error,
+    )
+    tracker.mark_skipped(skip_entry)
+    return skip_entry
+
+
+def _get_cached_terminal_skip_entry(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    assembly_policy: str,
+    max_residues: int | None,
+) -> dict | None:
+    if max_residues is None:
+        return None
+
+    structure_output_path, annotation_output_path = _output_paths_for_label(
+        output_dir,
+        source_label,
+    )
+    status_record_path, payload = _load_status_record(output_dir, source_label)
+    if payload is None:
+        return None
+    if payload.get("kind") != "terminal_skip":
+        return None
+    if payload.get("reason") != "post_assembly_residue_limit":
+        return None
+    if payload.get("source") != source_label:
+        return None
+    if payload.get("assembly_policy") != assembly_policy:
+        return None
+
+    raw_input_path = payload.get("input_path")
+    if not isinstance(raw_input_path, str) or not _resolved_path_matches(
+        raw_input_path,
+        input_path,
+    ):
+        return None
+
+    raw_structure_output = payload.get("structure_output")
+    if not isinstance(raw_structure_output, str) or not _resolved_path_matches(
+        raw_structure_output,
+        structure_output_path,
+    ):
+        return None
+
+    raw_annotation_output = payload.get("annotation_output")
+    if not isinstance(raw_annotation_output, str) or not _resolved_path_matches(
+        raw_annotation_output,
+        annotation_output_path,
+    ):
+        return None
+
+    actual_residues = payload.get("actual_residues")
+    if isinstance(actual_residues, bool) or not isinstance(actual_residues, int):
+        return None
+    if actual_residues <= int(max_residues):
+        return None
+
+    return {
+        "source": source_label,
+        "pdb_id": payload.get("pdb_id") or _infer_pdb_id_for_result(source_label, input_path),
+        "input_path": str(input_path),
+        "structure_output": str(structure_output_path),
+        "annotation_output": str(annotation_output_path),
+        "reason": "post_assembly_residue_limit",
+        "actual_residues": actual_residues,
+        "max_residues": int(max_residues),
+        "assembly_policy": assembly_policy,
+        "status_record": str(status_record_path),
+        "status_kind": "terminal_skip",
     }
 
 
@@ -1516,6 +1804,7 @@ def _make_checkpoint_signature(
         "backend": args.backend,
         "assembly_policy": args.assembly_policy,
         "keep_non_protein": args.keep_non_protein,
+        "worker_timeout_seconds": args.worker_timeout_seconds,
         "progress_interval": args.progress_interval,
         "dry_run": args.dry_run,
     }
@@ -2542,6 +2831,7 @@ def analyze_structure_file(
         structure_output_path=structure_output_path,
         annotation_output_path=annotation_output_path,
     )
+    _remove_status_record(output_dir, source_label)
 
     if not overwrite and structure_output_path.exists():
         raise FileExistsError(
@@ -2642,7 +2932,15 @@ def _invoke_analysis_callable(
     return fn(**kwargs)
 
 
-def _run_isolated_analysis_worker(
+def _build_analysis_worker_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("PYTHONFAULTHANDLER", "1")
+    for variable in _ANALYSIS_WORKER_THREAD_ENV_VARS:
+        env.setdefault(variable, "1")
+    return env
+
+
+def _build_analysis_worker_command(
     *,
     source_label: str,
     input_path: Path,
@@ -2655,7 +2953,7 @@ def _run_isolated_analysis_worker(
     keep_non_protein: bool,
     backend: str | None,
     max_residues: int | None = None,
-) -> dict:
+) -> list[str]:
     command = [
         sys.executable,
         "-m",
@@ -2683,34 +2981,48 @@ def _run_isolated_analysis_worker(
         command.extend(["--backend", backend])
     if max_residues is not None:
         command.extend(["--max-residues", str(int(max_residues))])
+    return command
 
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
 
+def _parse_analysis_worker_success(
+    *,
+    completed: subprocess.CompletedProcess[str],
+    source_label: str,
+    assembly_policy: str,
+) -> dict:
+    stdout = completed.stdout.strip()
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"analysis worker returned invalid JSON output for {source_label}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise RuntimeError("analysis worker returned non-object JSON output")
+    if payload.get("status") == "skipped_post_assembly_residue_limit":
+        raise PostAssemblyResidueLimitExceeded(
+            actual_residues=int(payload["actual_residues"]),
+            max_residues=int(payload["max_residues"]),
+            assembly_policy=str(payload.get("assembly_policy") or assembly_policy),
+        )
+    return payload
+
+
+def _coerce_subprocess_output_text(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _format_worker_failure_message(
+    *,
+    source_label: str,
+    completed: subprocess.CompletedProcess[str],
+) -> str:
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
-
-    if completed.returncode == 0:
-        try:
-            payload = json.loads(stdout)
-        except json.JSONDecodeError as error:
-            raise RuntimeError(
-                "analysis worker returned invalid JSON output"
-            ) from error
-        if not isinstance(payload, dict):
-            raise RuntimeError("analysis worker returned non-object JSON output")
-        if payload.get("status") == "skipped_post_assembly_residue_limit":
-            raise PostAssemblyResidueLimitExceeded(
-                actual_residues=int(payload["actual_residues"]),
-                max_residues=int(payload["max_residues"]),
-                assembly_policy=str(payload.get("assembly_policy") or assembly_policy),
-            )
-        return payload
-
     if completed.returncode < 0:
         signal_number = -completed.returncode
         try:
@@ -2718,19 +3030,133 @@ def _run_isolated_analysis_worker(
             signal_label = f"{signal_number} ({signal_name})"
         except ValueError:
             signal_label = str(signal_number)
-        detail = (
-            stderr
-            or stdout
-            or "worker terminated without stderr/stdout output"
-        )
-        raise RuntimeError(
-            f"analysis worker terminated by signal {signal_label}: {detail}"
+        detail = stderr or stdout or "worker terminated without stderr/stdout output"
+        return (
+            f"analysis worker terminated by signal {signal_label} for "
+            f"{source_label}: {detail}"
         )
 
     detail = stderr or stdout or "worker exited without stderr/stdout output"
-    raise RuntimeError(
-        f"analysis worker failed with exit code {completed.returncode}: {detail}"
+    return (
+        f"analysis worker failed with exit code {completed.returncode} "
+        f"for {source_label}: {detail}"
     )
+
+
+def _format_worker_timeout_message(
+    *,
+    source_label: str,
+    error: subprocess.TimeoutExpired,
+) -> str:
+    stdout = _coerce_subprocess_output_text(error.stdout).strip()
+    stderr = _coerce_subprocess_output_text(error.stderr).strip()
+    detail = stderr or stdout or "worker exceeded timeout without stderr/stdout output"
+    return (
+        f"analysis worker timed out after {float(error.timeout):.1f}s "
+        f"for {source_label}: {detail}"
+    )
+
+
+def _run_isolated_analysis_worker(
+    *,
+    source_label: str,
+    input_path: Path,
+    output_dir: Path,
+    min_voxels: int,
+    min_volume: float | None,
+    overwrite: bool,
+    assembly_policy: str,
+    resolution: float,
+    keep_non_protein: bool,
+    backend: str | None,
+    max_residues: int | None = None,
+    worker_timeout_seconds: float | None = None,
+) -> dict:
+    env = _build_analysis_worker_env()
+    backend_attempts: list[str | None] = [backend]
+    if backend == BACKEND_NATIVE:
+        backend_attempts.append(BACKEND_NATIVE)
+        backend_attempts.append(BACKEND_PYTHON)
+
+    failure_messages: list[str] = []
+
+    for attempt_index, attempt_backend in enumerate(backend_attempts, start=1):
+        try:
+            completed = subprocess.run(
+                _build_analysis_worker_command(
+                    source_label=source_label,
+                    input_path=input_path,
+                    output_dir=output_dir,
+                    min_voxels=min_voxels,
+                    min_volume=min_volume,
+                    overwrite=overwrite or attempt_index > 1,
+                    assembly_policy=assembly_policy,
+                    resolution=resolution,
+                    keep_non_protein=keep_non_protein,
+                    backend=attempt_backend,
+                    max_residues=max_residues,
+                ),
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+                timeout=worker_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as error:
+            failure_messages.append(
+                f"attempt {attempt_index}"
+                + (
+                    f" backend={attempt_backend}"
+                    if attempt_backend is not None
+                    else ""
+                )
+                + ": "
+                + _format_worker_timeout_message(
+                    source_label=source_label,
+                    error=error,
+                )
+            )
+
+            should_retry_timeout = (
+                attempt_backend == BACKEND_NATIVE
+                and attempt_index < len(backend_attempts)
+            )
+            if should_retry_timeout:
+                continue
+            break
+
+        if completed.returncode == 0:
+            return _parse_analysis_worker_success(
+                completed=completed,
+                source_label=source_label,
+                assembly_policy=assembly_policy,
+            )
+
+        failure_messages.append(
+            f"attempt {attempt_index}"
+            + (
+                f" backend={attempt_backend}"
+                if attempt_backend is not None
+                else ""
+            )
+            + ": "
+            + _format_worker_failure_message(
+                source_label=source_label,
+                completed=completed,
+            )
+        )
+
+        should_retry_signal = (
+            completed.returncode < 0
+            and attempt_backend == BACKEND_NATIVE
+            and attempt_index < len(backend_attempts)
+        )
+        if should_retry_signal:
+            continue
+
+        break
+
+    raise RuntimeError("; ".join(failure_messages))
 
 
 def _plan_dry_run(
@@ -2795,15 +3221,26 @@ def _analyze_structures(
         active_backend=active_backend,
     )
     runtime_max_residues = _get_post_assembly_max_residues(args)
+    worker_timeout_seconds = _get_analysis_worker_timeout_seconds(
+        args,
+        use_isolated_workers=use_isolated_workers,
+    )
     progress_interval = float(args.progress_interval)
     progress_started_at = time.monotonic()
     last_progress_emit = progress_started_at
 
+    def _active_source_labels(
+        labels: Sequence[str],
+    ) -> list[str] | None:
+        if len(labels) == 0 or len(labels) > 3:
+            return None
+        return list(labels)
+
     if use_isolated_workers:
-        print(
-            "analysis worker mode: isolated subprocesses",
-            file=sys.stderr,
-        )
+        worker_mode_message = "analysis worker mode: isolated subprocesses"
+        if worker_timeout_seconds is not None:
+            worker_mode_message += f" (timeout={worker_timeout_seconds:.0f}s)"
+        print(worker_mode_message, file=sys.stderr)
 
     if analysis_workers <= 1:
         completed = 0
@@ -2829,6 +3266,7 @@ def _analyze_structures(
                         keep_non_protein=bool(args.keep_non_protein),
                         backend=active_backend,
                         max_residues=runtime_max_residues,
+                        worker_timeout_seconds=worker_timeout_seconds,
                     )
                 else:
                     result = _invoke_analysis_callable(
@@ -2848,13 +3286,12 @@ def _analyze_structures(
                     )
                 tracker.mark_result(result)
             except PostAssemblyResidueLimitExceeded as error:
-                tracker.mark_skipped(
-                    _build_post_assembly_residue_limit_skip_entry(
-                        source_label=source_label,
-                        input_path=input_path,
-                        output_dir=output_dir,
-                        error=error,
-                    )
+                _record_post_assembly_residue_limit_skip(
+                    tracker=tracker,
+                    source_label=source_label,
+                    input_path=input_path,
+                    output_dir=output_dir,
+                    error=error,
                 )
                 print(f"skipping {source_label}: {error}", file=sys.stderr)
                 completed += 1
@@ -2954,6 +3391,7 @@ def _analyze_structures(
                         "keep_non_protein": bool(args.keep_non_protein),
                         "backend": active_backend,
                         "max_residues": runtime_max_residues,
+                        "worker_timeout_seconds": worker_timeout_seconds,
                     }
                     if use_isolated_workers
                     else {
@@ -2999,6 +3437,9 @@ def _analyze_structures(
             interval=progress_interval,
             active=min(analysis_workers, total_pending),
             queued=max(total_pending - min(analysis_workers, total_pending), 0),
+            active_sources=_active_source_labels(
+                [source_label for _, source_label, _ in future_to_context.values()]
+            ),
             force=True,
         )
 
@@ -3013,6 +3454,9 @@ def _analyze_structures(
             if len(done) == 0:
                 active = min(len(pending_futures), analysis_workers)
                 queued = max(total_pending - completed - active, 0)
+                active_sources = _active_source_labels(
+                    [future_to_context[future][1] for future in pending_futures]
+                )
                 last_progress_emit = _emit_stage_progress(
                     stage="analysis",
                     completed=completed,
@@ -3023,6 +3467,7 @@ def _analyze_structures(
                     interval=progress_interval,
                     active=active,
                     queued=queued,
+                    active_sources=active_sources,
                     force=True,
                 )
                 continue
@@ -3034,6 +3479,12 @@ def _analyze_structures(
                     ordered_results[index] = future.result()
                 except PostAssemblyResidueLimitExceeded as error:
                     ordered_skips[index] = _build_post_assembly_residue_limit_skip_entry(
+                        source_label=source_label,
+                        input_path=input_path,
+                        output_dir=output_dir,
+                        error=error,
+                    )
+                    _write_post_assembly_residue_limit_status_record(
                         source_label=source_label,
                         input_path=input_path,
                         output_dir=output_dir,
@@ -3056,6 +3507,9 @@ def _analyze_structures(
 
             active = min(len(pending_futures), analysis_workers)
             queued = max(total_pending - completed - active, 0)
+            active_sources = _active_source_labels(
+                [future_to_context[future][1] for future in pending_futures]
+            )
             last_progress_emit = _emit_stage_progress(
                 stage="analysis",
                 completed=completed,
@@ -3066,6 +3520,7 @@ def _analyze_structures(
                 interval=progress_interval,
                 active=active,
                 queued=queued,
+                active_sources=active_sources,
             )
 
     _emit_stage_progress(
@@ -3124,6 +3579,8 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
         raise ValueError("--retries must be >= 0.")
     if args.retry_delay < 0:
         raise ValueError("--retry-delay must be >= 0.")
+    if args.worker_timeout_seconds < 0:
+        raise ValueError("--worker-timeout-seconds must be >= 0.")
     if args.progress_interval < 0:
         raise ValueError("--progress-interval must be >= 0.")
     if args.assembly_policy not in VALID_ASSEMBLY_POLICIES:
@@ -3256,6 +3713,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "jobs": args.jobs,
             "analysis_workers": analysis_workers,
             "timeout": args.timeout,
+            "worker_timeout_seconds": args.worker_timeout_seconds,
             "retries": args.retries,
             "retry_delay": args.retry_delay,
             "overwrite": args.overwrite,

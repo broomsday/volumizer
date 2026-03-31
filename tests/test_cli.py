@@ -47,6 +47,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "keep_non_protein": False,
         "jobs": 1,
         "timeout": 60.0,
+        "worker_timeout_seconds": 1800.0,
         "retries": 0,
         "retry_delay": 0.0,
         "overwrite": False,
@@ -1109,19 +1110,31 @@ def test_run_cli_cluster_native_records_post_assembly_residue_limit_skip(
     assert summary["skipped"][0]["reason"] == "post_assembly_residue_limit"
     assert summary["skipped"][0]["actual_residues"] == 12000
     assert summary["skipped"][0]["max_residues"] == 10000
+    status_payload = json.loads(
+        (tmp_path / "first.status.json").read_text(encoding="utf-8")
+    )
+    assert status_payload["kind"] == "terminal_skip"
+    assert status_payload["reason"] == "post_assembly_residue_limit"
+    assert status_payload["actual_residues"] == 12000
+    assert status_payload["max_residues"] == 10000
 
     stderr = capsys.readouterr().err
     assert "skipping first:" in stderr
 
 
 def test_run_isolated_analysis_worker_reports_signal(monkeypatch, tmp_path: Path):
+    calls = []
+
     monkeypatch.setattr(
         cli.subprocess,
         "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=-11,
-            stdout="",
-            stderr="",
+        lambda *args, **kwargs: (
+            calls.append((args, kwargs))
+            or SimpleNamespace(
+                returncode=-11,
+                stdout="",
+                stderr="",
+            )
         ),
     )
 
@@ -1141,6 +1154,187 @@ def test_run_isolated_analysis_worker_reports_signal(monkeypatch, tmp_path: Path
         assert False, "expected RuntimeError"
     except RuntimeError as error:
         assert "signal 11 (SIGSEGV)" in str(error)
+        assert "attempt 1 backend=native:" in str(error)
+        assert "attempt 3 backend=python:" in str(error)
+
+    assert len(calls) == 3
+    env = calls[0][1]["env"]
+    assert env["PYTHONFAULTHANDLER"] == "1"
+    for variable in cli._ANALYSIS_WORKER_THREAD_ENV_VARS:
+        assert env[variable] == "1"
+
+
+def test_run_isolated_analysis_worker_retries_native_signal_then_succeeds(
+    monkeypatch,
+    tmp_path: Path,
+):
+    responses = [
+        SimpleNamespace(returncode=-11, stdout="", stderr=""),
+        SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "source": "boom",
+                    "pdb_id": "1ABC",
+                    "input_path": str(tmp_path / "boom.cif"),
+                    "structure_output": str(tmp_path / "boom.annotated.cif"),
+                    "annotation_output": str(tmp_path / "boom.annotation.json"),
+                    "num_volumes": 1,
+                    "largest_type": "pore",
+                    "largest_volume": 12.0,
+                }
+            ),
+            stderr="",
+        ),
+    ]
+    calls = []
+
+    def _run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(cli.subprocess, "run", _run)
+
+    result = cli._run_isolated_analysis_worker(
+        source_label="boom",
+        input_path=tmp_path / "boom.cif",
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+        resolution=3.0,
+        keep_non_protein=False,
+        backend="native",
+        max_residues=10000,
+    )
+
+    assert result["source"] == "boom"
+    assert len(calls) == 2
+    first_command = calls[0][0][0]
+    second_command = calls[1][0][0]
+    assert first_command[first_command.index("--backend") + 1] == "native"
+    assert second_command[second_command.index("--backend") + 1] == "native"
+    assert "--overwrite" not in first_command
+    assert "--overwrite" in second_command
+
+
+def test_run_isolated_analysis_worker_retries_native_timeout_then_succeeds(
+    monkeypatch,
+    tmp_path: Path,
+):
+    responses = [
+        cli.subprocess.TimeoutExpired(
+            cmd=["python", "-m", "volumizer._analysis_worker"],
+            timeout=12.5,
+        ),
+        SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "source": "boom",
+                    "pdb_id": "1ABC",
+                    "input_path": str(tmp_path / "boom.cif"),
+                    "structure_output": str(tmp_path / "boom.annotated.cif"),
+                    "annotation_output": str(tmp_path / "boom.annotation.json"),
+                    "num_volumes": 1,
+                    "largest_type": "pore",
+                    "largest_volume": 12.0,
+                }
+            ),
+            stderr="",
+        ),
+    ]
+    calls = []
+
+    def _run(*args, **kwargs):
+        calls.append((args, kwargs))
+        response = responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr(cli.subprocess, "run", _run)
+
+    result = cli._run_isolated_analysis_worker(
+        source_label="boom",
+        input_path=tmp_path / "boom.cif",
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+        resolution=3.0,
+        keep_non_protein=False,
+        backend="native",
+        max_residues=10000,
+        worker_timeout_seconds=12.5,
+    )
+
+    assert result["source"] == "boom"
+    assert len(calls) == 2
+    assert calls[0][1]["timeout"] == 12.5
+    assert calls[1][1]["timeout"] == 12.5
+    assert "--overwrite" not in calls[0][0][0]
+    assert "--overwrite" in calls[1][0][0]
+
+
+def test_run_isolated_analysis_worker_falls_back_to_python_backend(
+    monkeypatch,
+    tmp_path: Path,
+):
+    responses = [
+        SimpleNamespace(returncode=-11, stdout="", stderr=""),
+        SimpleNamespace(returncode=-11, stdout="", stderr=""),
+        SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "source": "boom",
+                    "pdb_id": "1ABC",
+                    "input_path": str(tmp_path / "boom.cif"),
+                    "structure_output": str(tmp_path / "boom.annotated.cif"),
+                    "annotation_output": str(tmp_path / "boom.annotation.json"),
+                    "num_volumes": 1,
+                    "largest_type": "pore",
+                    "largest_volume": 12.0,
+                }
+            ),
+            stderr="",
+        ),
+    ]
+    calls = []
+
+    def _run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(cli.subprocess, "run", _run)
+
+    result = cli._run_isolated_analysis_worker(
+        source_label="boom",
+        input_path=tmp_path / "boom.cif",
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+        resolution=3.0,
+        keep_non_protein=False,
+        backend="native",
+        max_residues=10000,
+    )
+
+    assert result["source"] == "boom"
+    assert len(calls) == 3
+    backends = [
+        call[0][0][call[0][0].index("--backend") + 1]
+        for call in calls
+    ]
+    assert backends == ["native", "native", "python"]
+    assert "--overwrite" not in calls[0][0][0]
+    assert "--overwrite" in calls[1][0][0]
+    assert "--overwrite" in calls[2][0][0]
 
 
 def test_run_isolated_analysis_worker_reports_post_assembly_residue_limit(
@@ -1182,6 +1376,19 @@ def test_run_isolated_analysis_worker_reports_post_assembly_residue_limit(
     except cli.PostAssemblyResidueLimitExceeded as error:
         assert error.actual_residues == 12000
         assert error.max_residues == 10000
+
+
+def test_run_analysis_command_rejects_negative_worker_timeout(tmp_path: Path):
+    try:
+        cli._run_analysis_command(
+            _make_args(
+                tmp_path,
+                worker_timeout_seconds=-1.0,
+            )
+        )
+        assert False, "expected ValueError"
+    except ValueError as error:
+        assert "--worker-timeout-seconds must be >= 0." == str(error)
 
 
 def test_run_cli_progress_interval_zero_disables_periodic_progress(
@@ -1477,6 +1684,67 @@ def test_analyze_structure_file_removes_partial_outputs_before_reanalysis(
     assert result["num_volumes"] == 1
     assert stale_structure_output.read_text(encoding="utf-8") == "fresh-structure"
     assert annotation_output.is_file()
+
+
+def test_analyze_structure_file_removes_stale_status_record_before_analysis(
+    monkeypatch,
+    tmp_path: Path,
+):
+    input_path = tmp_path / "sample.cif"
+    input_path.write_text("dummy", encoding="utf-8")
+    status_path = tmp_path / "sample.status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "status_record_format": 1,
+                "kind": "terminal_skip",
+                "source": "sample",
+                "reason": "post_assembly_residue_limit",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dummy_pdb = SimpleNamespace(
+        load_structure=lambda input_path, assembly_policy="biological": "input",
+        save_structure=lambda structure, output_path: Path(output_path).write_text(
+            "fresh-structure",
+            encoding="utf-8",
+        ),
+        compute_sse_fractions=lambda prepared_structure: {
+            "frac_alpha": 0.1,
+            "frac_beta": 0.2,
+            "frac_coil": 0.7,
+        },
+    )
+    dummy_volumizer = SimpleNamespace(
+        prepare_pdb_structure=lambda structure: "prepared",
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+            pd.DataFrame([{"id": 1, "type": "pore", "volume": 12.0}]),
+            "annotation",
+        ),
+    )
+    dummy_utils = SimpleNamespace(
+        get_active_backend=lambda: "native",
+        VOXEL_SIZE=3.0,
+    )
+
+    monkeypatch.setattr(cli, "_pdb_module", lambda: dummy_pdb)
+    monkeypatch.setattr(cli, "_volumizer_module", lambda: dummy_volumizer)
+    monkeypatch.setattr(cli, "_utils_module", lambda: dummy_utils)
+
+    result = cli.analyze_structure_file(
+        source_label="sample",
+        input_path=input_path,
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+    )
+
+    assert result["num_volumes"] == 1
+    assert not status_path.exists()
 
 
 def test_analyze_structure_file_enforces_post_assembly_residue_limit(
@@ -1917,7 +2185,10 @@ def test_run_cli_resume_emits_compact_resume_summary(
     assert exit_code == 0
 
     stderr = capsys.readouterr().err
-    assert "resume scan: skipped_valid=2, reanalyze_partial=0, reanalyze_invalid=0" in stderr
+    assert (
+        "resume scan: skipped_valid=2, skipped_terminal=0, "
+        "reanalyze_partial=0, reanalyze_invalid=0"
+    ) in stderr
     assert "skipping first: outputs already exist (--resume)" not in stderr
     assert "skipping second: outputs already exist (--resume)" not in stderr
 
@@ -1944,7 +2215,7 @@ def test_run_cli_resume_emits_progress_during_resume_scan(
         ],
     )
 
-    def _resume_action(*, source_label, input_path, output_dir):
+    def _resume_action(*, source_label, input_path, output_dir, assembly_policy, max_residues):
         time.sleep(0.05)
         return {
             "action": "skip",
@@ -1973,7 +2244,10 @@ def test_run_cli_resume_emits_progress_during_resume_scan(
     stderr = capsys.readouterr().err
     assert "resume scan: validating existing outputs for 2 structures..." in stderr
     assert "resume scan progress:" in stderr
-    assert "resume scan: skipped_valid=2, reanalyze_partial=0, reanalyze_invalid=0" in stderr
+    assert (
+        "resume scan: skipped_valid=2, skipped_terminal=0, "
+        "reanalyze_partial=0, reanalyze_invalid=0"
+    ) in stderr
 
 
 def test_run_cli_resume_reanalyzes_invalid_existing_outputs(
@@ -2036,7 +2310,10 @@ def test_run_cli_resume_reanalyzes_invalid_existing_outputs(
     assert seen_overwrite_flags == [True]
 
     stderr = capsys.readouterr().err
-    assert "resume scan: skipped_valid=0, reanalyze_partial=0, reanalyze_invalid=1" in stderr
+    assert (
+        "resume scan: skipped_valid=0, skipped_terminal=0, "
+        "reanalyze_partial=0, reanalyze_invalid=1"
+    ) in stderr
     assert "resume invalid examples: cavity (" in stderr
     assert "annotation num_volumes does not match volumes length" in stderr
 
@@ -2044,3 +2321,177 @@ def test_run_cli_resume_reanalyzes_invalid_existing_outputs(
     assert summary["num_processed"] == 1
     assert summary["num_failed"] == 0
     assert summary["num_skipped"] == 0
+
+
+def test_run_cli_resume_skips_cached_post_assembly_limit_status(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        resume=True,
+        jobs=1,
+        cluster_max_residues=10000,
+    )
+
+    status_path = tmp_path / "oversize.status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "status_record_format": 1,
+                "kind": "terminal_skip",
+                "source": "oversize",
+                "pdb_id": "1ABC",
+                "input_path": str(tmp_path / "oversize.cif"),
+                "structure_output": str(tmp_path / "oversize.annotated.cif"),
+                "annotation_output": str(tmp_path / "oversize.annotation.json"),
+                "reason": "post_assembly_residue_limit",
+                "actual_residues": 12000,
+                "max_residues": 10000,
+                "assembly_policy": "biological",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir, metadata_cache_path=None: [
+            ("oversize", tmp_path / "oversize.cif"),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_native_backend_module",
+        lambda: SimpleNamespace(
+            BACKEND_ENV=cli.BACKEND_ENV,
+            clear_backend_cache=lambda: None,
+            active_backend=lambda: "native",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_utils_module",
+        lambda: SimpleNamespace(
+            set_resolution=lambda resolution: None,
+            set_non_protein=lambda keep_non_protein: None,
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_isolated_analysis_worker",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("cached terminal skip should avoid analysis")
+        ),
+    )
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 0
+    assert summary["num_failed"] == 0
+    assert summary["num_skipped"] == 1
+    assert summary["skipped"][0]["reason"] == "post_assembly_residue_limit"
+    assert summary["skipped"][0]["actual_residues"] == 12000
+    assert summary["skipped"][0]["max_residues"] == 10000
+    assert summary["skipped"][0]["status_kind"] == "terminal_skip"
+
+    stderr = capsys.readouterr().err
+    assert (
+        "resume scan: skipped_valid=0, skipped_terminal=1, "
+        "reanalyze_partial=0, reanalyze_invalid=0"
+    ) in stderr
+    assert "resume terminal examples: oversize (" in stderr
+
+
+def test_run_cli_resume_ignores_cached_post_assembly_limit_when_threshold_relaxed(
+    monkeypatch,
+    tmp_path: Path,
+):
+    args = _make_args(
+        tmp_path,
+        command="cluster",
+        cluster_identity=30,
+        resume=True,
+        jobs=1,
+        cluster_max_residues=20000,
+    )
+
+    status_path = tmp_path / "oversize.status.json"
+    status_path.write_text(
+        json.dumps(
+            {
+                "status_record_format": 1,
+                "kind": "terminal_skip",
+                "source": "oversize",
+                "pdb_id": "1ABC",
+                "input_path": str(tmp_path / "oversize.cif"),
+                "structure_output": str(tmp_path / "oversize.annotated.cif"),
+                "annotation_output": str(tmp_path / "oversize.annotation.json"),
+                "reason": "post_assembly_residue_limit",
+                "actual_residues": 12000,
+                "max_residues": 10000,
+                "assembly_policy": "biological",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir, metadata_cache_path=None: [
+            ("oversize", tmp_path / "oversize.cif"),
+        ],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_native_backend_module",
+        lambda: SimpleNamespace(
+            BACKEND_ENV=cli.BACKEND_ENV,
+            clear_backend_cache=lambda: None,
+            active_backend=lambda: "python",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_utils_module",
+        lambda: SimpleNamespace(
+            set_resolution=lambda resolution: None,
+            set_non_protein=lambda keep_non_protein: None,
+        ),
+    )
+
+    analyze_calls: list[str] = []
+
+    def _analyze(
+        source_label,
+        input_path,
+        output_dir,
+        min_voxels,
+        min_volume,
+        overwrite,
+        assembly_policy="biological",
+        max_residues=None,
+    ):
+        analyze_calls.append(source_label)
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+            "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+            "num_volumes": 1,
+            "largest_type": "pore",
+            "largest_volume": 12.0,
+        }
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 0
+    assert analyze_calls == ["oversize"]
