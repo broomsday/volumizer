@@ -41,6 +41,10 @@ Typical outputs:
   - cached thumbnail rendering
   - FastAPI API + static frontend
   - Mol* viewer data endpoint and detail flow
+- Gallery thumbnail rendering supports parallel structure-level jobs, local
+  Mol* assets from `node_modules/molstar`, configurable
+  `software|hardware|auto` backends, `compatibility|fast` axis modes, and
+  optional `--timing-jsonl` telemetry.
 - Scientific parity and deterministic output ordering matter more than local
   refactor elegance.
 
@@ -265,3 +269,5 @@ Performance harness:
 - Treat the gallery DB schema and API response shapes as compatibility surfaces.
 - Keep documentation centralized here; if the architecture changes, update this
   file instead of reviving long status/migration narratives.
+- Remove temporary planning notes once the work lands; fold durable guidance
+  back into this file.
