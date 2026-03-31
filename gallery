@@ -4,9 +4,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DB_PATH="${VOLUMIZER_GALLERY_DB:-data/gallery.db}"
 
+log() {
+  echo "[gallery] $*" >&2
+}
+
 usage() {
   cat <<EOF
-Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--host HOST] [--port PORT]
+Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--progress-interval SECONDS] [--host HOST] [--port PORT]
 
 Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 
@@ -16,6 +20,7 @@ Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 Options:
   --force-index        Rebuild the index even if it is up to date
   --force-thumbnails   Re-render all thumbnails even if they already exist
+  --progress-interval  Seconds between thumbnail progress updates (default: 30)
   --host HOST          Host to bind the server to (default: 127.0.0.1)
   --port PORT          Port to bind the server to (default: 8000)
   -h, --help           Show this help message
@@ -26,6 +31,7 @@ EOF
 RUN_PATH=""
 FORCE_INDEX=false
 FORCE_THUMBNAILS=""
+PROGRESS_INTERVAL="30"
 HOST="127.0.0.1"
 PORT="8000"
 
@@ -42,6 +48,10 @@ while [[ $# -gt 0 ]]; do
     --force-thumbnails)
       FORCE_THUMBNAILS="--force"
       shift
+      ;;
+    --progress-interval)
+      PROGRESS_INTERVAL="${2:?--progress-interval requires a value}"
+      shift 2
       ;;
     --host)
       HOST="${2:?--host requires a value}"
@@ -110,7 +120,7 @@ else
   fi
 
   SUMMARY_PATH="$(resolve_summary "$BEST_DIR")"
-  echo "==> Auto-selected run: $(basename "$BEST_DIR") ($BEST_COUNT files)"
+  log "auto-selected run: $(basename "$BEST_DIR") ($BEST_COUNT files)"
 fi
 
 # --- Step 1: Rebuild gallery index (skip if up to date) ---
@@ -118,12 +128,12 @@ NEED_REBUILD=true
 if [[ "$FORCE_INDEX" == false && -f "$DB_PATH" ]]; then
   if [[ "$DB_PATH" -nt "$SUMMARY_PATH" ]]; then
     NEED_REBUILD=false
-    echo "==> Index is up to date ($(basename "$DB_PATH") newer than $(basename "$SUMMARY_PATH")), skipping rebuild"
+    log "index: up to date ($(basename "$DB_PATH") newer than $(basename "$SUMMARY_PATH")), skipping rebuild"
   fi
 fi
 
 if [[ "$NEED_REBUILD" == true ]]; then
-  echo "==> Rebuilding gallery index from: $SUMMARY_PATH"
+  log "index: rebuilding from $SUMMARY_PATH"
   rm -f "$DB_PATH"
   uv run python -m volumizer.gallery_index \
     --summary "$SUMMARY_PATH" \
@@ -133,9 +143,9 @@ if [[ "$NEED_REBUILD" == true ]]; then
 fi
 
 # --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
-echo "==> Rendering thumbnails (skipping up-to-date)..."
-uv run python -m volumizer.gallery_render --db "$DB_PATH" $FORCE_THUMBNAILS
+log "thumbnails: rendering (skipping up-to-date unless forced)"
+uv run python -m volumizer.gallery_render --db "$DB_PATH" --progress-interval "$PROGRESS_INTERVAL" $FORCE_THUMBNAILS
 
 # --- Step 3: Serve the gallery ---
-echo "==> Starting gallery server at http://$HOST:$PORT"
+log "server: starting at http://$HOST:$PORT"
 uv run python -m volumizer.web.app --db "$DB_PATH" --host "$HOST" --port "$PORT"

@@ -346,3 +346,65 @@ def test_render_gallery_thumbnails_handles_failed_and_missing_structures(tmp_pat
     assert include_failed["rendered_jobs"] == 1
     assert include_failed["failed_jobs"] == 1
     assert include_failed["skipped_jobs"] == 0
+
+
+def test_render_gallery_thumbnails_emits_progress_with_rate_and_eta(
+    tmp_path: Path,
+    capsys,
+):
+    db_path, run_id, _ = _build_render_fixture_db(tmp_path)
+    render_root = tmp_path / "renders"
+
+    def fake_render(
+        structure_path: Path,
+        output_dir: Path,
+        width: int,
+        height: int,
+        style: dict,
+    ) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for axis in ("x", "y", "z"):
+            (output_dir / f"{axis}.png").write_bytes(b"ok")
+
+    gallery_render.render_gallery_thumbnails(
+        db_path=db_path,
+        render_root=render_root,
+        run_id=run_id,
+        render_fn=fake_render,
+    )
+
+    stderr = capsys.readouterr().err
+    assert "[gallery-render] progress:" in stderr
+    assert "rate=" in stderr
+    assert "eta=" in stderr
+    assert "skipped=" in stderr
+
+
+def test_render_gallery_thumbnails_progress_interval_zero_disables_progress(
+    tmp_path: Path,
+    capsys,
+):
+    db_path, run_id, _ = _build_render_fixture_db(tmp_path)
+    render_root = tmp_path / "renders"
+
+    def fake_render(
+        structure_path: Path,
+        output_dir: Path,
+        width: int,
+        height: int,
+        style: dict,
+    ) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for axis in ("x", "y", "z"):
+            (output_dir / f"{axis}.png").write_bytes(b"ok")
+
+    gallery_render.render_gallery_thumbnails(
+        db_path=db_path,
+        render_root=render_root,
+        run_id=run_id,
+        render_fn=fake_render,
+        progress_interval=0.0,
+    )
+
+    stderr = capsys.readouterr().err
+    assert "[gallery-render] progress:" not in stderr

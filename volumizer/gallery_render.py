@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import sys
+import time
 from typing import Any, Callable
 
 
@@ -30,6 +31,9 @@ DEFAULT_RENDER_STYLE: dict[str, Any] = {
 }
 
 
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 30.0
+
+
 def _sanitize_path_token(token: str) -> str:
     sanitized = "".join(
         char if (char.isalnum() or char in {"-", "_"}) else "_" for char in token
@@ -44,11 +48,59 @@ def _compute_style_hash(style: dict[str, Any]) -> str:
     return digest[:16]
 
 
+def _warn(message: str) -> None:
+    print(f"[gallery-render] {message}", file=sys.stderr)
+
+
 def _safe_non_negative_int(value: int, name: str) -> int:
     normalized = int(value)
     if normalized < 0:
         raise ValueError(f"{name} must be >= 0")
     return normalized
+
+
+def _format_eta_seconds(eta_seconds: float | None) -> str:
+    if eta_seconds is None or eta_seconds < 0:
+        return "unknown"
+
+    total_seconds = int(round(eta_seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _emit_render_progress(
+    *,
+    completed: int,
+    total: int,
+    failed: int,
+    skipped: int,
+    started_at: float,
+    last_emitted_at: float,
+    interval: float,
+    force: bool = False,
+) -> float:
+    if interval <= 0:
+        return last_emitted_at
+
+    now = time.monotonic()
+    if not force and (now - last_emitted_at) < interval:
+        return last_emitted_at
+
+    elapsed = max(0.0, now - started_at)
+    rate = completed / elapsed if elapsed > 0 else 0.0
+    remaining = max(0, total - completed)
+    eta_seconds = 0.0 if remaining == 0 else ((remaining / rate) if rate > 0 else None)
+    percent = (100.0 * completed / total) if total > 0 else 100.0
+    _warn(
+        "progress: "
+        f"{completed}/{total} ({percent:.1f}%), "
+        f"failed={failed}, skipped={skipped}, rate={rate:.2f}/s, "
+        f"eta={_format_eta_seconds(eta_seconds)}"
+    )
+    return now
 
 
 def _resolve_format_from_suffix(structure_path: Path) -> str:
@@ -141,6 +193,7 @@ def render_gallery_thumbnails(
     renderer_script: Path | None = None,
     style: dict[str, Any] | None = None,
     render_fn: RenderFunction | None = None,
+    progress_interval: float = DEFAULT_PROGRESS_INTERVAL_SECONDS,
 ) -> dict[str, Any]:
     db_path = Path(db_path).resolve()
     if not db_path.is_file():
@@ -151,6 +204,9 @@ def render_gallery_thumbnails(
 
     width = _safe_non_negative_int(width, "width")
     height = _safe_non_negative_int(height, "height")
+    progress_interval = float(progress_interval)
+    if progress_interval < 0:
+        raise ValueError("progress_interval must be >= 0")
 
     normalized_limit = None
     if limit is not None:
@@ -192,11 +248,10 @@ def render_gallery_thumbnails(
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         rows = connection.execute(query, params).fetchall()
-        num_rows = len(rows)
-        is_tty = sys.stderr.isatty()
+        planned_rows: list[sqlite3.Row] = []
 
-        for row_index, row in enumerate(rows, start=1):
-            if normalized_limit is not None and total_jobs >= normalized_limit:
+        for row in rows:
+            if normalized_limit is not None and len(planned_rows) >= normalized_limit:
                 break
 
             structure_id = int(row["structure_id"])
@@ -224,17 +279,35 @@ def render_gallery_thumbnails(
             )
             if not should_render:
                 skipped_jobs += 1
-                if is_tty:
-                    pct = row_index * 100 // num_rows
-                    print(
-                        f"\r  [{row_index}/{num_rows}] {pct}%  "
-                        f"rendered={rendered_jobs} skipped={skipped_jobs} failed={failed_jobs}",
-                        end="", file=sys.stderr, flush=True,
-                    )
                 continue
 
-            total_jobs += 1
+            planned_rows.append(row)
 
+        total_jobs = len(planned_rows)
+        started_at = time.monotonic()
+        last_progress_emit = started_at
+        last_progress_emit = _emit_render_progress(
+            completed=0,
+            total=total_jobs,
+            failed=failed_jobs,
+            skipped=skipped_jobs,
+            started_at=started_at,
+            last_emitted_at=last_progress_emit,
+            interval=progress_interval,
+            force=True,
+        )
+
+        for row in planned_rows:
+            structure_id = int(row["structure_id"])
+            source_label = str(row["source_label"])
+            run_token = _sanitize_path_token(str(row["run_id"]))
+            source_token = _sanitize_path_token(source_label)
+
+            output_dir = render_root / run_token / source_token
+            output_dir.mkdir(parents=True, exist_ok=True)
+            x_path = output_dir / AXIS_FILENAMES["x"]
+            y_path = output_dir / AXIS_FILENAMES["y"]
+            z_path = output_dir / AXIS_FILENAMES["z"]
             structure_path = Path(str(row["annotated_cif_path"])).resolve()
             if not structure_path.is_file():
                 failed_jobs += 1
@@ -251,13 +324,15 @@ def render_gallery_thumbnails(
                         structure_id,
                     ),
                 )
-                if is_tty:
-                    pct = row_index * 100 // num_rows
-                    print(
-                        f"\r  [{row_index}/{num_rows}] {pct}%  "
-                        f"rendered={rendered_jobs} skipped={skipped_jobs} failed={failed_jobs}",
-                        end="", file=sys.stderr, flush=True,
-                    )
+                last_progress_emit = _emit_render_progress(
+                    completed=rendered_jobs + failed_jobs,
+                    total=total_jobs,
+                    failed=failed_jobs,
+                    skipped=skipped_jobs,
+                    started_at=started_at,
+                    last_emitted_at=last_progress_emit,
+                    interval=progress_interval,
+                )
                 continue
 
             try:
@@ -320,18 +395,28 @@ def render_gallery_thumbnails(
                         structure_id,
                     ),
                 )
-            if is_tty:
-                pct = row_index * 100 // num_rows
-                print(
-                    f"\r  [{row_index}/{num_rows}] {pct}%  "
-                    f"rendered={rendered_jobs} skipped={skipped_jobs} failed={failed_jobs}",
-                    end="", file=sys.stderr, flush=True,
-                )
+            last_progress_emit = _emit_render_progress(
+                completed=rendered_jobs + failed_jobs,
+                total=total_jobs,
+                failed=failed_jobs,
+                skipped=skipped_jobs,
+                started_at=started_at,
+                last_emitted_at=last_progress_emit,
+                interval=progress_interval,
+            )
 
         connection.commit()
 
-    if is_tty and num_rows > 0:
-        print(file=sys.stderr)
+    _emit_render_progress(
+        completed=rendered_jobs + failed_jobs,
+        total=total_jobs,
+        failed=failed_jobs,
+        skipped=skipped_jobs,
+        started_at=started_at,
+        last_emitted_at=last_progress_emit,
+        interval=progress_interval,
+        force=True,
+    )
 
     return {
         "db": str(db_path),
@@ -387,6 +472,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("scripts") / "molstar_render_single.mjs",
         help="Path to Node Mol* single-structure renderer script.",
     )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        help=(
+            "Seconds between human-readable progress/ETA updates "
+            f"(default: {int(DEFAULT_PROGRESS_INTERVAL_SECONDS)}, set <= 0 to disable)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -404,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         height=args.height,
         node_executable=args.node_executable,
         renderer_script=Path(args.renderer_script),
+        progress_interval=float(args.progress_interval),
     )
     print(json.dumps(result, indent=2))
     return 0
