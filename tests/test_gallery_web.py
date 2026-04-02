@@ -43,6 +43,10 @@ def _build_web_fixture(tmp_path: Path) -> tuple[Path, str, dict[str, int]]:
     run_id = "web-fixture"
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
+    pdb_ids = {
+        "hit-a": "4JPN",
+        "hit-b": "1ABC",
+    }
 
     results = []
     for source_label, volume in (("hit-a", 200.0), ("hit-b", 80.0)):
@@ -54,6 +58,7 @@ def _build_web_fixture(tmp_path: Path) -> tuple[Path, str, dict[str, int]]:
         results.append(
             {
                 "source": source_label,
+                "pdb_id": pdb_ids[source_label],
                 "input_path": str(TEST_INPUT_PDB),
                 "structure_output": str(structure_output_path),
                 "annotation_output": str(annotation_path),
@@ -130,6 +135,7 @@ def test_gallery_web_root_and_health(tmp_path: Path):
     root_response = client.get("/")
     assert root_response.status_code == 200
     assert "Volumizer Gallery" in root_response.text
+    assert 'name="pdb_id_query"' in root_response.text
 
     health_response = client.get("/api/health")
     assert health_response.status_code == 200
@@ -166,6 +172,12 @@ def test_gallery_web_lists_runs_and_hits(tmp_path: Path):
     filtered_payload = filtered_response.json()
     assert filtered_payload["total_count"] == 1
     assert filtered_payload["rows"][0]["source_label"] == "hit-a"
+
+    pdb_filtered_response = client.get("/api/hits?pdb_id_query=jp")
+    assert pdb_filtered_response.status_code == 200
+    pdb_filtered_payload = pdb_filtered_response.json()
+    assert pdb_filtered_payload["total_count"] == 1
+    assert pdb_filtered_payload["rows"][0]["source_label"] == "hit-a"
 
 
 def test_gallery_web_detail_and_viewer_data(tmp_path: Path):

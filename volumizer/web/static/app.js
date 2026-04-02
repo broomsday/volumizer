@@ -77,6 +77,7 @@ const state = {
 
 const elements = {
   filtersForm: document.getElementById('filters-form'),
+  pdbIdQueryInput: document.getElementById('pdb-id-query'),
   runSelect: document.getElementById('run-id'),
   limitSelect: document.getElementById('limit'),
   sortBySelect: document.getElementById('sort-by'),
@@ -116,10 +117,19 @@ function numericInputValue(name) {
   return value;
 }
 
+function textInputValue(input) {
+  const value = input ? String(input.value).trim() : '';
+  if (value === '') return null;
+  return value;
+}
+
 function buildSearchParams() {
   const params = new URLSearchParams();
   const runId = String(elements.runSelect.value || '').trim();
   if (runId) params.set('run_id', runId);
+
+  const pdbIdQuery = textInputValue(elements.pdbIdQueryInput);
+  if (pdbIdQuery !== null) params.set('pdb_id_query', pdbIdQuery);
 
   const numericNames = [
     'pore_volume_min',
@@ -604,6 +614,7 @@ function captureFilterState() {
   for (const el of elements.filtersForm.elements) {
     if (el.name) data[el.name] = el.value;
   }
+  data.pdb_id_query = elements.pdbIdQueryInput.value;
   return data;
 }
 
@@ -613,6 +624,7 @@ function applyFilterState(data) {
       el.value = data[el.name];
     }
   }
+  elements.pdbIdQueryInput.value = data.pdb_id_query ?? '';
   state.currentLimit = Number(elements.limitSelect.value);
   state.currentOffset = 0;
 }
@@ -714,10 +726,19 @@ function wireEvents() {
     await search();
   });
 
+  elements.pdbIdQueryInput.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    state.currentOffset = 0;
+    state.currentLimit = Number(elements.limitSelect.value);
+    await search();
+  });
+
   elements.resetButton.addEventListener('click', async () => {
     elements.sortBySelect.value = 'largest_pore_volume';
     elements.sortDirSelect.value = 'desc';
     elements.limitSelect.value = '24';
+    elements.pdbIdQueryInput.value = '';
     state.currentLimit = 24;
     state.currentOffset = 0;
     window.setTimeout(search, 0);

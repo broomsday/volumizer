@@ -35,6 +35,11 @@ def _write_annotation(
 def _build_query_fixture_db(tmp_path: Path) -> tuple[Path, str]:
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
+    pdb_ids = {
+        "hit-a": "4JPN",
+        "hit-b": "1ABC",
+        "hit-c": "2ABX",
+    }
 
     annotations = {
         "hit-a": {
@@ -84,6 +89,7 @@ def _build_query_fixture_db(tmp_path: Path) -> tuple[Path, str]:
         results.append(
             {
                 "source": source_label,
+                "pdb_id": pdb_ids[source_label],
                 "input_path": str(TEST_INPUT_PDB),
                 "structure_output": str(structure_output_path),
                 "annotation_output": str(annotation_path),
@@ -186,6 +192,26 @@ def test_query_gallery_index_filters_pore_and_structure_ranges(tmp_path: Path):
         seq_unique_chains_min=2,
     )
     assert [row["source_label"] for row in structure_filtered["rows"]] == ["hit-c"]
+
+
+def test_query_gallery_index_filters_by_partial_pdb_id(tmp_path: Path):
+    db_path, run_id = _build_query_fixture_db(tmp_path)
+
+    exact_match = gallery_query.query_gallery_index(
+        db_path=db_path,
+        run_id=run_id,
+        pdb_id_query="4jpn",
+    )
+    assert [row["source_label"] for row in exact_match["rows"]] == ["hit-a"]
+
+    partial_match = gallery_query.query_gallery_index(
+        db_path=db_path,
+        run_id=run_id,
+        pdb_id_query="ab",
+        sort_by="source_label",
+        sort_dir="asc",
+    )
+    assert [row["source_label"] for row in partial_match["rows"]] == ["hit-b", "hit-c"]
 
 
 def test_query_gallery_index_filters_pocket_and_cavity_ranges(tmp_path: Path):

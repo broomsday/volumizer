@@ -147,6 +147,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     @app.get("/api/hits")
     def list_hits(
         run_id: str | None = None,
+        pdb_id_query: str | None = None,
         pore_volume_min: float | None = None,
         pore_volume_max: float | None = None,
         pore_length_min: float | None = None,
@@ -224,6 +225,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             result = gallery_query.query_gallery_index(
                 db_path=app.state.db_path,
                 run_id=run_id,
+                pdb_id_query=pdb_id_query,
                 pore_volume_min=pore_volume_min,
                 pore_volume_max=pore_volume_max,
                 pore_length_min=pore_length_min,

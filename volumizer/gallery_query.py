@@ -90,9 +90,14 @@ def _append_range_filter(
         params.append(max_value)
 
 
+def _escape_like_fragment(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def query_gallery_index(
     db_path: Path,
     run_id: str | None = None,
+    pdb_id_query: str | None = None,
     pore_volume_min: float | None = None,
     pore_volume_max: float | None = None,
     pore_length_min: float | None = None,
@@ -180,6 +185,14 @@ def query_gallery_index(
     if run_id is not None:
         where_clauses.append("s.run_id = ?")
         params.append(str(run_id))
+
+    normalized_pdb_id_query = None
+    if pdb_id_query is not None:
+        candidate = str(pdb_id_query).strip()
+        if len(candidate) > 0:
+            normalized_pdb_id_query = candidate
+            where_clauses.append("UPPER(COALESCE(s.pdb_id, '')) LIKE ? ESCAPE '\\'")
+            params.append(f"%{_escape_like_fragment(candidate.upper())}%")
 
     _append_range_filter(
         where_clauses,
@@ -326,6 +339,7 @@ def query_gallery_index(
         "db": str(db_path),
         "run_id": run_id,
         "filters": {
+            "pdb_id_query": normalized_pdb_id_query,
             "pore_volume_min": pore_volume_min,
             "pore_volume_max": pore_volume_max,
             "pore_length_min": pore_length_min,
@@ -415,6 +429,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="SQLite database path (default: data/gallery.db).",
     )
     parser.add_argument("--run-id", type=str, default=None, help="Optional run-id filter.")
+    parser.add_argument(
+        "--pdb-id-query",
+        type=str,
+        default=None,
+        help="Optional case-insensitive partial-match filter for PDB IDs.",
+    )
 
     parser.add_argument("--pore-volume-min", type=float, default=None)
     parser.add_argument("--pore-volume-max", type=float, default=None)
@@ -518,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
     result = query_gallery_index(
         db_path=Path(args.db),
         run_id=args.run_id,
+        pdb_id_query=args.pdb_id_query,
         pore_volume_min=args.pore_volume_min,
         pore_volume_max=args.pore_volume_max,
         pore_length_min=args.pore_length_min,
