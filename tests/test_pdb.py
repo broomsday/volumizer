@@ -1,4 +1,5 @@
 from pathlib import Path
+import itertools
 
 import biotite.structure as bts
 import numpy as np
@@ -353,6 +354,11 @@ class TestDeduplicateAssemblyChainIds:
         atoms = self._make_atom_array(pattern * 120)
         result = pdb._deduplicate_assembly_chain_ids(atoms)
         assert len(set(result.chain_id)) == 16 * 120
+
+    def test_chain_id_pool_order_is_stable(self):
+        observed = list(itertools.islice(pdb._iter_chain_id_pool(), 66))
+        assert observed[:5] == ["A", "B", "C", "D", "E"]
+        assert observed[60:66] == ["8", "9", "AA", "AB", "AC", "AD"]
 
 
 RCSB_2ZBT = Path("data/runs/rcsb70/downloads/2ZBT.cif")

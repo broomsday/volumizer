@@ -182,24 +182,20 @@ def _can_use_identity_assembly_shortcut_cif(file: pdbx.PDBxFile) -> bool:
     return assembly_asym_ids == all_asym_ids
 
 
-def _generate_chain_id_pool() -> list[str]:
+def _iter_chain_id_pool():
     """
-    Return a deterministic pool of unique chain IDs up to Biotite's `U4` width.
+    Yield deterministic chain IDs up to Biotite's `U4` width.
 
-    The biological-assembly path can create hundreds or thousands of chain
-    copies. The older `A-Z`, `a-z`, `0-9`, `AA-ZZ` pool exhausted on larger
-    assemblies such as 8B12/2BBV. Stay within 4 characters so assignments fit
-    the fixed-width chain-id dtype Biotite uses for structure arrays.
+    Keep generation lazy: the full 1-4 character ID space is ~15 million
+    strings, while most assemblies need only a small prefix of that sequence.
     """
     import itertools
     import string
 
     alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
-    pool: list[str] = []
     for width in range(1, 5):
         for chars in itertools.product(alphabet, repeat=width):
-            pool.append("".join(chars))
-    return pool
+            yield "".join(chars)
 
 
 def _deduplicate_assembly_chain_ids(structure: bts.AtomArray) -> bts.AtomArray:
@@ -268,23 +264,27 @@ def _deduplicate_assembly_chain_ids(structure: bts.AtomArray) -> bts.AtomArray:
             seen_originals.add(block_id)
             original_ids_ordered.append(block_id)
 
-    pool = _generate_chain_id_pool()
     # Reserve the original IDs for copy 0, assign new ones for copies 1+
     used: set[str] = set(original_ids_ordered)
-    pool_iter = iter(cid for cid in pool if cid not in used)
+    pool_iter = _iter_chain_id_pool()
+
+    def _next_chain_id() -> str:
+        for candidate in pool_iter:
+            if candidate in used:
+                continue
+            used.add(candidate)
+            return candidate
+        raise RuntimeError(
+            "Exhausted generated chain IDs while deduplicating biological "
+            f"assembly copies: original_chains={len(original_ids_ordered)}, "
+            f"copies={num_copies}. Increase chain-ID generation capacity."
+        )
 
     rename_map: dict[tuple[str, int], str] = {}
     for orig_id in original_ids_ordered:
         rename_map[(orig_id, 0)] = orig_id
         for ci in range(1, num_copies):
-            try:
-                rename_map[(orig_id, ci)] = next(pool_iter)
-            except StopIteration as error:
-                raise RuntimeError(
-                    "Exhausted generated chain IDs while deduplicating biological "
-                    f"assembly copies: original_chains={len(original_ids_ordered)}, "
-                    f"copies={num_copies}. Increase chain-ID generation capacity."
-                ) from error
+            rename_map[(orig_id, ci)] = _next_chain_id()
 
     # Apply renaming
     new_chain_ids = chain_ids.copy()
