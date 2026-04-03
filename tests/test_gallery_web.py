@@ -187,6 +187,40 @@ def test_gallery_web_lists_runs_and_hits(tmp_path: Path):
     assert alias_filtered_payload["rows"][0]["source_label"] == "hit-a"
 
 
+def test_gallery_web_api_filters_by_protein_ranges(tmp_path: Path):
+    db_path, _, _ = _build_web_fixture(tmp_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            "UPDATE structures SET num_chains = 1, num_residues = 100, num_sequence_unique_chains = 1 WHERE source_label = 'hit-a'"
+        )
+        connection.execute(
+            "UPDATE structures SET num_chains = 4, num_residues = 300, num_sequence_unique_chains = 4 WHERE source_label = 'hit-b'"
+        )
+        connection.commit()
+
+    client = TestClient(create_app(db_path))
+
+    filtered_response = client.get(
+        "/api/hits?chains_max=2&residues_max=150&seq_unique_chains_max=1"
+    )
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert filtered_payload["total_count"] == 1
+    assert filtered_payload["rows"][0]["source_label"] == "hit-a"
+
+
+def test_gallery_web_static_search_serializes_form_fields_generically():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js = (static_dir / "app.js").read_text(encoding="utf-8")
+    index_html = (static_dir / "index.html").read_text(encoding="utf-8")
+
+    assert "for (const field of elements.filtersForm.elements)" in app_js
+    assert "const numericNames = [" not in app_js
+    assert 'name="seq_unique_chains_max"' in index_html
+    assert 'name="chains_max"' in index_html
+    assert 'name="residues_max"' in index_html
+
+
 def test_gallery_web_detail_and_viewer_data(tmp_path: Path):
     db_path, _, structure_ids = _build_web_fixture(tmp_path)
     structure_id = structure_ids["hit-a"]

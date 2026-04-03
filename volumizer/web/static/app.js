@@ -110,13 +110,6 @@ const elements = {
   displayPresetDelete: document.getElementById('display-preset-delete'),
 };
 
-function numericInputValue(name) {
-  const field = elements.filtersForm.elements.namedItem(name);
-  const value = field ? String(field.value).trim() : '';
-  if (value === '') return null;
-  return value;
-}
-
 function textInputValue(input) {
   const value = input ? String(input.value).trim() : '';
   if (value === '') return null;
@@ -125,50 +118,20 @@ function textInputValue(input) {
 
 function buildSearchParams() {
   const params = new URLSearchParams();
-  const runId = String(elements.runSelect.value || '').trim();
-  if (runId) params.set('run_id', runId);
-
   const pdbIdQuery = textInputValue(elements.pdbIdQueryInput);
   if (pdbIdQuery !== null) params.set('pdb_id_query', pdbIdQuery);
 
-  const numericNames = [
-    'pore_volume_min',
-    'pore_length_min',
-    'pore_dmin_min',
-    'pore_dmax_min',
-    'pocket_volume_min',
-    'pocket_length_min',
-    'pocket_dmin_min',
-    'pocket_dmax_min',
-    'cavity_volume_min',
-    'cavity_length_min',
-    'cavity_dmin_min',
-    'cavity_dmax_min',
-    'hub_volume_min',
-    'hub_length_min',
-    'hub_dmin_min',
-    'hub_dmax_min',
-    'chains_min',
-    'residues_min',
-    'seq_unique_chains_min',
-    'frac_alpha_min',
-    'frac_alpha_max',
-    'frac_beta_min',
-    'frac_beta_max',
-    'frac_coil_min',
-    'frac_coil_max',
-    'pore_circularity_min',
-    'pore_uniformity_min',
-    'pocket_circularity_min',
-    'pocket_uniformity_min',
-    'cavity_circularity_min',
-    'cavity_uniformity_min',
-    'hub_circularity_min',
-    'hub_uniformity_min',
-  ];
-  for (const name of numericNames) {
-    const value = numericInputValue(name);
-    if (value !== null) params.set(name, value);
+  for (const field of elements.filtersForm.elements) {
+    if (!field || !field.name) continue;
+    if (field.name === 'sort_by' || field.name === 'sort_dir' || field.name === 'limit') {
+      continue;
+    }
+    if ((field.type === 'checkbox' || field.type === 'radio') && !field.checked) {
+      continue;
+    }
+    const value = String(field.value || '').trim();
+    if (value === '') continue;
+    params.set(field.name, value);
   }
 
   params.set('sort_by', elements.sortBySelect.value);
