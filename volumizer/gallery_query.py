@@ -178,6 +178,17 @@ def query_gallery_index(
     normalized_limit = _safe_non_negative_int(limit, "limit")
     normalized_offset = _safe_non_negative_int(offset, "offset")
     normalized_sort_by, normalized_sort_dir = _normalize_sort(sort_by, sort_dir)
+    with sqlite3.connect(db_path) as schema_connection:
+        alias_table_exists = (
+            schema_connection.execute(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'structure_pdb_aliases'
+                """
+            ).fetchone()
+            is not None
+        )
 
     where_clauses = ["1=1"]
     params: list[Any] = []
@@ -191,8 +202,22 @@ def query_gallery_index(
         candidate = str(pdb_id_query).strip()
         if len(candidate) > 0:
             normalized_pdb_id_query = candidate
-            where_clauses.append("UPPER(COALESCE(s.pdb_id, '')) LIKE ? ESCAPE '\\'")
-            params.append(f"%{_escape_like_fragment(candidate.upper())}%")
+            like_param = f"%{_escape_like_fragment(candidate.upper())}%"
+            if alias_table_exists:
+                where_clauses.append(
+                    "("
+                    "UPPER(COALESCE(s.pdb_id, '')) LIKE ? ESCAPE '\\' "
+                    "OR EXISTS ("
+                    "SELECT 1 FROM structure_pdb_aliases spa "
+                    "WHERE spa.structure_id = s.structure_id "
+                    "AND UPPER(spa.alias_pdb_id) LIKE ? ESCAPE '\\'"
+                    ")"
+                    ")"
+                )
+                params.extend([like_param, like_param])
+            else:
+                where_clauses.append("UPPER(COALESCE(s.pdb_id, '')) LIKE ? ESCAPE '\\'")
+                params.append(like_param)
 
     _append_range_filter(
         where_clauses,

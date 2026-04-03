@@ -59,6 +59,22 @@ def _infer_pdb_id(result: dict[str, Any], source_label: str, input_path: Path | 
     return None
 
 
+def _normalize_cluster_member_pdb_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+
+    normalized_ids: list[str] = []
+    seen: set[str] = set()
+    for raw_item in value:
+        normalized_id = _normalize_pdb_id(raw_item)
+        if normalized_id is None or normalized_id in seen:
+            continue
+        normalized_ids.append(normalized_id)
+        seen.add(normalized_id)
+
+    return normalized_ids
+
+
 def _sort_row_key(value: str) -> tuple[int, str]:
     try:
         return (0, f"{int(value):09d}")
@@ -385,6 +401,14 @@ CREATE TABLE IF NOT EXISTS structures (
     FOREIGN KEY(run_id) REFERENCES runs(run_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS structure_pdb_aliases (
+    structure_id INTEGER NOT NULL,
+    alias_pdb_id TEXT NOT NULL,
+    alias_source TEXT NOT NULL,
+    PRIMARY KEY (structure_id, alias_pdb_id),
+    FOREIGN KEY(structure_id) REFERENCES structures(structure_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS volumes (
     volume_id INTEGER PRIMARY KEY AUTOINCREMENT,
     structure_id INTEGER NOT NULL,
@@ -452,6 +476,9 @@ ON structures (num_chains, num_residues, num_sequence_unique_chains);
 
 CREATE INDEX IF NOT EXISTS idx_structures_sse
 ON structures (frac_alpha, frac_beta, frac_coil);
+
+CREATE INDEX IF NOT EXISTS idx_structure_pdb_aliases_alias
+ON structure_pdb_aliases (alias_pdb_id);
 
 CREATE INDEX IF NOT EXISTS idx_structure_aggregates_pore
 ON structure_aggregates (
@@ -706,6 +733,32 @@ def build_gallery_index(
                     ),
                 )
                 structure_id = int(cursor.lastrowid)
+
+                alias_rows: list[tuple[int, str, str]] = []
+                seen_aliases: set[str] = set()
+                if pdb_id is not None:
+                    alias_rows.append((structure_id, pdb_id, "canonical"))
+                    seen_aliases.add(pdb_id)
+
+                for alias_pdb_id in _normalize_cluster_member_pdb_ids(
+                    result.get("cluster_member_pdb_ids"),
+                ):
+                    if alias_pdb_id in seen_aliases:
+                        continue
+                    alias_rows.append((structure_id, alias_pdb_id, "cluster_member"))
+                    seen_aliases.add(alias_pdb_id)
+
+                if len(alias_rows) > 0:
+                    connection.executemany(
+                        """
+                        INSERT INTO structure_pdb_aliases (
+                            structure_id,
+                            alias_pdb_id,
+                            alias_source
+                        ) VALUES (?, ?, ?)
+                        """,
+                        alias_rows,
+                    )
 
                 for kind, rows in grouped_rows.items():
                     for rank_in_kind, row in enumerate(rows, start=1):

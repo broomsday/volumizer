@@ -129,6 +129,23 @@ def test_parse_cluster_representative_entry_ids_filters_non_pdb_and_dedupes():
     assert parsed_with_non_pdb == ["1ABC", "2DEF", "AF"]
 
 
+def test_parse_cluster_representative_member_entry_ids_normalizes_and_dedupes():
+    cluster_text = "\n".join(
+        [
+            "4jpn_1 4jpp_1 4JPP_2 BADTOKEN af_test_1",
+            "1abc_1 1abd_2 1ABC_3 1ABE_1",
+            "not_a_pdb",
+        ]
+    )
+
+    parsed = rcsb.parse_cluster_representative_member_entry_ids(cluster_text)
+
+    assert parsed == {
+        "4JPN": ["4JPN", "4JPP"],
+        "1ABC": ["1ABC", "1ABD", "1ABE"],
+    }
+
+
 def test_fetch_cluster_representative_entry_ids_respects_cap(monkeypatch):
     cluster_text = "\n".join(
         [
@@ -145,6 +162,27 @@ def test_fetch_cluster_representative_entry_ids_respects_cap(monkeypatch):
 
     parsed = rcsb.fetch_cluster_representative_entry_ids(30, max_structures=2)
     assert parsed == ["1ABC", "2DEF"]
+
+
+def test_fetch_cluster_representative_member_entry_ids_respects_cap(monkeypatch):
+    cluster_text = "\n".join(
+        [
+            "1abc_1 1abd_1",
+            "2def_1 2deg_1",
+            "3ghi_1 3ghj_1",
+        ]
+    )
+    monkeypatch.setattr(
+        rcsb,
+        "_download_bytes",
+        lambda url, timeout=60.0, retries=0, retry_delay=1.0: cluster_text.encode("utf-8"),
+    )
+
+    parsed = rcsb.fetch_cluster_representative_member_entry_ids(30, max_structures=2)
+    assert parsed == {
+        "1ABC": ["1ABC", "1ABD"],
+        "2DEF": ["2DEF", "2DEG"],
+    }
 
 
 def test_download_structure_cif_writes_downloaded_data(monkeypatch, tmp_path: Path):

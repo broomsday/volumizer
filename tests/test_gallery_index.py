@@ -16,7 +16,17 @@ def _write_summary(
     summary_path: Path,
     annotation_path: Path,
     structure_output_path: Path,
+    result_overrides: dict | None = None,
 ) -> None:
+    result_entry = {
+        "source": "hit-a",
+        "input_path": str(TEST_INPUT_PDB),
+        "structure_output": str(structure_output_path),
+        "annotation_output": str(annotation_path),
+    }
+    if result_overrides is not None:
+        result_entry.update(result_overrides)
+
     payload = {
         "config": {
             "assembly_policy": "biological",
@@ -24,14 +34,7 @@ def _write_summary(
             "keep_non_protein": False,
             "output_dir": str(summary_path.parent),
         },
-        "results": [
-            {
-                "source": "hit-a",
-                "input_path": str(TEST_INPUT_PDB),
-                "structure_output": str(structure_output_path),
-                "annotation_output": str(annotation_path),
-            }
-        ],
+        "results": [result_entry],
         "errors": [],
         "skipped": [],
         "planned": [],
@@ -80,7 +83,15 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    _write_summary(summary_path, annotation_path, structure_output_path)
+    _write_summary(
+        summary_path,
+        annotation_path,
+        structure_output_path,
+        result_overrides={
+            "pdb_id": "4JPN",
+            "cluster_member_pdb_ids": ["4JPN", "4JPP", "4JPP", "bad"],
+        },
+    )
 
     result = gallery_index.build_gallery_index(
         summary_path=summary_path,
@@ -149,6 +160,15 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
             "SELECT render_status FROM renders"
         ).fetchone()
         assert render_row == ("pending",)
+
+        alias_rows = connection.execute(
+            """
+            SELECT alias_pdb_id, alias_source
+            FROM structure_pdb_aliases
+            ORDER BY alias_source ASC, alias_pdb_id ASC
+            """
+        ).fetchall()
+        assert alias_rows == [("4JPN", "canonical"), ("4JPP", "cluster_member")]
 
 
 def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_path: Path):

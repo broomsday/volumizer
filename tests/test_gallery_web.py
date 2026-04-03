@@ -55,15 +55,16 @@ def _build_web_fixture(tmp_path: Path) -> tuple[Path, str, dict[str, int]]:
         _write_annotation(annotation_path, volume)
         structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
 
-        results.append(
-            {
-                "source": source_label,
-                "pdb_id": pdb_ids[source_label],
-                "input_path": str(TEST_INPUT_PDB),
-                "structure_output": str(structure_output_path),
-                "annotation_output": str(annotation_path),
-            }
-        )
+        result_entry = {
+            "source": source_label,
+            "pdb_id": pdb_ids[source_label],
+            "input_path": str(TEST_INPUT_PDB),
+            "structure_output": str(structure_output_path),
+            "annotation_output": str(annotation_path),
+        }
+        if source_label == "hit-a":
+            result_entry["cluster_member_pdb_ids"] = ["4JPN", "4JPP"]
+        results.append(result_entry)
 
     summary_path = run_dir / "run.summary.json"
     summary_path.write_text(
@@ -178,6 +179,12 @@ def test_gallery_web_lists_runs_and_hits(tmp_path: Path):
     pdb_filtered_payload = pdb_filtered_response.json()
     assert pdb_filtered_payload["total_count"] == 1
     assert pdb_filtered_payload["rows"][0]["source_label"] == "hit-a"
+
+    alias_filtered_response = client.get("/api/hits?pdb_id_query=4jpp")
+    assert alias_filtered_response.status_code == 200
+    alias_filtered_payload = alias_filtered_response.json()
+    assert alias_filtered_payload["total_count"] == 1
+    assert alias_filtered_payload["rows"][0]["source_label"] == "hit-a"
 
 
 def test_gallery_web_detail_and_viewer_data(tmp_path: Path):

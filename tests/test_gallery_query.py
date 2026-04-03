@@ -86,15 +86,16 @@ def _build_query_fixture_db(tmp_path: Path) -> tuple[Path, str]:
         )
         structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
 
-        results.append(
-            {
-                "source": source_label,
-                "pdb_id": pdb_ids[source_label],
-                "input_path": str(TEST_INPUT_PDB),
-                "structure_output": str(structure_output_path),
-                "annotation_output": str(annotation_path),
-            }
-        )
+        result_entry = {
+            "source": source_label,
+            "pdb_id": pdb_ids[source_label],
+            "input_path": str(TEST_INPUT_PDB),
+            "structure_output": str(structure_output_path),
+            "annotation_output": str(annotation_path),
+        }
+        if source_label == "hit-a":
+            result_entry["cluster_member_pdb_ids"] = ["4JPN", "4JPP"]
+        results.append(result_entry)
 
     summary_path = run_dir / "run.summary.json"
     summary_path.write_text(
@@ -212,6 +213,83 @@ def test_query_gallery_index_filters_by_partial_pdb_id(tmp_path: Path):
         sort_dir="asc",
     )
     assert [row["source_label"] for row in partial_match["rows"]] == ["hit-b", "hit-c"]
+
+    alias_match = gallery_query.query_gallery_index(
+        db_path=db_path,
+        run_id=run_id,
+        pdb_id_query="4jpp",
+    )
+    assert [row["source_label"] for row in alias_match["rows"]] == ["hit-a"]
+
+    alias_partial_match = gallery_query.query_gallery_index(
+        db_path=db_path,
+        run_id=run_id,
+        pdb_id_query="4jp",
+    )
+    assert [row["source_label"] for row in alias_partial_match["rows"]] == ["hit-a"]
+
+
+def test_query_gallery_index_alias_can_match_multiple_representatives(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    for source_label, pdb_id in (("hit-a", "4JPN"), ("hit-b", "5XYZ")):
+        annotation_path = run_dir / f"{source_label}.annotation.json"
+        structure_output_path = run_dir / f"{source_label}.annotated.cif"
+        _write_annotation(
+            annotation_path,
+            [{"id": 0, "type": "pore", "volume": 10.0, "x": 4.0, "y": 2.0, "z": 1.0}],
+        )
+        structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+        results.append(
+            {
+                "source": source_label,
+                "pdb_id": pdb_id,
+                "cluster_member_pdb_ids": [pdb_id, "4JPP"],
+                "input_path": str(TEST_INPUT_PDB),
+                "structure_output": str(structure_output_path),
+                "annotation_output": str(annotation_path),
+            }
+        )
+
+    summary_path = run_dir / "run.summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "config": {
+                    "assembly_policy": "biological",
+                    "resolution": 3.0,
+                    "keep_non_protein": False,
+                    "output_dir": str(run_dir),
+                },
+                "results": results,
+                "errors": [],
+                "skipped": [],
+                "planned": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    db_path = tmp_path / "gallery.db"
+    gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="shared-alias",
+        replace_run=False,
+        strict=True,
+    )
+
+    query_result = gallery_query.query_gallery_index(
+        db_path=db_path,
+        run_id="shared-alias",
+        pdb_id_query="4jpp",
+        sort_by="source_label",
+        sort_dir="asc",
+    )
+    assert [row["source_label"] for row in query_result["rows"]] == ["hit-a", "hit-b"]
 
 
 def test_query_gallery_index_filters_pocket_and_cavity_ranges(tmp_path: Path):

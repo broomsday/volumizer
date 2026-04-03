@@ -60,6 +60,27 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
     return SimpleNamespace(**defaults)
 
 
+def _patch_cluster_fetch(
+    monkeypatch,
+    representative_to_members: dict[str, list[str]],
+) -> None:
+    representative_ids = list(representative_to_members.keys())
+
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_cluster_representative_entry_ids",
+        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: representative_ids,
+    )
+    monkeypatch.setattr(
+        rcsb,
+        "fetch_cluster_representative_member_entry_ids",
+        lambda identity, max_structures=None, timeout=60.0, retries=0, retry_delay=1.0: {
+            representative_id: list(member_ids)
+            for representative_id, member_ids in representative_to_members.items()
+        },
+    )
+
+
 def test_normalize_argv_for_subcommands_infers_analyze():
     normalized = cli._normalize_argv_for_subcommands(
         ["--input", "input.cif", "--output-dir", "out"]
@@ -181,13 +202,12 @@ def test_resolve_input_structures_for_manifest_pdb_id_dry_run(
 def test_resolve_cluster_identity_writes_manifest(monkeypatch, tmp_path: Path):
     manifest_path = tmp_path / "cluster-selection.manifest.json"
 
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC", "1ABD"],
+            "2DEF": ["2DEF", "2DEG"],
+        },
     )
 
     metadata_by_id = {
@@ -220,7 +240,13 @@ def test_resolve_cluster_identity_writes_manifest(monkeypatch, tmp_path: Path):
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert payload["manifest_format"] == 1
     assert payload["source_command"] == "cluster"
-    assert payload["structures"] == [{"source": "1abc", "pdb_id": "1ABC"}]
+    assert payload["structures"] == [
+        {
+            "source": "1abc",
+            "pdb_id": "1ABC",
+            "cluster_member_pdb_ids": ["1ABC", "1ABD"],
+        }
+    ]
     assert any(
         rejection.get("pdb_id") == "2DEF"
         and rejection.get("reason") == "experimental_method"
@@ -290,13 +316,12 @@ def test_resolve_input_structures_for_from_summary_missing_input_raises(tmp_path
 
 
 def test_resolve_input_structures_for_cluster_identity(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC", "1ABD"],
+            "2DEF": ["2DEF", "2DEG"],
+        },
     )
 
     metadata_by_id = {
@@ -335,15 +360,14 @@ def test_resolve_cluster_identity_applies_deterministic_shard(
     monkeypatch,
     tmp_path: Path,
 ):
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-            "3GHI",
-            "4JKL",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC"],
+            "2DEF": ["2DEF"],
+            "3GHI": ["3GHI"],
+            "4JKL": ["4JKL"],
+        },
     )
 
     metadata_by_id = {
@@ -425,13 +449,12 @@ def test_resolve_cluster_identity_default_method_filter_excludes_nmr(
     monkeypatch,
     tmp_path: Path,
 ):
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC"],
+            "2DEF": ["2DEF"],
+        },
     )
 
     metadata_by_id = {
@@ -465,13 +488,12 @@ def test_resolve_cluster_identity_default_method_filter_excludes_nmr(
 
 
 def test_resolve_cluster_identity_max_resolution_filter(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC"],
+            "2DEF": ["2DEF"],
+        },
     )
 
     metadata_by_id = {
@@ -521,13 +543,12 @@ def test_resolve_cluster_identity_uses_metadata_store(monkeypatch, tmp_path: Pat
         },
     )
 
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC"],
+            "2DEF": ["2DEF"],
+        },
     )
 
     fetch_calls = []
@@ -587,13 +608,12 @@ def test_resolve_cluster_identity_uses_negative_metadata_store(monkeypatch, tmp_
         },
     )
 
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC",
-            "2DEF",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC"],
+            "2DEF": ["2DEF"],
+        },
     )
 
     fetch_calls = []
@@ -630,13 +650,12 @@ def test_resolve_cluster_identity_updates_negative_metadata_store_on_permanent_f
 ):
     metadata_store = tmp_path / "entry_metadata"
 
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "2DEF",
-            "1ABC",
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "2DEF": ["2DEF"],
+            "1ABC": ["1ABC"],
+        },
     )
 
     def _fetch_entry_metadata(pdb_id, timeout=60.0, retries=0, retry_delay=1.0):
@@ -1904,6 +1923,7 @@ def test_cli_main_analyze_manifest_subcommand_writes_summary(monkeypatch, tmp_pa
                     {
                         "source": "cavity-from-manifest",
                         "input_path": str(TEST_PDB),
+                        "cluster_member_pdb_ids": ["1ABC", "1ABD"],
                     }
                 ],
             }
@@ -1929,6 +1949,7 @@ def test_cli_main_analyze_manifest_subcommand_writes_summary(monkeypatch, tmp_pa
     assert summary["config"]["manifest"] == str(manifest_path)
     assert summary["num_processed"] == 1
     assert summary["num_failed"] == 0
+    assert summary["results"][0]["cluster_member_pdb_ids"] == ["1ABC", "1ABD"]
 
 
 def test_cli_main_analyze_from_summary_failed_writes_summary(monkeypatch, tmp_path: Path):
@@ -1970,12 +1991,11 @@ def test_cli_main_analyze_from_summary_failed_writes_summary(monkeypatch, tmp_pa
 
 def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("VOLUMIZER_BACKEND", raising=False)
-    monkeypatch.setattr(
-        rcsb,
-        "fetch_cluster_representative_entry_ids",
-        lambda identity, max_structures=None, timeout=60.0, include_non_pdb=False, retries=0, retry_delay=1.0: [
-            "1ABC"
-        ],
+    _patch_cluster_fetch(
+        monkeypatch,
+        {
+            "1ABC": ["1ABC", "1ABD"],
+        },
     )
     monkeypatch.setattr(
         rcsb,
@@ -2033,6 +2053,7 @@ def test_cli_main_cluster_subcommand_dry_run_writes_summary(monkeypatch, tmp_pat
     assert summary["config"]["backend"] == cli.BACKEND_AUTO
     assert summary["num_processed"] == 0
     assert summary["num_planned"] == 1
+    assert summary["planned"][0]["cluster_member_pdb_ids"] == ["1ABC", "1ABD"]
 
 
 def test_run_analysis_command_passes_cluster_metadata_store_dir(monkeypatch, tmp_path: Path):

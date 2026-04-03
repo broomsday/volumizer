@@ -296,6 +296,58 @@ def entry_passes_filters(
     return True, None
 
 
+def _cluster_entity_to_entry_id(entity_id: str) -> str | None:
+    entry_id = str(entity_id).strip().split("_", 1)[0].upper()
+    if not is_pdb_entry_id(entry_id):
+        return None
+    return entry_id
+
+
+def parse_cluster_representative_member_entry_ids(
+    cluster_text: str,
+) -> dict[str, list[str]]:
+    """
+    Parse sequence cluster text into representative-to-member entry ID mappings.
+
+    Cluster lines contain polymer entity IDs, e.g. `1ABC_1 2XYZ_2 ...`.
+    The first valid PDB entry token on each line is treated as the representative.
+    All valid 4-character PDB entry IDs on the line are retained as members.
+    """
+    representative_to_members: dict[str, list[str]] = {}
+
+    for raw_line in cluster_text.splitlines():
+        line = raw_line.strip()
+        if len(line) == 0:
+            continue
+
+        members: list[str] = []
+        seen_members: set[str] = set()
+        for token in line.split():
+            entry_id = _cluster_entity_to_entry_id(token)
+            if entry_id is None or entry_id in seen_members:
+                continue
+            members.append(entry_id)
+            seen_members.add(entry_id)
+
+        if len(members) == 0:
+            continue
+
+        representative_id = members[0]
+        existing_members = representative_to_members.get(representative_id)
+        if existing_members is None:
+            representative_to_members[representative_id] = members
+            continue
+
+        existing_seen = set(existing_members)
+        for member_id in members:
+            if member_id in existing_seen:
+                continue
+            existing_members.append(member_id)
+            existing_seen.add(member_id)
+
+    return representative_to_members
+
+
 def parse_cluster_representative_entry_ids(
     cluster_text: str,
     include_non_pdb: bool = False,
@@ -364,3 +416,45 @@ def fetch_cluster_representative_entry_ids(
         return entry_ids[:max_structures]
 
     return entry_ids
+
+
+def fetch_cluster_representative_member_entry_ids(
+    identity: int,
+    max_structures: int | None = None,
+    timeout: float = 60.0,
+    retries: int = 0,
+    retry_delay: float = 1.0,
+) -> dict[str, list[str]]:
+    """
+    Fetch representative-to-member entry ID mappings for a sequence cluster file.
+    """
+    if identity not in VALID_CLUSTER_IDENTITIES:
+        allowed = ", ".join([str(value) for value in sorted(VALID_CLUSTER_IDENTITIES)])
+        raise ValueError(
+            f"Unsupported identity threshold {identity}. Allowed: {allowed}."
+        )
+
+    url = RCSB_CLUSTER_URL_TEMPLATE.format(identity=identity)
+    cluster_text = _download_bytes(
+        url,
+        timeout=timeout,
+        retries=retries,
+        retry_delay=retry_delay,
+    ).decode("utf-8")
+    representative_to_members = parse_cluster_representative_member_entry_ids(
+        cluster_text,
+    )
+
+    if max_structures is None or max_structures <= 0:
+        return representative_to_members
+
+    capped_mapping: dict[str, list[str]] = {}
+    for index, (representative_id, member_ids) in enumerate(
+        representative_to_members.items(),
+        start=1,
+    ):
+        if index > max_structures:
+            break
+        capped_mapping[representative_id] = list(member_ids)
+
+    return capped_mapping

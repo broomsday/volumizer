@@ -1070,7 +1070,14 @@ def _prepare_pending_structures(
             reason_kind = str(resume_action["reason_kind"])
 
             if resume_action["action"] == "skip":
-                tracker.mark_skipped(resume_action["skip_entry"], persist=False)
+                tracker.mark_skipped(
+                    _enrich_structure_entry(
+                        dict(resume_action["skip_entry"]),
+                        args=args,
+                        source_label=source_label,
+                    ),
+                    persist=False,
+                )
                 pending_skip_persists += 1
                 if reason_kind == "terminal_skip":
                     skipped_terminal += 1
@@ -1314,6 +1321,7 @@ def _record_post_assembly_residue_limit_skip(
     input_path: Path,
     output_dir: Path,
     error: PostAssemblyResidueLimitExceeded,
+    extra_entry_fields: dict[str, object] | None = None,
 ) -> dict:
     _write_post_assembly_residue_limit_status_record(
         source_label=source_label,
@@ -1327,6 +1335,11 @@ def _record_post_assembly_residue_limit_skip(
         output_dir=output_dir,
         error=error,
     )
+    if extra_entry_fields:
+        for key, value in extra_entry_fields.items():
+            if value is None:
+                continue
+            skip_entry[key] = list(value) if isinstance(value, list) else value
     tracker.mark_skipped(skip_entry)
     return skip_entry
 
@@ -1432,6 +1445,107 @@ def _resolve_cluster_method_filters(args: argparse.Namespace) -> list[str] | Non
     return list(dict.fromkeys(normalized_methods))
 
 
+def _normalize_cluster_member_pdb_ids(
+    raw_value: object,
+    *,
+    strict: bool = False,
+    context: str = "cluster_member_pdb_ids",
+) -> list[str] | None:
+    if raw_value is None:
+        return None
+
+    if not isinstance(raw_value, list):
+        if strict:
+            raise ValueError(f"{context} must be a list of PDB IDs.")
+        return None
+
+    normalized_ids: list[str] = []
+    seen: set[str] = set()
+    for index, raw_item in enumerate(raw_value, start=1):
+        if not isinstance(raw_item, str):
+            if strict:
+                raise ValueError(f"{context}[{index}] must be a string PDB ID.")
+            continue
+        try:
+            normalized_id = rcsb.normalize_pdb_id(raw_item)
+        except ValueError as error:
+            if strict:
+                raise ValueError(f"{context}[{index}] is invalid: {raw_item!r}") from error
+            continue
+        if normalized_id in seen:
+            continue
+        normalized_ids.append(normalized_id)
+        seen.add(normalized_id)
+
+    if len(normalized_ids) == 0:
+        return None
+    return normalized_ids
+
+
+def _set_structure_metadata(
+    args: argparse.Namespace,
+    metadata_by_source: dict[str, dict[str, object]],
+) -> None:
+    setattr(args, "_structure_metadata_by_source", metadata_by_source)
+
+
+def _get_structure_metadata(
+    args: argparse.Namespace,
+    source_label: str,
+) -> dict[str, object]:
+    metadata_by_source = getattr(args, "_structure_metadata_by_source", None)
+    if not isinstance(metadata_by_source, dict):
+        return {}
+    metadata = metadata_by_source.get(source_label)
+    if not isinstance(metadata, dict):
+        return {}
+    return metadata
+
+
+def _build_structure_metadata_by_source(
+    entries: list[dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    metadata_by_source: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        source_label = entry.get("source")
+        if not isinstance(source_label, str):
+            continue
+
+        cluster_member_pdb_ids = _normalize_cluster_member_pdb_ids(
+            entry.get("cluster_member_pdb_ids"),
+            strict=False,
+        )
+        if cluster_member_pdb_ids is None:
+            continue
+
+        metadata_by_source[source_label] = {
+            "cluster_member_pdb_ids": cluster_member_pdb_ids,
+        }
+
+    return metadata_by_source
+
+
+def _enrich_structure_entry(
+    entry: dict[str, object],
+    *,
+    args: argparse.Namespace,
+    source_label: str,
+) -> dict[str, object]:
+    metadata = _get_structure_metadata(args, source_label)
+    if len(metadata) == 0:
+        return entry
+
+    enriched = dict(entry)
+    for key, value in metadata.items():
+        if value is None:
+            continue
+        if isinstance(value, list):
+            enriched[key] = list(value)
+        else:
+            enriched[key] = value
+    return enriched
+
+
 def _save_manifest(manifest_path: Path, payload: dict) -> None:
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1481,7 +1595,7 @@ def _load_manifest_structures(manifest_path: Path) -> list[dict]:
                 )
             source_label = _sanitize_label(raw_source)
 
-        entry: dict[str, str | Path] = {}
+        entry: dict[str, str | Path | list[str]] = {}
         if raw_pdb_id is not None:
             if not isinstance(raw_pdb_id, str):
                 raise ValueError(
@@ -1503,6 +1617,17 @@ def _load_manifest_structures(manifest_path: Path) -> list[dict]:
             entry["input_path"] = input_path
             if source_label is None:
                 source_label = _sanitize_label(input_path.stem)
+
+        cluster_member_pdb_ids = _normalize_cluster_member_pdb_ids(
+            raw_entry.get("cluster_member_pdb_ids"),
+            strict=True,
+            context=(
+                "Manifest `cluster_member_pdb_ids` "
+                f"{manifest_path} entry #{index}"
+            ),
+        )
+        if cluster_member_pdb_ids is not None:
+            entry["cluster_member_pdb_ids"] = cluster_member_pdb_ids
 
         entry["source"] = source_label if source_label is not None else "structure"
         manifest_structures.append(entry)
@@ -1557,10 +1682,10 @@ def _resolve_summary_input_path(raw_input_path: str, summary_path: Path) -> Path
     return summary_path.parent / input_path
 
 
-def _load_structures_from_summary(
+def _load_structure_entries_from_summary(
     summary_path: Path,
     only: str,
-) -> list[tuple[str, Path]]:
+) -> list[dict[str, object]]:
     if not summary_path.is_file():
         raise FileNotFoundError(f"Summary file does not exist: {summary_path}")
 
@@ -1582,7 +1707,7 @@ def _load_structures_from_summary(
     else:
         selected_sections = (section_by_only[only],)
 
-    structures: list[tuple[str, Path]] = []
+    structures: list[dict[str, object]] = []
     seen: set[tuple[str, str]] = set()
 
     for section in selected_sections:
@@ -1607,7 +1732,17 @@ def _load_structures_from_summary(
             if key in seen:
                 continue
             seen.add(key)
-            structures.append((source_label, input_path))
+            structure_entry: dict[str, object] = {
+                "source": source_label,
+                "input_path": input_path,
+            }
+            cluster_member_pdb_ids = _normalize_cluster_member_pdb_ids(
+                entry.get("cluster_member_pdb_ids"),
+                strict=False,
+            )
+            if cluster_member_pdb_ids is not None:
+                structure_entry["cluster_member_pdb_ids"] = cluster_member_pdb_ids
+            structures.append(structure_entry)
 
     if len(structures) == 0:
         raise RuntimeError(
@@ -1617,10 +1752,22 @@ def _load_structures_from_summary(
     return structures
 
 
+def _load_structures_from_summary(
+    summary_path: Path,
+    only: str,
+) -> list[tuple[str, Path]]:
+    structure_entries = _load_structure_entries_from_summary(summary_path, only)
+    return [
+        (str(entry["source"]), Path(entry["input_path"]))
+        for entry in structure_entries
+    ]
+
+
 def _write_cluster_manifest(
     manifest_path: Path,
     args: argparse.Namespace,
     selected_ids: list[str],
+    representative_to_member_ids: dict[str, list[str]],
     cluster_method_filters: list[str] | None,
     rejection_entries: list[dict],
     examined_count: int,
@@ -1663,15 +1810,18 @@ def _write_cluster_manifest(
             "metadata_updates": metadata_updates,
             "negative_metadata_updates": negative_metadata_updates,
         },
-        "structures": [
-            {
-                "source": _sanitize_label(representative_id),
-                "pdb_id": representative_id,
-            }
-            for representative_id in selected_ids
-        ],
+        "structures": [],
         "rejections": rejection_entries,
     }
+    for representative_id in selected_ids:
+        structure_entry: dict[str, object] = {
+            "source": _sanitize_label(representative_id),
+            "pdb_id": representative_id,
+        }
+        cluster_member_pdb_ids = representative_to_member_ids.get(representative_id)
+        if cluster_member_pdb_ids is not None:
+            structure_entry["cluster_member_pdb_ids"] = list(cluster_member_pdb_ids)
+        payload["structures"].append(structure_entry)
     _save_manifest(manifest_path, payload)
     print(f"wrote manifest: {manifest_path}", file=sys.stderr)
 
@@ -2452,6 +2602,8 @@ def resolve_input_structures(
     """
     Resolve CLI source arguments into labeled local structure paths.
     """
+    _set_structure_metadata(args, {})
+
     if args.input is not None:
         input_path = Path(args.input)
         if not input_path.is_file():
@@ -2460,7 +2612,12 @@ def resolve_input_structures(
 
     if args.from_summary is not None:
         summary_path = Path(args.from_summary)
-        summary_structures = _load_structures_from_summary(summary_path, args.only)
+        summary_entries = _load_structure_entries_from_summary(summary_path, args.only)
+        _set_structure_metadata(args, _build_structure_metadata_by_source(summary_entries))
+        summary_structures = [
+            (str(entry["source"]), Path(entry["input_path"]))
+            for entry in summary_entries
+        ]
         for _, input_path in summary_structures:
             if not input_path.is_file():
                 raise FileNotFoundError(
@@ -2472,6 +2629,7 @@ def resolve_input_structures(
     if args.manifest is not None:
         manifest_path = Path(args.manifest)
         manifest_structures = _load_manifest_structures(manifest_path)
+        _set_structure_metadata(args, _build_structure_metadata_by_source(manifest_structures))
         return _resolve_manifest_structures(
             manifest_structures,
             args,
@@ -2511,14 +2669,14 @@ def resolve_input_structures(
             f"fetching cluster representatives for identity={args.cluster_identity}...",
             file=sys.stderr,
         )
-        representative_ids = rcsb.fetch_cluster_representative_entry_ids(
+        representative_to_member_ids = rcsb.fetch_cluster_representative_member_entry_ids(
             identity=args.cluster_identity,
             max_structures=None,
             timeout=args.timeout,
-            include_non_pdb=False,
             retries=args.retries,
             retry_delay=args.retry_delay,
         )
+        representative_ids = list(representative_to_member_ids.keys())
         total_representative_ids = len(representative_ids)
         if total_representative_ids == 0:
             raise RuntimeError(
@@ -2699,6 +2857,7 @@ def resolve_input_structures(
                 manifest_path=Path(args.write_manifest),
                 args=args,
                 selected_ids=selected_ids,
+                representative_to_member_ids=representative_to_member_ids,
                 cluster_method_filters=cluster_method_filters,
                 rejection_entries=manifest_rejections,
                 examined_count=examined_count,
@@ -2750,6 +2909,20 @@ def resolve_input_structures(
             f"filtered_by_residue_count={filtered_by_residue_count}, "
             f"metadata_errors={metadata_errors}",
             file=sys.stderr,
+        )
+
+        selected_structure_entries: list[dict[str, object]] = []
+        for representative_id in selected_ids:
+            structure_entry: dict[str, object] = {
+                "source": _sanitize_label(representative_id),
+            }
+            cluster_member_pdb_ids = representative_to_member_ids.get(representative_id)
+            if cluster_member_pdb_ids is not None:
+                structure_entry["cluster_member_pdb_ids"] = list(cluster_member_pdb_ids)
+            selected_structure_entries.append(structure_entry)
+        _set_structure_metadata(
+            args,
+            _build_structure_metadata_by_source(selected_structure_entries),
         )
 
         if args.dry_run:
@@ -3175,10 +3348,14 @@ def _plan_dry_run(
 
     for source_label, input_path, _ in pending_structures:
         tracker.mark_planned(
-            _build_dry_run_plan_entry(
+            _enrich_structure_entry(
+                _build_dry_run_plan_entry(
+                    source_label=source_label,
+                    input_path=input_path,
+                    output_dir=output_dir,
+                ),
+                args=args,
                 source_label=source_label,
-                input_path=input_path,
-                output_dir=output_dir,
             )
         )
         planned_now += 1
@@ -3284,7 +3461,13 @@ def _analyze_structures(
                         assembly_policy=str(args.assembly_policy),
                         max_residues=runtime_max_residues,
                     )
-                tracker.mark_result(result)
+                tracker.mark_result(
+                    _enrich_structure_entry(
+                        result,
+                        args=args,
+                        source_label=source_label,
+                    )
+                )
             except PostAssemblyResidueLimitExceeded as error:
                 _record_post_assembly_residue_limit_skip(
                     tracker=tracker,
@@ -3292,6 +3475,7 @@ def _analyze_structures(
                     input_path=input_path,
                     output_dir=output_dir,
                     error=error,
+                    extra_entry_fields=_get_structure_metadata(args, source_label),
                 )
                 print(f"skipping {source_label}: {error}", file=sys.stderr)
                 completed += 1
@@ -3309,10 +3493,14 @@ def _analyze_structures(
                 continue
             except Exception as error:  # pragma: no cover - exercised via CLI integration tests
                 failed += 1
-                error_entry = _build_error_entry(
+                error_entry = _enrich_structure_entry(
+                    _build_error_entry(
+                        source_label=source_label,
+                        input_path=input_path,
+                        error=error,
+                    ),
+                    args=args,
                     source_label=source_label,
-                    input_path=input_path,
-                    error=error,
                 )
                 tracker.mark_error(error_entry)
                 print(
@@ -3476,13 +3664,21 @@ def _analyze_structures(
             for future in done:
                 index, source_label, input_path = future_to_context[future]
                 try:
-                    ordered_results[index] = future.result()
-                except PostAssemblyResidueLimitExceeded as error:
-                    ordered_skips[index] = _build_post_assembly_residue_limit_skip_entry(
+                    ordered_results[index] = _enrich_structure_entry(
+                        future.result(),
+                        args=args,
                         source_label=source_label,
-                        input_path=input_path,
-                        output_dir=output_dir,
-                        error=error,
+                    )
+                except PostAssemblyResidueLimitExceeded as error:
+                    ordered_skips[index] = _enrich_structure_entry(
+                        _build_post_assembly_residue_limit_skip_entry(
+                            source_label=source_label,
+                            input_path=input_path,
+                            output_dir=output_dir,
+                            error=error,
+                        ),
+                        args=args,
+                        source_label=source_label,
                     )
                     _write_post_assembly_residue_limit_status_record(
                         source_label=source_label,
@@ -3493,10 +3689,14 @@ def _analyze_structures(
                     print(f"skipping {source_label}: {error}", file=sys.stderr)
                 except Exception as error:  # pragma: no cover - exercised via CLI integration tests
                     failed += 1
-                    ordered_errors[index] = _build_error_entry(
+                    ordered_errors[index] = _enrich_structure_entry(
+                        _build_error_entry(
+                            source_label=source_label,
+                            input_path=input_path,
+                            error=error,
+                        ),
+                        args=args,
                         source_label=source_label,
-                        input_path=input_path,
-                        error=error,
                     )
                     print(
                         f"error for {source_label}: {ordered_errors[index]['error']}",
