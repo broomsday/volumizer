@@ -37,6 +37,7 @@ const CARD_METRICS = [
 
 const FILTER_PRESETS_KEY = 'volumizer_filter_presets';
 const DISPLAY_PRESETS_KEY = 'volumizer_display_presets';
+const ACTIVE_FILTER_PRESET_KEY = 'volumizer_active_filter_preset';
 
 const VOLUME_COLORS = {
   HUB: 0xCC3333,  // red
@@ -557,6 +558,23 @@ function savePresetsMap(storageKey, map) {
   localStorage.setItem(storageKey, JSON.stringify(map));
 }
 
+function loadStoredString(storageKey) {
+  try {
+    const value = localStorage.getItem(storageKey);
+    return value === null ? '' : String(value);
+  } catch {
+    return '';
+  }
+}
+
+function saveStoredString(storageKey, value) {
+  if (!value) {
+    localStorage.removeItem(storageKey);
+    return;
+  }
+  localStorage.setItem(storageKey, String(value));
+}
+
 function populatePresetSelect(selectEl, storageKey) {
   const map = loadPresetsMap(storageKey);
   const previousValue = selectEl.value;
@@ -570,6 +588,14 @@ function populatePresetSelect(selectEl, storageKey) {
   if ([...selectEl.options].some((o) => o.value === previousValue)) {
     selectEl.value = previousValue;
   }
+}
+
+function getActiveFilterPresetName() {
+  return loadStoredString(ACTIVE_FILTER_PRESET_KEY).trim();
+}
+
+function setActiveFilterPresetName(name) {
+  saveStoredString(ACTIVE_FILTER_PRESET_KEY, String(name || '').trim());
 }
 
 function captureFilterState() {
@@ -607,8 +633,26 @@ function applyDisplayState(keys) {
   }
 }
 
-function promptPresetName(action) {
-  const name = prompt(`Enter a name to ${action}:`);
+function restoreActiveFilterPreset() {
+  const name = getActiveFilterPresetName();
+  if (!name) return false;
+
+  const map = loadPresetsMap(FILTER_PRESETS_KEY);
+  const preset = map[name];
+  if (!preset) {
+    setActiveFilterPresetName('');
+    return false;
+  }
+
+  if ([...elements.filterPresetSelect.options].some((option) => option.value === name)) {
+    elements.filterPresetSelect.value = name;
+  }
+  applyFilterState(preset);
+  return true;
+}
+
+function promptPresetName(action, suggestedName = '') {
+  const name = prompt(`Enter a name to ${action}:`, suggestedName);
   if (!name || !name.trim()) return null;
   return name.trim();
 }
@@ -616,14 +660,25 @@ function promptPresetName(action) {
 function wirePresets() {
   // Filter presets
   populatePresetSelect(elements.filterPresetSelect, FILTER_PRESETS_KEY);
+  const activeFilterPresetName = getActiveFilterPresetName();
+  if (
+    activeFilterPresetName &&
+    [...elements.filterPresetSelect.options].some((option) => option.value === activeFilterPresetName)
+  ) {
+    elements.filterPresetSelect.value = activeFilterPresetName;
+  }
 
   elements.filterPresetSave.addEventListener('click', () => {
-    const name = promptPresetName('save this filter preset');
+    const name = promptPresetName(
+      'save this filter preset',
+      elements.filterPresetSelect.value,
+    );
     if (!name) return;
     const map = loadPresetsMap(FILTER_PRESETS_KEY);
     if (map[name] && !confirm(`Overwrite existing preset "${name}"?`)) return;
     map[name] = captureFilterState();
     savePresetsMap(FILTER_PRESETS_KEY, map);
+    setActiveFilterPresetName(name);
     populatePresetSelect(elements.filterPresetSelect, FILTER_PRESETS_KEY);
     elements.filterPresetSelect.value = name;
   });
@@ -633,6 +688,7 @@ function wirePresets() {
     if (!name) return;
     const map = loadPresetsMap(FILTER_PRESETS_KEY);
     if (!map[name]) return;
+    setActiveFilterPresetName(name);
     applyFilterState(map[name]);
     search();
   });
@@ -644,6 +700,9 @@ function wirePresets() {
     const map = loadPresetsMap(FILTER_PRESETS_KEY);
     delete map[name];
     savePresetsMap(FILTER_PRESETS_KEY, map);
+    if (getActiveFilterPresetName() === name) {
+      setActiveFilterPresetName('');
+    }
     populatePresetSelect(elements.filterPresetSelect, FILTER_PRESETS_KEY);
   });
 
@@ -697,14 +756,18 @@ function wireEvents() {
     await search();
   });
 
-  elements.resetButton.addEventListener('click', async () => {
-    elements.sortBySelect.value = 'largest_pore_volume';
-    elements.sortDirSelect.value = 'desc';
-    elements.limitSelect.value = '24';
-    elements.pdbIdQueryInput.value = '';
-    state.currentLimit = 24;
+  elements.resetButton.addEventListener('click', async (event) => {
+    event.preventDefault();
+
+    const restoredActivePreset = restoreActiveFilterPreset();
+    if (!restoredActivePreset) {
+      elements.filtersForm.reset();
+      elements.pdbIdQueryInput.value = '';
+    }
+
+    state.currentLimit = Number(elements.limitSelect.value);
     state.currentOffset = 0;
-    window.setTimeout(search, 0);
+    await search();
   });
 
   elements.prevPageButton.addEventListener('click', async () => {
@@ -744,6 +807,7 @@ async function init() {
   wirePresets();
   await loadHealth();
   await loadRuns();
+  restoreActiveFilterPreset();
   await search();
 }
 

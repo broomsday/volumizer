@@ -221,6 +221,18 @@ def test_gallery_web_static_search_serializes_form_fields_generically():
     assert 'name="residues_max"' in index_html
 
 
+def test_gallery_web_static_filter_presets_restore_active_selection():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js = (static_dir / "app.js").read_text(encoding="utf-8")
+
+    assert "const ACTIVE_FILTER_PRESET_KEY = 'volumizer_active_filter_preset';" in app_js
+    assert "function restoreActiveFilterPreset()" in app_js
+    assert "setActiveFilterPresetName(name);" in app_js
+    assert "restoreActiveFilterPreset();" in app_js
+    assert "event.preventDefault();" in app_js
+    assert "const restoredActivePreset = restoreActiveFilterPreset();" in app_js
+
+
 def test_gallery_web_detail_and_viewer_data(tmp_path: Path):
     db_path, _, structure_ids = _build_web_fixture(tmp_path)
     structure_id = structure_ids["hit-a"]
