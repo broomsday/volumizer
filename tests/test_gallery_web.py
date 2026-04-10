@@ -201,6 +201,12 @@ def test_gallery_web_lists_runs_and_hits(tmp_path: Path):
     assert filtered_payload["total_count"] == 1
     assert filtered_payload["rows"][0]["source_label"] == "hit-a"
 
+    filtered_max_response = client.get("/api/hits?pore_volume_max=150")
+    assert filtered_max_response.status_code == 200
+    filtered_max_payload = filtered_max_response.json()
+    assert filtered_max_payload["total_count"] == 1
+    assert filtered_max_payload["rows"][0]["source_label"] == "hit-b"
+
     pdb_filtered_response = client.get("/api/hits?pdb_id_query=jp")
     assert pdb_filtered_response.status_code == 200
     pdb_filtered_payload = pdb_filtered_response.json()
@@ -236,6 +242,38 @@ def test_gallery_web_api_filters_by_protein_ranges(tmp_path: Path):
     assert filtered_payload["rows"][0]["source_label"] == "hit-a"
 
 
+def test_gallery_web_api_filters_by_length_maximum(tmp_path: Path):
+    db_path, _, _ = _build_web_fixture(tmp_path)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE structure_aggregates
+            SET largest_pore_length_a = 40
+            WHERE structure_id = (
+                SELECT structure_id FROM structures WHERE source_label = 'hit-a'
+            )
+            """
+        )
+        connection.execute(
+            """
+            UPDATE structure_aggregates
+            SET largest_pore_length_a = 12
+            WHERE structure_id = (
+                SELECT structure_id FROM structures WHERE source_label = 'hit-b'
+            )
+            """
+        )
+        connection.commit()
+
+    client = TestClient(create_app(db_path))
+
+    filtered_response = client.get("/api/hits?pore_length_max=20")
+    assert filtered_response.status_code == 200
+    filtered_payload = filtered_response.json()
+    assert filtered_payload["total_count"] == 1
+    assert filtered_payload["rows"][0]["source_label"] == "hit-b"
+
+
 def test_gallery_web_static_search_serializes_form_fields_generically():
     static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
     app_js = (static_dir / "app.js").read_text(encoding="utf-8")
@@ -246,6 +284,14 @@ def test_gallery_web_static_search_serializes_form_fields_generically():
     assert 'name="seq_unique_chains_max"' in index_html
     assert 'name="chains_max"' in index_html
     assert 'name="residues_max"' in index_html
+    assert 'name="pore_volume_max"' in index_html
+    assert 'name="pore_length_max"' in index_html
+    assert 'name="pocket_volume_max"' in index_html
+    assert 'name="pocket_length_max"' in index_html
+    assert 'name="cavity_volume_max"' in index_html
+    assert 'name="cavity_length_max"' in index_html
+    assert 'name="hub_volume_max"' in index_html
+    assert 'name="hub_length_max"' in index_html
     assert '<option value="">None</option>' in index_html
     assert 'name="seq_unique_chains_max" value="3"' not in index_html
     assert 'name="frac_coil_max" value="0.6"' not in index_html
