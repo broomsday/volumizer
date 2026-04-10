@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
+import textwrap
 
 from fastapi.testclient import TestClient
 
@@ -244,6 +246,16 @@ def test_gallery_web_static_search_serializes_form_fields_generically():
     assert 'name="seq_unique_chains_max"' in index_html
     assert 'name="chains_max"' in index_html
     assert 'name="residues_max"' in index_html
+    assert '<option value="">None</option>' in index_html
+    assert 'name="seq_unique_chains_max" value="3"' not in index_html
+    assert 'name="frac_coil_max" value="0.6"' not in index_html
+    assert 'name="pore_circularity_min" value="0.5"' not in index_html
+    assert 'name="pore_uniformity_min" value="0.5"' not in index_html
+    assert '<option value="">Default</option>' in index_html
+    assert '<input type="checkbox" data-metric="num_chains" checked /> Chains' in index_html
+    assert '<input type="checkbox" data-metric="num_residues" checked /> Residues' in index_html
+    assert '<input type="checkbox" data-metric="num_sequence_unique_chains" checked /> Unique chains' in index_html
+    assert '<input type="checkbox" data-metric="frac_coil" checked /> Coil' not in index_html
     assert 'href="/assets/molstar.css"' in index_html
     assert 'src="/assets/molstar.js"' in index_html
     assert "unpkg.com/molstar" not in index_html
@@ -259,6 +271,884 @@ def test_gallery_web_static_filter_presets_restore_active_selection():
     assert "restoreActiveFilterPreset();" in app_js
     assert "event.preventDefault();" in app_js
     assert "const restoredActivePreset = restoreActiveFilterPreset();" in app_js
+
+
+def test_gallery_web_static_sparse_filter_presets_reset_previous_values():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js_path = static_dir / "app.js"
+
+    node_script = textwrap.dedent(
+        f"""
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+
+        const source = fs.readFileSync({str(app_js_path)!r}, 'utf8')
+          + '\\n;globalThis.__galleryTest = {{ applyFilterState, state }};';
+
+        function createField(name, value, defaultValue = '') {{
+          return {{
+            name,
+            value,
+            defaultValue,
+            type: 'text',
+            checked: false,
+            addEventListener() {{}},
+          }};
+        }}
+
+        const chainsMax = createField('chains_max', '99', '');
+        const seqUniqueChainsMax = createField('seq_unique_chains_max', '1', '3');
+        const sortBy = createField('sort_by', 'num_chains', 'largest_pore_volume_a3');
+        const sortDir = createField('sort_dir', 'asc', 'desc');
+        const limit = createField('limit', '12', '24');
+
+        const filtersForm = {{
+          elements: [chainsMax, seqUniqueChainsMax, sortBy, sortDir, limit],
+          reset() {{
+            for (const el of this.elements) {{
+              el.value = el.defaultValue;
+            }}
+          }},
+          addEventListener() {{}},
+        }};
+
+        const pdbIdQueryInput = {{ value: '1ABC', addEventListener() {{}} }};
+        const displayPropsPopup = {{ querySelectorAll() {{ return []; }}, hidden: true }};
+        const detailDialog = {{
+          open: false,
+          addEventListener() {{}},
+          getBoundingClientRect() {{
+            return {{ top: 0, left: 0, width: 0, height: 0 }};
+          }},
+          showModal() {{}},
+          close() {{}},
+        }};
+
+        function stubElement() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            append() {{}},
+            appendChild() {{}},
+            addEventListener() {{}},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        const elementIds = [
+          'filters-form',
+          'pdb-id-query',
+          'run-id',
+          'limit',
+          'sort-by',
+          'sort-dir',
+          'prev-page',
+          'next-page',
+          'reset-filters',
+          'loading-state',
+          'empty-state',
+          'results-grid',
+          'db-pill',
+          'result-pill',
+          'page-status',
+          'detail-dialog',
+          'close-detail',
+          'detail-title',
+          'detail-links',
+          'detail-metrics',
+          'detail-volumes',
+          'viewer-host',
+          'display-props-toggle',
+          'display-props-popup',
+          'filter-preset-select',
+          'filter-preset-load',
+          'filter-preset-save',
+          'filter-preset-delete',
+          'display-preset-select',
+          'display-preset-load',
+          'display-preset-save',
+          'display-preset-delete',
+        ];
+
+        const elementsById = Object.fromEntries(
+          elementIds.map((id) => [id, stubElement()]),
+        );
+        elementsById['filters-form'] = filtersForm;
+        elementsById['pdb-id-query'] = pdbIdQueryInput;
+        elementsById['display-props-popup'] = displayPropsPopup;
+        elementsById['detail-dialog'] = detailDialog;
+        elementsById['limit'] = limit;
+        elementsById['sort-by'] = sortBy;
+        elementsById['sort-dir'] = sortDir;
+
+        const document = {{
+          getElementById(id) {{
+            return elementsById[id] || stubElement();
+          }},
+          createElement() {{
+            return stubElement();
+          }},
+        }};
+
+        const context = {{
+          console,
+          document,
+          window: {{ addEventListener() {{}}, molstar: null }},
+          localStorage: {{ getItem() {{ return null; }}, setItem() {{}}, removeItem() {{}} }},
+          URLSearchParams,
+          fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+          confirm: () => true,
+          prompt: () => '',
+          Set,
+          Number,
+          String,
+          JSON,
+          Promise,
+          Object,
+          Array,
+          Math,
+        }};
+
+        vm.createContext(context);
+        vm.runInContext(source, context);
+
+        context.__galleryTest.applyFilterState({{
+          seq_unique_chains_max: '3',
+          sort_by: 'largest_pore_volume_a3',
+          sort_dir: 'desc',
+          limit: '24',
+        }});
+
+        console.log(JSON.stringify({{
+          chains_max: chainsMax.value,
+          seq_unique_chains_max: seqUniqueChainsMax.value,
+          sort_by: sortBy.value,
+          sort_dir: sortDir.value,
+          limit: limit.value,
+          pdb_id_query: pdbIdQueryInput.value,
+          current_limit: context.__galleryTest.state.currentLimit,
+          current_offset: context.__galleryTest.state.currentOffset,
+        }}));
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["chains_max"] == ""
+    assert payload["seq_unique_chains_max"] == "3"
+    assert payload["sort_by"] == "largest_pore_volume_a3"
+    assert payload["sort_dir"] == "desc"
+    assert payload["limit"] == "24"
+    assert payload["pdb_id_query"] == ""
+    assert payload["current_limit"] == 24
+    assert payload["current_offset"] == 0
+
+
+def test_gallery_web_static_none_filter_preset_clears_restored_values():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js_path = static_dir / "app.js"
+
+    node_script = textwrap.dedent(
+        f"""
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+
+        const source = fs.readFileSync({str(app_js_path)!r}, 'utf8')
+          + '\\n;globalThis.__galleryTest = {{ applyFilterState, state }};';
+
+        function createField(name, value, defaultValue = '') {{
+          return {{
+            name,
+            value,
+            defaultValue,
+            type: 'text',
+            checked: false,
+            addEventListener() {{}},
+          }};
+        }}
+
+        const runId = createField('run_id', 'legacy-run', '');
+        const seqUniqueChainsMax = createField('seq_unique_chains_max', '3', '');
+        const fracCoilMax = createField('frac_coil_max', '0.6', '');
+        const poreVolumeMin = createField('pore_volume_min', '10000', '');
+        const poreDminMin = createField('pore_dmin_min', '35', '');
+        const poreCircularityMin = createField('pore_circularity_min', '0.8', '');
+        const poreUniformityMin = createField('pore_uniformity_min', '0.5', '');
+        const sortBy = createField('sort_by', 'largest_pore_volume_a3', 'largest_pore_volume_a3');
+        const sortDir = createField('sort_dir', 'desc', 'desc');
+        const limit = createField('limit', '24', '24');
+
+        const filtersForm = {{
+          elements: [
+            runId,
+            seqUniqueChainsMax,
+            fracCoilMax,
+            poreVolumeMin,
+            poreDminMin,
+            poreCircularityMin,
+            poreUniformityMin,
+            sortBy,
+            sortDir,
+            limit,
+          ],
+          reset() {{
+            runId.value = 'legacy-run';
+            seqUniqueChainsMax.value = '3';
+            fracCoilMax.value = '0.6';
+            poreVolumeMin.value = '10000';
+            poreDminMin.value = '35';
+            poreCircularityMin.value = '0.8';
+            poreUniformityMin.value = '0.5';
+            sortBy.value = 'largest_pore_volume_a3';
+            sortDir.value = 'desc';
+            limit.value = '24';
+          }},
+          addEventListener() {{}},
+        }};
+
+        const pdbIdQueryInput = {{ value: '1ABC', addEventListener() {{}} }};
+        const displayPropsPopup = {{ querySelectorAll() {{ return []; }}, hidden: true }};
+        const detailDialog = {{
+          open: false,
+          addEventListener() {{}},
+          getBoundingClientRect() {{
+            return {{ top: 0, left: 0, width: 0, height: 0 }};
+          }},
+          showModal() {{}},
+          close() {{}},
+        }};
+
+        function stubElement() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            append() {{}},
+            appendChild() {{}},
+            addEventListener() {{}},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        const elementIds = [
+          'filters-form',
+          'pdb-id-query',
+          'run-id',
+          'limit',
+          'sort-by',
+          'sort-dir',
+          'prev-page',
+          'next-page',
+          'reset-filters',
+          'loading-state',
+          'empty-state',
+          'results-grid',
+          'db-pill',
+          'result-pill',
+          'page-status',
+          'detail-dialog',
+          'close-detail',
+          'detail-title',
+          'detail-links',
+          'detail-metrics',
+          'detail-volumes',
+          'viewer-host',
+          'display-props-toggle',
+          'display-props-popup',
+          'filter-preset-select',
+          'filter-preset-load',
+          'filter-preset-save',
+          'filter-preset-delete',
+          'display-preset-select',
+          'display-preset-load',
+          'display-preset-save',
+          'display-preset-delete',
+        ];
+
+        const elementsById = Object.fromEntries(
+          elementIds.map((id) => [id, stubElement()]),
+        );
+        elementsById['filters-form'] = filtersForm;
+        elementsById['pdb-id-query'] = pdbIdQueryInput;
+        elementsById['display-props-popup'] = displayPropsPopup;
+        elementsById['detail-dialog'] = detailDialog;
+        elementsById['run-id'] = runId;
+        elementsById['limit'] = limit;
+        elementsById['sort-by'] = sortBy;
+        elementsById['sort-dir'] = sortDir;
+
+        const document = {{
+          getElementById(id) {{
+            return elementsById[id] || stubElement();
+          }},
+          createElement() {{
+            return stubElement();
+          }},
+        }};
+
+        const context = {{
+          console,
+          document,
+          window: {{ addEventListener() {{}}, molstar: null }},
+          localStorage: {{ getItem() {{ return null; }}, setItem() {{}}, removeItem() {{}} }},
+          URLSearchParams,
+          fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+          confirm: () => true,
+          prompt: () => '',
+          alert: () => {{}},
+          Set,
+          Number,
+          String,
+          JSON,
+          Promise,
+          Object,
+          Array,
+          Math,
+        }};
+
+        vm.createContext(context);
+        vm.runInContext(source, context);
+        context.__galleryTest.applyFilterState({{}});
+
+        console.log(JSON.stringify({{
+          run_id: runId.value,
+          seq_unique_chains_max: seqUniqueChainsMax.value,
+          frac_coil_max: fracCoilMax.value,
+          pore_volume_min: poreVolumeMin.value,
+          pore_dmin_min: poreDminMin.value,
+          pore_circularity_min: poreCircularityMin.value,
+          pore_uniformity_min: poreUniformityMin.value,
+          sort_by: sortBy.value,
+          sort_dir: sortDir.value,
+          limit: limit.value,
+          pdb_id_query: pdbIdQueryInput.value,
+          current_limit: context.__galleryTest.state.currentLimit,
+          current_offset: context.__galleryTest.state.currentOffset,
+        }}));
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["run_id"] == ""
+    assert payload["seq_unique_chains_max"] == ""
+    assert payload["frac_coil_max"] == ""
+    assert payload["pore_volume_min"] == ""
+    assert payload["pore_dmin_min"] == ""
+    assert payload["pore_circularity_min"] == ""
+    assert payload["pore_uniformity_min"] == ""
+    assert payload["sort_by"] == "largest_pore_volume_a3"
+    assert payload["sort_dir"] == "desc"
+    assert payload["limit"] == "24"
+    assert payload["pdb_id_query"] == ""
+    assert payload["current_limit"] == 24
+    assert payload["current_offset"] == 0
+
+
+def test_gallery_web_static_builtin_filter_presets_exist():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js_path = static_dir / "app.js"
+
+    node_script = textwrap.dedent(
+        f"""
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+
+        const source = fs.readFileSync({str(app_js_path)!r}, 'utf8')
+          + '\\n;globalThis.__galleryTest = {{'
+          + ' BUILTIN_FILTER_PRESET_PREFIX,'
+          + ' BUILTIN_FILTER_PRESETS,'
+          + ' getFilterPresetData,'
+          + ' populateFilterPresetSelect,'
+          + ' elements'
+          + ' }};';
+
+        function createField(name, value = '', defaultValue = '') {{
+          return {{
+            name,
+            value,
+            defaultValue,
+            type: 'text',
+            checked: false,
+            addEventListener() {{}},
+          }};
+        }}
+
+        function createSelect() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            addEventListener() {{}},
+            append(option) {{
+              this.options.push(option);
+            }},
+            appendChild(option) {{
+              this.options.push(option);
+            }},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        function stubElement() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            append() {{}},
+            appendChild() {{}},
+            addEventListener() {{}},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        const filtersForm = {{
+          elements: [
+            createField('seq_unique_chains_max'),
+            createField('frac_coil_max'),
+            createField('pore_volume_min'),
+            createField('pore_dmin_min'),
+            createField('pore_circularity_min'),
+            createField('pore_uniformity_min'),
+            createField('limit', '24', '24'),
+          ],
+          reset() {{}},
+          addEventListener() {{}},
+        }};
+
+        const filterPresetSelect = createSelect();
+        const elementIds = [
+          'filters-form',
+          'pdb-id-query',
+          'run-id',
+          'limit',
+          'sort-by',
+          'sort-dir',
+          'prev-page',
+          'next-page',
+          'reset-filters',
+          'loading-state',
+          'empty-state',
+          'results-grid',
+          'db-pill',
+          'result-pill',
+          'page-status',
+          'detail-dialog',
+          'close-detail',
+          'detail-title',
+          'detail-links',
+          'detail-metrics',
+          'detail-volumes',
+          'viewer-host',
+          'display-props-toggle',
+          'display-props-popup',
+          'filter-preset-select',
+          'filter-preset-load',
+          'filter-preset-save',
+          'filter-preset-delete',
+          'display-preset-select',
+          'display-preset-load',
+          'display-preset-save',
+          'display-preset-delete',
+        ];
+
+        const elementsById = Object.fromEntries(
+          elementIds.map((id) => [id, stubElement()]),
+        );
+        elementsById['filters-form'] = filtersForm;
+        elementsById['pdb-id-query'] = createField('pdb_id_query');
+        elementsById['limit'] = filtersForm.elements[6];
+        elementsById['sort-by'] = createField('sort_by', 'largest_pore_volume');
+        elementsById['sort-dir'] = createField('sort_dir', 'desc');
+        elementsById['detail-dialog'] = stubElement();
+        elementsById['display-props-popup'] = stubElement();
+        elementsById['filter-preset-select'] = filterPresetSelect;
+
+        const document = {{
+          getElementById(id) {{
+            return elementsById[id] || stubElement();
+          }},
+          createElement() {{
+            return {{
+              value: '',
+              textContent: '',
+            }};
+          }},
+        }};
+
+        const context = {{
+          console,
+          document,
+          window: {{ addEventListener() {{}}, molstar: null }},
+          localStorage: {{
+            getItem(key) {{
+              if (key === 'volumizer_filter_presets') {{
+                return JSON.stringify({{ Custom: {{ seq_unique_chains_max: '9' }} }});
+              }}
+              return null;
+            }},
+            setItem() {{}},
+            removeItem() {{}},
+          }},
+          URLSearchParams,
+          fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+          confirm: () => true,
+          prompt: () => '',
+          alert: () => {{}},
+          Set,
+          Number,
+          String,
+          JSON,
+          Promise,
+          Object,
+          Array,
+          Math,
+        }};
+
+        vm.createContext(context);
+        vm.runInContext(source, context);
+        context.__galleryTest.populateFilterPresetSelect();
+
+        const poresValue = (
+          context.__galleryTest.BUILTIN_FILTER_PRESET_PREFIX + 'Pores'
+        );
+        const pocketsValue = (
+          context.__galleryTest.BUILTIN_FILTER_PRESET_PREFIX + 'Pockets'
+        );
+        const cavitiesValue = (
+          context.__galleryTest.BUILTIN_FILTER_PRESET_PREFIX + 'Cavities'
+        );
+        const porePreset = context.__galleryTest.getFilterPresetData(poresValue);
+        const pocketPreset = context.__galleryTest.getFilterPresetData(pocketsValue);
+        const cavityPreset = context.__galleryTest.getFilterPresetData(cavitiesValue);
+
+        console.log(JSON.stringify({{
+          option_labels: context.__galleryTest.elements.filterPresetSelect.options.map(
+            (option) => option.textContent,
+          ),
+          pore_preset: porePreset,
+          pocket_preset: pocketPreset,
+          cavity_preset: cavityPreset,
+        }}));
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["option_labels"] == ["None", "Pores", "Pockets", "Cavities", "Custom"]
+    assert payload["pore_preset"] == {
+        "seq_unique_chains_max": "3",
+        "frac_coil_max": "0.6",
+        "pore_volume_min": "10000",
+        "pore_dmin_min": "35",
+        "pore_circularity_min": "0.8",
+        "pore_uniformity_min": "0.5",
+    }
+    assert payload["pocket_preset"] == {
+        "seq_unique_chains_max": "3",
+        "frac_coil_max": "0.6",
+    }
+    assert payload["cavity_preset"] == {
+        "seq_unique_chains_max": "3",
+        "frac_coil_max": "0.6",
+    }
+
+
+def test_gallery_web_static_builtin_display_presets_exist():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js_path = static_dir / "app.js"
+
+    node_script = textwrap.dedent(
+        f"""
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+
+        const source = fs.readFileSync({str(app_js_path)!r}, 'utf8')
+          + '\\n;globalThis.__galleryTest = {{'
+          + ' BUILTIN_DISPLAY_PRESET_PREFIX,'
+          + ' getDisplayPresetData,'
+          + ' populateDisplayPresetSelect,'
+          + ' elements'
+          + ' }};';
+
+        function createField(name, value = '', defaultValue = '') {{
+          return {{
+            name,
+            value,
+            defaultValue,
+            type: 'text',
+            checked: false,
+            addEventListener() {{}},
+          }};
+        }}
+
+        function createSelect() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            addEventListener() {{}},
+            append(option) {{
+              this.options.push(option);
+            }},
+            appendChild(option) {{
+              this.options.push(option);
+            }},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        function stubElement() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            append() {{}},
+            appendChild() {{}},
+            addEventListener() {{}},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        const filtersForm = {{
+          elements: [
+            createField('limit', '24', '24'),
+          ],
+          reset() {{}},
+          addEventListener() {{}},
+        }};
+
+        const displayPresetSelect = createSelect();
+        const elementIds = [
+          'filters-form',
+          'pdb-id-query',
+          'run-id',
+          'limit',
+          'sort-by',
+          'sort-dir',
+          'prev-page',
+          'next-page',
+          'reset-filters',
+          'loading-state',
+          'empty-state',
+          'results-grid',
+          'db-pill',
+          'result-pill',
+          'page-status',
+          'detail-dialog',
+          'close-detail',
+          'detail-title',
+          'detail-links',
+          'detail-metrics',
+          'detail-volumes',
+          'viewer-host',
+          'display-props-toggle',
+          'display-props-popup',
+          'filter-preset-select',
+          'filter-preset-load',
+          'filter-preset-save',
+          'filter-preset-delete',
+          'display-preset-select',
+          'display-preset-load',
+          'display-preset-save',
+          'display-preset-delete',
+        ];
+
+        const elementsById = Object.fromEntries(
+          elementIds.map((id) => [id, stubElement()]),
+        );
+        elementsById['filters-form'] = filtersForm;
+        elementsById['pdb-id-query'] = createField('pdb_id_query');
+        elementsById['limit'] = filtersForm.elements[0];
+        elementsById['sort-by'] = createField('sort_by', 'largest_pore_volume');
+        elementsById['sort-dir'] = createField('sort_dir', 'desc');
+        elementsById['detail-dialog'] = stubElement();
+        elementsById['display-props-popup'] = stubElement();
+        elementsById['display-preset-select'] = displayPresetSelect;
+
+        const document = {{
+          getElementById(id) {{
+            return elementsById[id] || stubElement();
+          }},
+          createElement() {{
+            return {{
+              value: '',
+              textContent: '',
+            }};
+          }},
+        }};
+
+        const context = {{
+          console,
+          document,
+          window: {{ addEventListener() {{}}, molstar: null }},
+          localStorage: {{
+            getItem(key) {{
+              if (key === 'volumizer_display_presets') {{
+                return JSON.stringify({{ Custom: ['num_hubs'] }});
+              }}
+              return null;
+            }},
+            setItem() {{}},
+            removeItem() {{}},
+          }},
+          URLSearchParams,
+          fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+          confirm: () => true,
+          prompt: () => '',
+          alert: () => {{}},
+          Set,
+          Number,
+          String,
+          JSON,
+          Promise,
+          Object,
+          Array,
+          Math,
+        }};
+
+        vm.createContext(context);
+        vm.runInContext(source, context);
+        context.__galleryTest.populateDisplayPresetSelect();
+
+        const poresValue = (
+          context.__galleryTest.BUILTIN_DISPLAY_PRESET_PREFIX + 'Pores'
+        );
+        const pocketsValue = (
+          context.__galleryTest.BUILTIN_DISPLAY_PRESET_PREFIX + 'Pockets'
+        );
+        const cavitiesValue = (
+          context.__galleryTest.BUILTIN_DISPLAY_PRESET_PREFIX + 'Cavities'
+        );
+
+        console.log(JSON.stringify({{
+          option_labels: context.__galleryTest.elements.displayPresetSelect.options.map(
+            (option) => option.textContent,
+          ),
+          default_preset: context.__galleryTest.getDisplayPresetData(''),
+          pore_preset: context.__galleryTest.getDisplayPresetData(poresValue),
+          pocket_preset: context.__galleryTest.getDisplayPresetData(pocketsValue),
+          cavity_preset: context.__galleryTest.getDisplayPresetData(cavitiesValue),
+        }}));
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert payload["option_labels"] == ["Default", "Pores", "Pockets", "Cavities", "Custom"]
+    assert payload["default_preset"] == [
+        "num_chains",
+        "num_residues",
+        "num_sequence_unique_chains",
+    ]
+    assert payload["pore_preset"] == [
+        "num_chains",
+        "num_residues",
+        "num_sequence_unique_chains",
+        "largest_pore_volume_a3",
+        "largest_pore_min_diameter_a",
+        "largest_pore_max_diameter_a",
+        "largest_pore_uniformity",
+        "largest_pore_circularity",
+    ]
+    assert payload["pocket_preset"] == [
+        "num_chains",
+        "num_residues",
+        "num_sequence_unique_chains",
+        "largest_pocket_volume_a3",
+        "largest_pocket_max_diameter_a",
+        "largest_pocket_length_a",
+        "largest_pocket_circularity",
+    ]
+    assert payload["cavity_preset"] == [
+        "num_chains",
+        "num_residues",
+        "num_sequence_unique_chains",
+        "largest_cavity_volume_a3",
+        "largest_cavity_max_diameter_a",
+        "largest_cavity_length_a",
+        "largest_cavity_circularity",
+        "largest_cavity_uniformity",
+    ]
 
 
 def test_gallery_web_detail_and_viewer_data(tmp_path: Path):
