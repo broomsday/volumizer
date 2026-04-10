@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "gallery:install-browser": "playwright install chromium",
+    "gallery:install-browser-deps": "playwright install --with-deps chromium"
+  },
   "devDependencies": {
     "molstar": "^5.7.0",
     "playwright": "^1.58.2"

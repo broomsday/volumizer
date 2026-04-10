@@ -19,6 +19,9 @@ from volumizer.web import db as web_db
 
 DEFAULT_DB_PATH = Path("data") / "gallery.db"
 GALLERY_DB_ENV = "VOLUMIZER_GALLERY_DB"
+MOLSTAR_ASSET_ROOT_ENV = "MOLSTAR_ASSET_ROOT"
+DEFAULT_MOLSTAR_ASSET_ROOT = Path("node_modules") / "molstar" / "build" / "viewer"
+MOLSTAR_ASSET_FILENAMES = frozenset({"molstar.js", "molstar.css"})
 
 
 def _resolve_db_path(explicit_db_path: Path | None = None) -> Path:
@@ -30,6 +33,26 @@ def _resolve_db_path(explicit_db_path: Path | None = None) -> Path:
         return Path(raw_env_path).expanduser().resolve()
 
     return (Path.cwd() / DEFAULT_DB_PATH).resolve()
+
+
+def _resolve_molstar_asset_root(explicit_asset_root: Path | None = None) -> Path | None:
+    candidates: list[Path] = []
+    if explicit_asset_root is not None:
+        candidates.append(Path(explicit_asset_root))
+
+    raw_env_path = os.getenv(MOLSTAR_ASSET_ROOT_ENV)
+    if raw_env_path:
+        candidates.append(Path(raw_env_path))
+
+    package_root = Path(__file__).resolve().parents[2]
+    candidates.append(package_root / DEFAULT_MOLSTAR_ASSET_ROOT)
+    candidates.append(Path(__file__).with_name("static") / "vendor" / "molstar")
+
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if all((resolved / filename).is_file() for filename in MOLSTAR_ASSET_FILENAMES):
+            return resolved
+    return None
 
 
 def _load_index_html(static_dir: Path) -> str:
@@ -106,7 +129,35 @@ def _file_response_or_404(
     return FileResponse(path, media_type=media_type, filename=path.name)
 
 
-def create_app(db_path: Path | None = None) -> FastAPI:
+def _molstar_asset_response_or_404(
+    *,
+    asset_root: Path | None,
+    filename: str,
+    media_type: str,
+) -> FileResponse:
+    if filename not in MOLSTAR_ASSET_FILENAMES:
+        raise HTTPException(status_code=404, detail=f"Unsupported Mol* asset: {filename}")
+
+    if asset_root is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Mol* assets are unavailable. Install gallery dependencies with "
+                "`npm ci` and `npm run gallery:install-browser`."
+            ),
+        )
+
+    path = asset_root / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Mol* asset not found: {filename}")
+
+    return FileResponse(path, media_type=media_type, filename=path.name)
+
+
+def create_app(
+    db_path: Path | None = None,
+    molstar_asset_root: Path | None = None,
+) -> FastAPI:
     resolved_db_path = _resolve_db_path(db_path)
     static_dir = Path(__file__).with_name("static")
     index_html = _load_index_html(static_dir)
@@ -117,6 +168,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
         redoc_url=None,
     )
     app.state.db_path = resolved_db_path
+    app.state.molstar_asset_root = _resolve_molstar_asset_root(molstar_asset_root)
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -130,7 +182,29 @@ def create_app(db_path: Path | None = None) -> FastAPI:
             "status": "ok",
             "db": str(app.state.db_path),
             "db_exists": Path(app.state.db_path).is_file(),
+            "molstar_asset_root": (
+                str(app.state.molstar_asset_root)
+                if app.state.molstar_asset_root is not None
+                else None
+            ),
+            "molstar_assets_available": app.state.molstar_asset_root is not None,
         }
+
+    @app.get("/assets/molstar.js")
+    def get_molstar_js() -> FileResponse:
+        return _molstar_asset_response_or_404(
+            asset_root=app.state.molstar_asset_root,
+            filename="molstar.js",
+            media_type="application/javascript",
+        )
+
+    @app.get("/assets/molstar.css")
+    def get_molstar_css() -> FileResponse:
+        return _molstar_asset_response_or_404(
+            asset_root=app.state.molstar_asset_root,
+            filename="molstar.css",
+            media_type="text/css",
+        )
 
     @app.get("/api/runs")
     def list_runs() -> dict[str, Any]:

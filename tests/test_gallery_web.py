@@ -12,6 +12,14 @@ from volumizer.web.app import create_app
 TEST_INPUT_PDB = TEST_DIR / "pdbs" / "cavity.pdb"
 
 
+def _build_molstar_assets(tmp_path: Path) -> Path:
+    asset_root = tmp_path / "molstar"
+    asset_root.mkdir(parents=True, exist_ok=True)
+    (asset_root / "molstar.js").write_text("window.molstar = { Viewer: {} };", encoding="utf-8")
+    (asset_root / "molstar.css").write_text("body { background: #fff; }\n", encoding="utf-8")
+    return asset_root
+
+
 def _write_annotation(path: Path, volume: float) -> None:
     path.write_text(
         json.dumps(
@@ -131,7 +139,8 @@ def _build_web_fixture(tmp_path: Path) -> tuple[Path, str, dict[str, int]]:
 
 def test_gallery_web_root_and_health(tmp_path: Path):
     db_path, _, _ = _build_web_fixture(tmp_path)
-    client = TestClient(create_app(db_path))
+    asset_root = _build_molstar_assets(tmp_path)
+    client = TestClient(create_app(db_path, molstar_asset_root=asset_root))
 
     root_response = client.get("/")
     assert root_response.status_code == 200
@@ -144,6 +153,22 @@ def test_gallery_web_root_and_health(tmp_path: Path):
     assert payload["status"] == "ok"
     assert payload["db_exists"] is True
     assert payload["db"] == str(db_path.resolve())
+    assert payload["molstar_assets_available"] is True
+    assert payload["molstar_asset_root"] == str(asset_root.resolve())
+
+
+def test_gallery_web_serves_local_molstar_assets(tmp_path: Path):
+    db_path, _, _ = _build_web_fixture(tmp_path)
+    asset_root = _build_molstar_assets(tmp_path)
+    client = TestClient(create_app(db_path, molstar_asset_root=asset_root))
+
+    js_response = client.get("/assets/molstar.js")
+    assert js_response.status_code == 200
+    assert "window.molstar" in js_response.text
+
+    css_response = client.get("/assets/molstar.css")
+    assert css_response.status_code == 200
+    assert "background" in css_response.text
 
 
 def test_gallery_web_lists_runs_and_hits(tmp_path: Path):
@@ -219,6 +244,9 @@ def test_gallery_web_static_search_serializes_form_fields_generically():
     assert 'name="seq_unique_chains_max"' in index_html
     assert 'name="chains_max"' in index_html
     assert 'name="residues_max"' in index_html
+    assert 'href="/assets/molstar.css"' in index_html
+    assert 'src="/assets/molstar.js"' in index_html
+    assert "unpkg.com/molstar" not in index_html
 
 
 def test_gallery_web_static_filter_presets_restore_active_selection():

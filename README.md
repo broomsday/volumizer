@@ -31,6 +31,30 @@ pip install volumizer
 
 This installs the portable Python wheel and CLI (`volumizer`). Optional local C helpers and the optional Rust native extension are not bundled in the default wheel.
 
+## Linux Clone Quickstart
+On a fresh Linux machine, the shortest repository-local setup is:
+
+1. Install `uv`, Node.js + npm, and optionally `build-essential` if you want the local C helpers.
+2. Run:
+
+```bash
+bash scripts/bootstrap_linux.sh
+```
+
+3. Verify the CLI:
+
+```bash
+uv run --python 3.11 volumizer --version
+```
+
+4. Build and serve the local gallery from a run summary:
+
+```bash
+./gallery /path/to/run.summary.json
+```
+
+The bootstrap script installs the Python dependencies, compiles the optional local C helpers when `cc` is available, installs the npm packages, and downloads the Playwright Chromium build needed for thumbnail rendering. Use `--no-gallery` to skip the Node/Playwright setup or `--with-native` to also build the optional Rust backend.
+
 ## Developing the Volumizer Package
 `biotite==0.37.0` does not support Python 3.14. Use Python 3.10 or 3.11 with `uv`.
 
@@ -186,7 +210,8 @@ Install the extra local web dependencies:
 
 ```bash
 uv sync --python 3.11 --group test --group web
-npm install
+npm ci
+npm run gallery:install-browser
 ```
 
 Build the gallery index from a run summary:
@@ -201,7 +226,7 @@ Render cached `x/y/z` thumbnails for indexed hits:
 uv run --python 3.11 python scripts/render_gallery_thumbnails.py --db data/gallery.db --render-root data/renders --jobs 4 --render-backend auto
 ```
 
-Thumbnail rendering now uses locally installed Mol* assets from `node_modules/molstar` by default, so it no longer depends on runtime CDN fetches. Optional profiling output is available via `--timing-jsonl <path>`. The default `--axis-render-mode compatibility` path reuses one Mol* browser/page/viewer context while loading axis-specific atom-filtered structures for `x/y/z`; `--axis-render-mode fast` keeps one unclipped structure loaded and captures full-structure `x/y/z` views.
+Both the thumbnail renderer and the browser UI now use locally installed Mol* assets from `node_modules/molstar` by default, so the gallery no longer depends on runtime CDN fetches. Override the asset location with `MOLSTAR_ASSET_ROOT` if needed. Optional profiling output is available via `--timing-jsonl <path>`. The default `--axis-render-mode compatibility` path reuses one Mol* browser/page/viewer context while loading axis-specific atom-filtered structures for `x/y/z`; `--axis-render-mode fast` keeps one unclipped structure loaded and captures full-structure `x/y/z` views.
 
 Serve the local gallery:
 
@@ -210,6 +235,18 @@ uv run --python 3.11 python scripts/serve_gallery.py --db data/gallery.db --host
 ```
 
 Then open `http://127.0.0.1:8000`.
+
+For the shortest end-to-end path from the repository root, use:
+
+```bash
+./gallery /path/to/run.summary.json
+```
+
+If Chromium is not installed yet, run `bash scripts/bootstrap_linux.sh` or `npm run gallery:install-browser`. If you want to browse the indexed data before rendering thumbnails, use:
+
+```bash
+./gallery /path/to/run.summary.json --skip-thumbnails
+```
 
 Current web-app scope:
 - `GET /api/runs`, `GET /api/hits`, `GET /api/hits/{structure_id}`, `GET /api/hits/{structure_id}/viewer-data`

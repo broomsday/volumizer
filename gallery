@@ -2,15 +2,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DB_PATH="${VOLUMIZER_GALLERY_DB:-data/gallery.db}"
+DB_PATH="${VOLUMIZER_GALLERY_DB:-$SCRIPT_DIR/data/gallery.db}"
+PYTHON_VERSION="${VOLUMIZER_GALLERY_PYTHON_VERSION:-3.11}"
+
+PYTHON_RUNNER=()
+PYTHON_RUNNER_LABEL=""
 
 log() {
   echo "[gallery] $*" >&2
 }
 
+fail() {
+  log "error: $*"
+  exit 1
+}
+
 usage() {
   cat <<EOF
-Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--progress-interval SECONDS] [--jobs N] [--render-backend MODE] [--axis-render-mode MODE] [--worker-timeout-seconds SECONDS] [--timing-jsonl PATH] [--host HOST] [--port PORT]
+Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--skip-thumbnails] [--progress-interval SECONDS] [--jobs N] [--render-backend MODE] [--axis-render-mode MODE] [--worker-timeout-seconds SECONDS] [--timing-jsonl PATH] [--host HOST] [--port PORT]
 
 Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 
@@ -20,6 +29,7 @@ Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 Options:
   --force-index        Rebuild the index even if it is up to date
   --force-thumbnails   Re-render all thumbnails even if they already exist
+  --skip-thumbnails    Skip thumbnail rendering and serve the gallery with placeholders
   --progress-interval  Seconds between thumbnail progress updates (default: 30)
   --jobs               Parallel thumbnail render workers (default: 1)
   --render-backend     software, hardware, or auto (default: software)
@@ -32,10 +42,78 @@ Options:
 EOF
 }
 
+select_python_runner() {
+  if command -v uv >/dev/null 2>&1; then
+    PYTHON_RUNNER=(uv run --group web --python "$PYTHON_VERSION" python)
+    PYTHON_RUNNER_LABEL="uv run --group web --python ${PYTHON_VERSION} python"
+    return
+  fi
+
+  local python_candidate="${VOLUMIZER_GALLERY_PYTHON:-}"
+  if [[ -z "$python_candidate" ]]; then
+    if command -v python >/dev/null 2>&1; then
+      python_candidate="python"
+    elif command -v python3 >/dev/null 2>&1; then
+      python_candidate="python3"
+    else
+      fail "no Python interpreter found. Install uv or set VOLUMIZER_GALLERY_PYTHON."
+    fi
+  fi
+
+  if ! command -v "$python_candidate" >/dev/null 2>&1; then
+    fail "configured Python interpreter is unavailable: $python_candidate"
+  fi
+
+  PYTHON_RUNNER=("$python_candidate")
+  PYTHON_RUNNER_LABEL="$python_candidate"
+}
+
+run_python_module() {
+  local module_name="$1"
+  shift
+  (cd "$SCRIPT_DIR" && "${PYTHON_RUNNER[@]}" -m "$module_name" "$@")
+}
+
+ensure_python_gallery_deps() {
+  if (cd "$SCRIPT_DIR" && "${PYTHON_RUNNER[@]}" -c "import fastapi, uvicorn, volumizer") >/dev/null 2>&1; then
+    return
+  fi
+
+  fail "Python gallery dependencies are missing. Run 'bash scripts/bootstrap_linux.sh' or install the web dependencies in the active environment."
+}
+
+ensure_molstar_assets() {
+  if [[ ! -f "$SCRIPT_DIR/node_modules/molstar/build/viewer/molstar.js" || ! -f "$SCRIPT_DIR/node_modules/molstar/build/viewer/molstar.css" ]]; then
+    fail "Mol* viewer assets are missing under node_modules. Run 'bash scripts/bootstrap_linux.sh' or 'npm ci'."
+  fi
+}
+
+ensure_thumbnail_renderer_deps() {
+  if ! command -v node >/dev/null 2>&1; then
+    fail "Node.js is required for thumbnail rendering. Run 'bash scripts/bootstrap_linux.sh' or install node/npm."
+  fi
+
+  if [[ ! -f "$SCRIPT_DIR/node_modules/playwright/package.json" ]]; then
+    fail "Playwright is not installed under node_modules. Run 'bash scripts/bootstrap_linux.sh' or 'npm ci'."
+  fi
+
+  ensure_molstar_assets
+}
+
+ensure_playwright_browser() {
+  local check_script='import fs from "node:fs"; import { chromium } from "playwright"; const executablePath = chromium.executablePath(); if (!executablePath || !fs.existsSync(executablePath)) { process.exit(1); }'
+  if (cd "$SCRIPT_DIR" && node --input-type=module -e "$check_script") >/dev/null 2>&1; then
+    return
+  fi
+
+  fail "Playwright Chromium is not installed. Run 'bash scripts/bootstrap_linux.sh' or 'npm run gallery:install-browser'."
+}
+
 # --- Parse arguments ---
 RUN_PATH=""
 FORCE_INDEX=false
 FORCE_THUMBNAILS=false
+SKIP_THUMBNAILS=false
 PROGRESS_INTERVAL="30"
 JOBS="1"
 RENDER_BACKEND="software"
@@ -57,6 +135,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force-thumbnails)
       FORCE_THUMBNAILS=true
+      shift
+      ;;
+    --skip-thumbnails)
+      SKIP_THUMBNAILS=true
       shift
       ;;
     --progress-interval)
@@ -98,13 +180,29 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+select_python_runner
+log "python runner: $PYTHON_RUNNER_LABEL"
+ensure_python_gallery_deps
+
 # --- Resolve summary file ---
+make_absolute_path() {
+  local raw_path="$1"
+  if [[ "$raw_path" = /* ]]; then
+    printf '%s\n' "$raw_path"
+    return
+  fi
+
+  local parent_dir
+  parent_dir="$(cd "$(dirname "$raw_path")" && pwd)"
+  printf '%s/%s\n' "$parent_dir" "$(basename "$raw_path")"
+}
+
 resolve_summary() {
   local path="$1"
 
   # If it's a file, use it directly
   if [[ -f "$path" ]]; then
-    echo "$path"
+    make_absolute_path "$path"
     return
   fi
 
@@ -112,7 +210,7 @@ resolve_summary() {
   if [[ -d "$path" ]]; then
     local summary="$path/run.summary.json"
     if [[ -f "$summary" ]]; then
-      echo "$summary"
+      make_absolute_path "$summary"
       return
     fi
     echo "Error: No run.summary.json found in $path" >&2
@@ -153,6 +251,11 @@ else
   log "auto-selected run: $(basename "$BEST_DIR") ($BEST_COUNT files)"
 fi
 
+DB_PATH="$(make_absolute_path "$DB_PATH")"
+if [[ -n "$TIMING_JSONL" ]]; then
+  TIMING_JSONL="$(make_absolute_path "$TIMING_JSONL")"
+fi
+
 # --- Step 1: Rebuild gallery index (skip if up to date) ---
 NEED_REBUILD=true
 if [[ "$FORCE_INDEX" == false && -f "$DB_PATH" ]]; then
@@ -165,7 +268,7 @@ fi
 if [[ "$NEED_REBUILD" == true ]]; then
   log "index: rebuilding from $SUMMARY_PATH"
   rm -f "$DB_PATH"
-  uv run python -m volumizer.gallery_index \
+  run_python_module volumizer.gallery_index \
     --summary "$SUMMARY_PATH" \
     --db "$DB_PATH" \
     --skip-structure-metrics \
@@ -173,23 +276,31 @@ if [[ "$NEED_REBUILD" == true ]]; then
 fi
 
 # --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
-log "thumbnails: rendering (skipping up-to-date unless forced)"
-THUMBNAIL_ARGS=(
-  --db "$DB_PATH"
-  --progress-interval "$PROGRESS_INTERVAL"
-  --jobs "$JOBS"
-  --render-backend "$RENDER_BACKEND"
-  --axis-render-mode "$AXIS_RENDER_MODE"
-  --worker-timeout-seconds "$WORKER_TIMEOUT_SECONDS"
-)
-if [[ "$FORCE_THUMBNAILS" == true ]]; then
-  THUMBNAIL_ARGS+=(--force)
+if [[ "$SKIP_THUMBNAILS" == true ]]; then
+  ensure_molstar_assets
+  log "thumbnails: skipped (--skip-thumbnails); the web UI will use placeholders where needed"
+else
+  ensure_thumbnail_renderer_deps
+  ensure_playwright_browser
+
+  log "thumbnails: rendering (skipping up-to-date unless forced)"
+  THUMBNAIL_ARGS=(
+    --db "$DB_PATH"
+    --progress-interval "$PROGRESS_INTERVAL"
+    --jobs "$JOBS"
+    --render-backend "$RENDER_BACKEND"
+    --axis-render-mode "$AXIS_RENDER_MODE"
+    --worker-timeout-seconds "$WORKER_TIMEOUT_SECONDS"
+  )
+  if [[ "$FORCE_THUMBNAILS" == true ]]; then
+    THUMBNAIL_ARGS+=(--force)
+  fi
+  if [[ -n "$TIMING_JSONL" ]]; then
+    THUMBNAIL_ARGS+=(--timing-jsonl "$TIMING_JSONL")
+  fi
+  run_python_module volumizer.gallery_render "${THUMBNAIL_ARGS[@]}"
 fi
-if [[ -n "$TIMING_JSONL" ]]; then
-  THUMBNAIL_ARGS+=(--timing-jsonl "$TIMING_JSONL")
-fi
-uv run python -m volumizer.gallery_render "${THUMBNAIL_ARGS[@]}"
 
 # --- Step 3: Serve the gallery ---
 log "server: starting at http://$HOST:$PORT"
-uv run python -m volumizer.web.app --db "$DB_PATH" --host "$HOST" --port "$PORT"
+run_python_module volumizer.web.app --db "$DB_PATH" --host "$HOST" --port "$PORT"

@@ -1,0 +1,49 @@
+name: Gallery CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gallery-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Python dependencies
+        run: uv sync --python 3.11 --group test --group web
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npm run gallery:install-browser
+
+      - name: Launcher help smoke tests
+        run: |
+          ./gallery --help
+          bash scripts/bootstrap_linux.sh --help
+
+      - name: Run gallery-focused tests
+        run: |
+          uv run --python 3.11 pytest -q \
+            tests/test_gallery_render.py \
+            tests/test_gallery_web.py
