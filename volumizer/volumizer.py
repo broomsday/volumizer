@@ -40,7 +40,7 @@ def _timed_call(
 
 def annotate_structure_volumes(
     structure: bts.AtomArray,
-    min_voxels: Optional[int] = 2,
+    min_voxels: Optional[int] = 4,
     min_volume: Optional[float] = None,
     stage_timings: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, bts.AtomArray]:

@@ -1,6 +1,7 @@
 import pytest
 from pathlib import Path
 import tempfile
+import inspect
 
 import pandas as pd
 
@@ -16,6 +17,11 @@ GENERAL_TEST_CIF = TEST_PDB_DIR / "4jpn.cif"
 GENERAL_TEST_MMTF = TEST_PDB_DIR / "4jpn.mmtf"
 GENERAL_TEST_DF = TEST_DF_DIR / "4jpn.json"
 ASSEMBLY_TEST_CIF = TEST_PDB_DIR / "4jpp.cif"
+
+
+def test_annotate_structure_volumes_defaults_min_voxels_to_four():
+    signature = inspect.signature(volumizer.annotate_structure_volumes)
+    assert signature.parameters["min_voxels"].default == 4
 
 
 @pytest.mark.parametrize(

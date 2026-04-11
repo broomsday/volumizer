@@ -54,7 +54,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "progress_jsonl": None,
         "progress_interval": 30.0,
         "resolution": 3.0,
-        "min_voxels": 2,
+        "min_voxels": 4,
         "min_volume": None,
         "include_hubs": False,
         "backend": None,
@@ -125,6 +125,13 @@ def test_main_version_flag_outputs_version(capsys):
 
     stdout = capsys.readouterr().out.strip()
     assert stdout.startswith("volumizer ")
+
+
+def test_build_parser_defaults_min_voxels_to_four():
+    args = cli.build_parser().parse_args(
+        ["analyze", "--input", "input.cif", "--output-dir", "out"]
+    )
+    assert args.min_voxels == 4
 
 
 def test_build_analysis_worker_command_include_hubs_flag():

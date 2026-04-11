@@ -226,8 +226,8 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--min-voxels",
         type=int,
-        default=2,
-        help="Minimum voxels cutoff for reporting volumes (default: 2).",
+        default=4,
+        help="Minimum voxels cutoff for reporting volumes (default: 4).",
     )
     parser.add_argument(
         "--min-volume",
