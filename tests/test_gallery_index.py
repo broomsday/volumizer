@@ -171,6 +171,67 @@ def test_build_gallery_index_from_annotation_payload_records(tmp_path: Path):
         assert alias_rows == [("4JPN", "canonical"), ("4JPP", "cluster_member")]
 
 
+def test_build_gallery_index_ignores_hub_rows(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    annotation_path = tmp_path / "hit-a.annotation.json"
+    structure_output_path = tmp_path / "hit-a.annotated.cif"
+    db_path = tmp_path / "gallery.db"
+
+    structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "hit-a",
+                "num_volumes": 2,
+                "volumes": [
+                    {
+                        "id": 0,
+                        "type": "hub",
+                        "volume": 500.0,
+                        "x": 20.0,
+                        "y": 8.0,
+                        "z": 4.0,
+                    },
+                    {
+                        "id": 1,
+                        "type": "pore",
+                        "volume": 200.0,
+                        "x": 12.0,
+                        "y": 5.0,
+                        "z": 3.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_summary(summary_path, annotation_path, structure_output_path)
+
+    result = gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="ignore-hubs",
+        replace_run=False,
+        strict=True,
+    )
+
+    assert result["indexed_volumes"] == 1
+
+    with sqlite3.connect(db_path) as connection:
+        volume_kinds = connection.execute(
+            "SELECT kind FROM volumes ORDER BY kind ASC"
+        ).fetchall()
+        aggregate_row = connection.execute(
+            """
+            SELECT num_pores, largest_pore_volume_a3, num_hubs, largest_hub_volume_a3
+            FROM structure_aggregates
+            """
+        ).fetchone()
+
+    assert volume_kinds == [("pore",)]
+    assert aggregate_row == (1, 200.0, 0, None)
+
+
 def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_path: Path):
     summary_path = tmp_path / "run.summary.json"
     annotation_path = tmp_path / "hit-a.annotation.json"

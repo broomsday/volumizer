@@ -17,7 +17,7 @@ import numpy as np
 from volumizer import pdb, rcsb, utils
 
 
-_VALID_VOLUME_KINDS = {"pore", "pocket", "cavity", "hub"}
+_INDEXABLE_VOLUME_KINDS = {"pore", "pocket", "cavity"}
 _INDEXABLE_SKIPPED_REASONS = {"resume_existing_outputs"}
 
 
@@ -179,12 +179,11 @@ def _normalize_volume_rows(
         "pore": [],
         "pocket": [],
         "cavity": [],
-        "hub": [],
     }
 
     for raw_row in volume_records:
         kind = str(raw_row.get("type", "")).strip().lower()
-        if kind not in _VALID_VOLUME_KINDS:
+        if kind not in _INDEXABLE_VOLUME_KINDS:
             continue
 
         volume_value = _safe_float(raw_row.get("volume"))
@@ -814,7 +813,7 @@ def build_gallery_index(
                 pore_agg = _kind_aggregates("pore")
                 pocket_agg = _kind_aggregates("pocket")
                 cavity_agg = _kind_aggregates("cavity")
-                hub_agg = _kind_aggregates("hub")
+                hub_agg = (0, None, None, None, None, None, None)
 
                 connection.execute(
                     """

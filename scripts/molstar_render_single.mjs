@@ -395,8 +395,8 @@ async function loadStructureIntoViewer(page, structureData) {
             0x228B22, 0x6B6B6B, 0x006400, 0xB5B5B5,
             0x4CAF50, 0x959595, 0x66BB6A, 0x7A7A7A,
           ];
-          const volumeIds = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
-          const notVolumeExpr = volumeIds
+          const nonProteinCompIds = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
+          const notVolumeExpr = nonProteinCompIds
             .map((id) => `(= atom.label_comp_id ${id})`)
             .join(' ');
           const polymer = await plugin.builders.structure.tryCreateComponent(
@@ -433,7 +433,6 @@ async function loadStructureIntoViewer(page, structureData) {
           }
 
           const volumeTypes = [
-            { id: 'HUB', color: 0xCC3333, label: 'Hubs' },
             { id: 'POR', color: 0xDD8833, label: 'Pores' },
             { id: 'POK', color: 0x3366CC, label: 'Pockets' },
             { id: 'CAV', color: 0xCC33CC, label: 'Cavities' },

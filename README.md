@@ -2,7 +2,10 @@
 - `cavities`: Volumes within a protein that do not make any contacts with bulk solvent. Useful for e.g. carrying cargo.
 - `pockets`: Volumes on the protein surface that make a single contact with bulk solvent.  Useful for e.g. ligand binding or catalysis.
 - `pores`: Volumes connecting two bulk solvent surfaces.  Useful for e.g. filtering solutes.
-- `hubs`: Volumes connecting more than two bulk solvent surfaces.  Useful for e.g. containing a small reaction volume.
+
+The core classifier also identifies `hubs` (volumes connecting more than two
+bulk-solvent surfaces), but CLI-written annotation outputs omit hubs by default.
+Pass `--include-hubs` to restore hub emission in CLI JSON/CIF outputs.
 
 # Example Identified Volume
 
@@ -163,6 +166,12 @@ Deterministically shard a large cluster run across workers (example: shard 1 of 
 volumizer cluster --cluster-identity 30 --output-dir out --num-shards 4 --shard-index 1
 ```
 
+Include hubs in CLI-written annotation outputs:
+
+```bash
+volumizer analyze --input my_structure.cif --output-dir out --include-hubs
+```
+
 Inspect metadata cache entries:
 
 ```bash
@@ -196,10 +205,11 @@ Cluster filtering defaults:
 - Analyze runs can replay any manifest with `--manifest <path>` (entries support `pdb_id` and/or `input_path`)
 - Analyze runs can also replay structures from a prior `run.summary.json` using `--from-summary <path> --only failed|skipped|planned|all`
 - Any run can emit a failed-entry manifest via `--failures-manifest <path>` for direct retry with `analyze --manifest <path>`
+- CLI-written annotation outputs omit hubs by default; pass `--include-hubs` to include them
 
 CLI outputs:
-- `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms
-- `<label>.annotation.json`: web-friendly volume data payload
+- `<label>.annotated.cif`: cleaned input plus volume pseudo-atoms (hubs omitted by default)
+- `<label>.annotation.json`: web-friendly volume data payload (hubs omitted by default)
 - `run.summary.json`: run configuration and per-structure status
 - `<path from --failures-manifest>` (optional): replayable manifest containing failed structure inputs
 
@@ -340,6 +350,9 @@ version of the input PDB showing where these volumes are (which can be visualize
 Annotations are given as a pandas data frame saved as a .json file.  The annotation lists all hydrated volumes ordered by
 total volume, giving the type of volume, and dimensions.
 
+For CLI-written outputs, hub rows are omitted by default unless `--include-hubs`
+is passed. The underlying library classifier still recognizes hubs.
+
 ### PDB File
 The input PDB file will be annotated by adding `atoms` to represent the hydrated volumes.  The ATOM entries
 contain several points of information about the volume from which they come:
@@ -349,7 +362,7 @@ Type of volume: the residue name encodes the type of volume in 3-letter code
 - `CAV` for `cavity`
 - `POK` for `pocket`
 - `POR` for `pore`
-- `HUB` for `hub`
+- `HUB` for `hub` when hub emission is enabled
 
 Surface of the hydrated volume that interacts with bulk solvent: this is indicated by a B-factor of 50.0, whereas
 the remainder of the volume (that does not interact with the bulk solvent) has a value of 0.0.

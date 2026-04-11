@@ -290,8 +290,8 @@ def test_gallery_web_static_search_serializes_form_fields_generically():
     assert 'name="pocket_length_max"' in index_html
     assert 'name="cavity_volume_max"' in index_html
     assert 'name="cavity_length_max"' in index_html
-    assert 'name="hub_volume_max"' in index_html
-    assert 'name="hub_length_max"' in index_html
+    assert 'name="hub_volume_max"' not in index_html
+    assert 'name="hub_length_max"' not in index_html
     assert '<option value="">None</option>' in index_html
     assert 'name="seq_unique_chains_max" value="3"' not in index_html
     assert 'name="frac_coil_max" value="0.6"' not in index_html
@@ -301,10 +301,52 @@ def test_gallery_web_static_search_serializes_form_fields_generically():
     assert '<input type="checkbox" data-metric="num_chains" checked /> Chains' in index_html
     assert '<input type="checkbox" data-metric="num_residues" checked /> Residues' in index_html
     assert '<input type="checkbox" data-metric="num_sequence_unique_chains" checked /> Unique chains' in index_html
+    assert '<input type="checkbox" data-metric="num_hubs"' not in index_html
     assert '<input type="checkbox" data-metric="frac_coil" checked /> Coil' not in index_html
     assert 'href="/assets/molstar.css"' in index_html
     assert 'src="/assets/molstar.js"' in index_html
     assert "unpkg.com/molstar" not in index_html
+
+
+def test_gallery_web_detail_omits_hub_rows_from_existing_db(tmp_path: Path):
+    db_path, _, structure_ids = _build_web_fixture(tmp_path)
+    structure_id = structure_ids["hit-a"]
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO volumes (
+                structure_id,
+                kind,
+                rank_in_kind,
+                volume_a3,
+                length_a,
+                min_diameter_a,
+                max_diameter_a,
+                centroid_x,
+                centroid_y,
+                centroid_z,
+                cross_section_circularity,
+                cross_section_uniformity
+            ) VALUES (?, 'hub', 1, 900.0, 30.0, 5.0, 8.0, NULL, NULL, NULL, 0.40, 0.60)
+            """,
+            (structure_id,),
+        )
+        connection.execute(
+            """
+            UPDATE structure_aggregates
+            SET num_hubs = 1, largest_hub_volume_a3 = 900.0
+            WHERE structure_id = ?
+            """,
+            (structure_id,),
+        )
+        connection.commit()
+
+    client = TestClient(create_app(db_path))
+    detail_response = client.get(f"/api/hits/{structure_id}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert all(volume["kind"] != "hub" for volume in detail_payload["volumes"])
 
 
 def test_gallery_web_static_filter_presets_restore_active_selection():

@@ -38,6 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-non-protein", action="store_true")
     parser.add_argument("--backend", default=None)
     parser.add_argument("--max-residues", type=int, default=None)
+    parser.add_argument("--include-hubs", action="store_true")
     return parser
 
 
@@ -62,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
             overwrite=bool(args.overwrite),
             assembly_policy=str(args.assembly_policy),
             max_residues=args.max_residues,
+            include_hubs=bool(args.include_hubs),
         )
     except PostAssemblyResidueLimitExceeded as error:
         json.dump(

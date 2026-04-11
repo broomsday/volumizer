@@ -35,19 +35,12 @@ _SORT_COLUMN_MAP = {
     "largest_cavity_length": "a.largest_cavity_length_a",
     "largest_cavity_min_diameter": "a.largest_cavity_min_diameter_a",
     "largest_cavity_max_diameter": "a.largest_cavity_max_diameter_a",
-    "num_hubs": "a.num_hubs",
-    "largest_hub_volume": "a.largest_hub_volume_a3",
-    "largest_hub_length": "a.largest_hub_length_a",
-    "largest_hub_min_diameter": "a.largest_hub_min_diameter_a",
-    "largest_hub_max_diameter": "a.largest_hub_max_diameter_a",
     "largest_pore_circularity": "a.largest_pore_circularity",
     "largest_pore_uniformity": "a.largest_pore_uniformity",
     "largest_pocket_circularity": "a.largest_pocket_circularity",
     "largest_pocket_uniformity": "a.largest_pocket_uniformity",
     "largest_cavity_circularity": "a.largest_cavity_circularity",
     "largest_cavity_uniformity": "a.largest_cavity_uniformity",
-    "largest_hub_circularity": "a.largest_hub_circularity",
-    "largest_hub_uniformity": "a.largest_hub_uniformity",
 }
 _DEFAULT_SORT_BY = "largest_pore_volume"
 _DEFAULT_SORT_DIR = "desc"
@@ -277,20 +270,6 @@ def query_gallery_index(
     )
     _append_range_filter(where_clauses, params, "a.num_cavities", num_cavities_min, num_cavities_max)
 
-    _append_range_filter(
-        where_clauses, params, "a.largest_hub_volume_a3", hub_volume_min, hub_volume_max,
-    )
-    _append_range_filter(
-        where_clauses, params, "a.largest_hub_length_a", hub_length_min, hub_length_max,
-    )
-    _append_range_filter(
-        where_clauses, params, "a.largest_hub_min_diameter_a", hub_dmin_min, hub_dmin_max,
-    )
-    _append_range_filter(
-        where_clauses, params, "a.largest_hub_max_diameter_a", hub_dmax_min, hub_dmax_max,
-    )
-    _append_range_filter(where_clauses, params, "a.num_hubs", num_hubs_min, num_hubs_max)
-
     _append_range_filter(where_clauses, params, "s.num_chains", chains_min, chains_max)
     _append_range_filter(where_clauses, params, "s.num_residues", residues_min, residues_max)
     _append_range_filter(
@@ -310,8 +289,6 @@ def query_gallery_index(
     _append_range_filter(where_clauses, params, "a.largest_pocket_uniformity", pocket_uniformity_min, pocket_uniformity_max)
     _append_range_filter(where_clauses, params, "a.largest_cavity_circularity", cavity_circularity_min, cavity_circularity_max)
     _append_range_filter(where_clauses, params, "a.largest_cavity_uniformity", cavity_uniformity_min, cavity_uniformity_max)
-    _append_range_filter(where_clauses, params, "a.largest_hub_circularity", hub_circularity_min, hub_circularity_max)
-    _append_range_filter(where_clauses, params, "a.largest_hub_uniformity", hub_uniformity_min, hub_uniformity_max)
 
     where_sql = " AND ".join(where_clauses)
     sort_sql = _SORT_COLUMN_MAP[normalized_sort_by]
@@ -340,12 +317,9 @@ def query_gallery_index(
         "a.largest_pocket_min_diameter_a, a.largest_pocket_max_diameter_a, "
         "a.num_cavities, a.largest_cavity_volume_a3, a.largest_cavity_length_a, "
         "a.largest_cavity_min_diameter_a, a.largest_cavity_max_diameter_a, "
-        "a.num_hubs, a.largest_hub_volume_a3, a.largest_hub_length_a, "
-        "a.largest_hub_min_diameter_a, a.largest_hub_max_diameter_a, "
         "a.largest_pore_circularity, a.largest_pore_uniformity, "
         "a.largest_pocket_circularity, a.largest_pocket_uniformity, "
         "a.largest_cavity_circularity, a.largest_cavity_uniformity, "
-        "a.largest_hub_circularity, a.largest_hub_uniformity, "
         "r.x_png_path, r.y_png_path, r.z_png_path, r.render_style_hash, r.render_status "
         f"{base_from_sql} "
         f"{order_sql} "
@@ -395,16 +369,6 @@ def query_gallery_index(
             "cavity_dmax_max": cavity_dmax_max,
             "num_cavities_min": num_cavities_min,
             "num_cavities_max": num_cavities_max,
-            "hub_volume_min": hub_volume_min,
-            "hub_volume_max": hub_volume_max,
-            "hub_length_min": hub_length_min,
-            "hub_length_max": hub_length_max,
-            "hub_dmin_min": hub_dmin_min,
-            "hub_dmin_max": hub_dmin_max,
-            "hub_dmax_min": hub_dmax_min,
-            "hub_dmax_max": hub_dmax_max,
-            "num_hubs_min": num_hubs_min,
-            "num_hubs_max": num_hubs_max,
             "chains_min": chains_min,
             "chains_max": chains_max,
             "residues_min": residues_min,
@@ -429,10 +393,6 @@ def query_gallery_index(
             "cavity_circularity_max": cavity_circularity_max,
             "cavity_uniformity_min": cavity_uniformity_min,
             "cavity_uniformity_max": cavity_uniformity_max,
-            "hub_circularity_min": hub_circularity_min,
-            "hub_circularity_max": hub_circularity_max,
-            "hub_uniformity_min": hub_uniformity_min,
-            "hub_uniformity_max": hub_uniformity_max,
         },
         "sort_by": normalized_sort_by,
         "sort_dir": normalized_sort_dir,
@@ -494,17 +454,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--num-cavities-min", type=int, default=None)
     parser.add_argument("--num-cavities-max", type=int, default=None)
 
-    parser.add_argument("--hub-volume-min", type=float, default=None)
-    parser.add_argument("--hub-volume-max", type=float, default=None)
-    parser.add_argument("--hub-length-min", type=float, default=None)
-    parser.add_argument("--hub-length-max", type=float, default=None)
-    parser.add_argument("--hub-dmin-min", type=float, default=None)
-    parser.add_argument("--hub-dmin-max", type=float, default=None)
-    parser.add_argument("--hub-dmax-min", type=float, default=None)
-    parser.add_argument("--hub-dmax-max", type=float, default=None)
-    parser.add_argument("--num-hubs-min", type=int, default=None)
-    parser.add_argument("--num-hubs-max", type=int, default=None)
-
     parser.add_argument("--chains-min", type=int, default=None)
     parser.add_argument("--chains-max", type=int, default=None)
     parser.add_argument("--residues-min", type=int, default=None)
@@ -531,11 +480,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cavity-circularity-max", type=float, default=None)
     parser.add_argument("--cavity-uniformity-min", type=float, default=None)
     parser.add_argument("--cavity-uniformity-max", type=float, default=None)
-    parser.add_argument("--hub-circularity-min", type=float, default=None)
-    parser.add_argument("--hub-circularity-max", type=float, default=None)
-    parser.add_argument("--hub-uniformity-min", type=float, default=None)
-    parser.add_argument("--hub-uniformity-max", type=float, default=None)
-
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--offset", type=int, default=0)
     parser.add_argument(
@@ -594,16 +538,6 @@ def main(argv: list[str] | None = None) -> int:
         cavity_dmax_max=args.cavity_dmax_max,
         num_cavities_min=args.num_cavities_min,
         num_cavities_max=args.num_cavities_max,
-        hub_volume_min=args.hub_volume_min,
-        hub_volume_max=args.hub_volume_max,
-        hub_length_min=args.hub_length_min,
-        hub_length_max=args.hub_length_max,
-        hub_dmin_min=args.hub_dmin_min,
-        hub_dmin_max=args.hub_dmin_max,
-        hub_dmax_min=args.hub_dmax_min,
-        hub_dmax_max=args.hub_dmax_max,
-        num_hubs_min=args.num_hubs_min,
-        num_hubs_max=args.num_hubs_max,
         chains_min=args.chains_min,
         chains_max=args.chains_max,
         residues_min=args.residues_min,
@@ -628,10 +562,6 @@ def main(argv: list[str] | None = None) -> int:
         cavity_circularity_max=args.cavity_circularity_max,
         cavity_uniformity_min=args.cavity_uniformity_min,
         cavity_uniformity_max=args.cavity_uniformity_max,
-        hub_circularity_min=args.hub_circularity_min,
-        hub_circularity_max=args.hub_circularity_max,
-        hub_uniformity_min=args.hub_uniformity_min,
-        hub_uniformity_max=args.hub_uniformity_max,
         limit=args.limit,
         offset=args.offset,
         sort_by=args.sort_by,

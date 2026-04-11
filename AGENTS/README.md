@@ -17,6 +17,12 @@ volumes. The main reported classes are:
 
 Small buried connected solvent groups are tracked as `occluded`.
 
+Current CLI behavior:
+
+- hub classification still exists in the core pipeline
+- CLI-written annotation JSON/CIF outputs omit hubs by default
+- `--include-hubs` restores hub emission for CLI outputs
+
 Typical inputs:
 
 - local `.pdb`, `.cif`, `.mmtf`
@@ -156,7 +162,8 @@ Primary analysis outputs:
 
 - annotated structure:
   - pseudo-atoms encode detected volume voxels
-  - residue names encode type (`HUB`, `POR`, `POK`, `CAV`, `OCC`)
+  - residue names encode type (`POR`, `POK`, `CAV`, `OCC`)
+  - `HUB` is only written when CLI hub emission is enabled
 - annotation records:
   - per-type counts
   - per-volume sizes

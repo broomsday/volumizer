@@ -26,13 +26,6 @@ const CARD_METRICS = [
   { key: 'largest_cavity_max_diameter_a', label: 'Cavity d-max', format: 'float1' },
   { key: 'largest_cavity_circularity', label: 'Cavity circ.', format: 'float2' },
   { key: 'largest_cavity_uniformity', label: 'Cavity unif.', format: 'float2' },
-  { key: 'num_hubs', label: 'Hubs', format: 'int' },
-  { key: 'largest_hub_volume_a3', label: 'Hub vol.', format: 'float0' },
-  { key: 'largest_hub_length_a', label: 'Hub len.', format: 'float1' },
-  { key: 'largest_hub_min_diameter_a', label: 'Hub d-min', format: 'float1' },
-  { key: 'largest_hub_max_diameter_a', label: 'Hub d-max', format: 'float1' },
-  { key: 'largest_hub_circularity', label: 'Hub circ.', format: 'float2' },
-  { key: 'largest_hub_uniformity', label: 'Hub unif.', format: 'float2' },
 ];
 
 const FILTER_PRESETS_KEY = 'volumizer_filter_presets';
@@ -92,14 +85,14 @@ const BUILTIN_DISPLAY_PRESETS = Object.freeze({
   ]),
 });
 
+const NON_PROTEIN_COMP_IDS = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
 const VOLUME_COLORS = {
-  HUB: 0xCC3333,  // red
   POR: 0xDD8833,  // orange
   POK: 0x3366CC,  // blue
   CAV: 0xCC33CC,  // magenta
 };
 
-const VOLUME_LABELS = { HUB: 'Hubs', POR: 'Pores', POK: 'Pockets', CAV: 'Cavities' };
+const VOLUME_LABELS = { POR: 'Pores', POK: 'Pockets', CAV: 'Cavities' };
 
 const PROTEIN_PALETTE = [
   0x2E8B57, 0x808080, 0x3CB371, 0xA0A0A0,
@@ -418,7 +411,6 @@ function renderDetail(detail, viewerData) {
     buildDetailMetric('Pores', prettyNumber(detail.num_pores, 0)),
     buildDetailMetric('Pockets', prettyNumber(detail.num_pockets, 0)),
     buildDetailMetric('Cavities', prettyNumber(detail.num_cavities, 0)),
-    buildDetailMetric('Hubs', prettyNumber(detail.num_hubs, 0)),
     buildDetailMetric('Chains', prettyNumber(detail.num_chains, 0)),
     buildDetailMetric('Residues', prettyNumber(detail.num_residues, 0)),
     buildDetailMetric('Unique chains', prettyNumber(detail.num_sequence_unique_chains, 0)),
@@ -432,7 +424,9 @@ function renderDetail(detail, viewerData) {
   );
 
   elements.detailVolumes.innerHTML = '';
-  const sortedVolumes = [...detail.volumes].sort((a, b) => (b.volume_a3 ?? 0) - (a.volume_a3 ?? 0));
+  const sortedVolumes = [...detail.volumes]
+    .filter((volume) => String(volume.kind || '').toLowerCase() !== 'hub')
+    .sort((a, b) => (b.volume_a3 ?? 0) - (a.volume_a3 ?? 0));
   for (const volume of sortedVolumes) {
     const row = document.createElement('tr');
     row.innerHTML = [
@@ -510,8 +504,7 @@ async function applyVolumeStyle(viewer) {
     // built-in 'polymer' preset, because Mol* cannot infer polymer
     // status without _entity_poly / _struct_asym tables (which biotite
     // does not write).
-    const volumeIds = Object.keys(VOLUME_COLORS).concat(['OCC']);
-    const notVolumeExpr = volumeIds
+    const notVolumeExpr = NON_PROTEIN_COMP_IDS
       .map(id => `(= atom.label_comp_id ${id})`)
       .join(' ');
     const polymer = await plugin.builders.structure.tryCreateComponent(

@@ -104,19 +104,12 @@ def get_hit_detail(db_path: Path, structure_id: int) -> dict[str, Any] | None:
                 a.largest_cavity_length_a,
                 a.largest_cavity_min_diameter_a,
                 a.largest_cavity_max_diameter_a,
-                a.num_hubs,
-                a.largest_hub_volume_a3,
-                a.largest_hub_length_a,
-                a.largest_hub_min_diameter_a,
-                a.largest_hub_max_diameter_a,
                 a.largest_pore_circularity,
                 a.largest_pore_uniformity,
                 a.largest_pocket_circularity,
                 a.largest_pocket_uniformity,
                 a.largest_cavity_circularity,
                 a.largest_cavity_uniformity,
-                a.largest_hub_circularity,
-                a.largest_hub_uniformity,
                 r.x_png_path,
                 r.y_png_path,
                 r.z_png_path,
@@ -152,6 +145,7 @@ def get_hit_detail(db_path: Path, structure_id: int) -> dict[str, Any] | None:
                 cross_section_uniformity
             FROM volumes
             WHERE structure_id = ?
+              AND kind != 'hub'
             ORDER BY kind ASC, rank_in_kind ASC
             """,
             (int(structure_id),),

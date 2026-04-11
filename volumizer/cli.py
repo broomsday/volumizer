@@ -236,6 +236,14 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         help="Optional minimum volume cutoff for reporting.",
     )
     parser.add_argument(
+        "--include-hubs",
+        action="store_true",
+        help=(
+            "Include hub volumes in written annotation JSON/CIF outputs. "
+            "Default omits hubs."
+        ),
+    )
+    parser.add_argument(
         "--backend",
         choices=sorted(VALID_BACKENDS),
         default=None,
@@ -2972,6 +2980,30 @@ def _build_annotation_payload(
     return payload
 
 
+def _filter_annotation_dataframe_for_output(annotation_df, include_hubs: bool):
+    if include_hubs or "type" not in annotation_df.columns:
+        return annotation_df
+
+    keep_mask = annotation_df["type"].astype(str).str.lower() != "hub"
+    if bool(keep_mask.all()):
+        return annotation_df
+    return annotation_df.loc[keep_mask].reset_index(drop=True)
+
+
+def _filter_annotation_structure_for_output(annotation_structure, include_hubs: bool):
+    if include_hubs or not hasattr(annotation_structure, "res_name"):
+        return annotation_structure
+
+    keep_indices = [
+        index
+        for index, res_name in enumerate(annotation_structure.res_name)
+        if str(res_name) != "HUB"
+    ]
+    if len(keep_indices) == len(annotation_structure):
+        return annotation_structure
+    return annotation_structure[keep_indices]
+
+
 def _infer_pdb_id_for_result(source_label: str, input_path: Path) -> str | None:
     for candidate in (source_label, input_path.stem):
         try:
@@ -2990,6 +3022,7 @@ def analyze_structure_file(
     overwrite: bool,
     assembly_policy: str = DEFAULT_ASSEMBLY_POLICY,
     max_residues: int | None = None,
+    include_hubs: bool = False,
 ) -> dict:
     """
     Run volumizer on one structure file and write outputs.
@@ -3036,8 +3069,16 @@ def analyze_structure_file(
         min_voxels=min_voxels,
         min_volume=min_volume,
     )
+    output_annotation_df = _filter_annotation_dataframe_for_output(
+        annotation_df,
+        include_hubs=include_hubs,
+    )
+    output_annotation_structure = _filter_annotation_structure_for_output(
+        annotation_structure,
+        include_hubs=include_hubs,
+    )
 
-    combined_structure = prepared_structure + annotation_structure
+    combined_structure = prepared_structure + output_annotation_structure
     try:
         pdb.save_structure(combined_structure, structure_output_path)
 
@@ -3045,7 +3086,7 @@ def analyze_structure_file(
             source_label,
             input_path,
             structure_output_path,
-            annotation_df,
+            output_annotation_df,
             prepared_structure=prepared_structure,
         )
         annotation_output_path.write_text(
@@ -3090,6 +3131,7 @@ def _invoke_analysis_callable(
     overwrite: bool,
     assembly_policy: str,
     max_residues: int | None = None,
+    include_hubs: bool = False,
 ) -> dict:
     kwargs = {
         "source_label": source_label,
@@ -3102,6 +3144,8 @@ def _invoke_analysis_callable(
     }
     if max_residues is not None and _callable_accepts_keyword(fn, "max_residues"):
         kwargs["max_residues"] = int(max_residues)
+    if _callable_accepts_keyword(fn, "include_hubs"):
+        kwargs["include_hubs"] = bool(include_hubs)
     return fn(**kwargs)
 
 
@@ -3126,6 +3170,7 @@ def _build_analysis_worker_command(
     keep_non_protein: bool,
     backend: str | None,
     max_residues: int | None = None,
+    include_hubs: bool = False,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -3154,6 +3199,8 @@ def _build_analysis_worker_command(
         command.extend(["--backend", backend])
     if max_residues is not None:
         command.extend(["--max-residues", str(int(max_residues))])
+    if include_hubs:
+        command.append("--include-hubs")
     return command
 
 
@@ -3244,6 +3291,7 @@ def _run_isolated_analysis_worker(
     backend: str | None,
     max_residues: int | None = None,
     worker_timeout_seconds: float | None = None,
+    include_hubs: bool = False,
 ) -> dict:
     env = _build_analysis_worker_env()
     backend_attempts: list[str | None] = [backend]
@@ -3268,6 +3316,7 @@ def _run_isolated_analysis_worker(
                     keep_non_protein=keep_non_protein,
                     backend=attempt_backend,
                     max_residues=max_residues,
+                    include_hubs=include_hubs,
                 ),
                 capture_output=True,
                 text=True,
@@ -3444,6 +3493,7 @@ def _analyze_structures(
                         backend=active_backend,
                         max_residues=runtime_max_residues,
                         worker_timeout_seconds=worker_timeout_seconds,
+                        include_hubs=bool(args.include_hubs),
                     )
                 else:
                     result = _invoke_analysis_callable(
@@ -3460,6 +3510,7 @@ def _analyze_structures(
                         ),
                         assembly_policy=str(args.assembly_policy),
                         max_residues=runtime_max_residues,
+                        include_hubs=bool(args.include_hubs),
                     )
                 tracker.mark_result(
                     _enrich_structure_entry(
@@ -3580,6 +3631,7 @@ def _analyze_structures(
                         "backend": active_backend,
                         "max_residues": runtime_max_residues,
                         "worker_timeout_seconds": worker_timeout_seconds,
+                        "include_hubs": bool(args.include_hubs),
                     }
                     if use_isolated_workers
                     else {
@@ -3596,6 +3648,7 @@ def _analyze_structures(
                         ),
                         "assembly_policy": str(args.assembly_policy),
                         "max_residues": runtime_max_residues,
+                        "include_hubs": bool(args.include_hubs),
                     }
                 ),
             ): (index, source_label, input_path)
@@ -3910,6 +3963,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
                 else (args.backend if args.backend is not None else _requested_backend_label())
             ),
             "keep_non_protein": args.keep_non_protein,
+            "include_hubs": args.include_hubs,
             "jobs": args.jobs,
             "analysis_workers": analysis_workers,
             "timeout": args.timeout,

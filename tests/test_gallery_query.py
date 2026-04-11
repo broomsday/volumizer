@@ -385,6 +385,13 @@ def test_query_gallery_index_validates_sort_inputs(tmp_path: Path):
             sort_by="unknown-column",
         )
 
+    with pytest.raises(ValueError, match="Unsupported sort_by"):
+        gallery_query.query_gallery_index(
+            db_path=db_path,
+            run_id=run_id,
+            sort_by="largest_hub_volume",
+        )
+
     with pytest.raises(ValueError, match="sort_dir"):
         gallery_query.query_gallery_index(
             db_path=db_path,

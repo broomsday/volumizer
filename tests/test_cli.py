@@ -12,6 +12,20 @@ from volumizer.paths import TEST_DIR
 TEST_PDB = TEST_DIR / "pdbs" / "cavity.pdb"
 
 
+class _DummyOutputStructure:
+    def __init__(self, res_name: list[str]):
+        self.res_name = list(res_name)
+
+    def __len__(self) -> int:
+        return len(self.res_name)
+
+    def __getitem__(self, indices):
+        return _DummyOutputStructure([self.res_name[index] for index in indices])
+
+    def __add__(self, other):
+        return _DummyOutputStructure([*self.res_name, *other.res_name])
+
+
 def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
     defaults = {
         "command": "analyze",
@@ -42,6 +56,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "resolution": 3.0,
         "min_voxels": 2,
         "min_volume": None,
+        "include_hubs": False,
         "backend": None,
         "assembly_policy": "biological",
         "keep_non_protein": False,
@@ -110,6 +125,40 @@ def test_main_version_flag_outputs_version(capsys):
 
     stdout = capsys.readouterr().out.strip()
     assert stdout.startswith("volumizer ")
+
+
+def test_build_analysis_worker_command_include_hubs_flag():
+    command = cli._build_analysis_worker_command(
+        source_label="sample",
+        input_path=Path("input.cif"),
+        output_dir=Path("out"),
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+        resolution=3.0,
+        keep_non_protein=False,
+        backend=None,
+        max_residues=None,
+        include_hubs=False,
+    )
+    assert "--include-hubs" not in command
+
+    include_hubs_command = cli._build_analysis_worker_command(
+        source_label="sample",
+        input_path=Path("input.cif"),
+        output_dir=Path("out"),
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+        resolution=3.0,
+        keep_non_protein=False,
+        backend=None,
+        max_residues=None,
+        include_hubs=True,
+    )
+    assert "--include-hubs" in include_hubs_command
 
 
 def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
@@ -814,6 +863,129 @@ def test_analyze_structure_file_writes_cif_and_json(tmp_path: Path):
     assert payload["num_volumes"] == len(payload["volumes"])
     assert payload["num_volumes"] >= 0
     assert isinstance(payload["volumes"], list)
+
+
+def test_analyze_structure_file_excludes_hubs_from_written_outputs_by_default(
+    monkeypatch,
+    tmp_path: Path,
+):
+    input_path = tmp_path / "sample.cif"
+    input_path.write_text("dummy", encoding="utf-8")
+    saved_structure = {}
+
+    def _save_structure(structure, output_path):
+        saved_structure["res_name"] = list(structure.res_name)
+        Path(output_path).write_text("filtered-structure", encoding="utf-8")
+
+    dummy_pdb = SimpleNamespace(
+        load_structure=lambda input_path, assembly_policy="biological": "input",
+        save_structure=_save_structure,
+        compute_sse_fractions=lambda prepared_structure: {
+            "frac_alpha": 0.1,
+            "frac_beta": 0.2,
+            "frac_coil": 0.7,
+        },
+    )
+    dummy_volumizer = SimpleNamespace(
+        prepare_pdb_structure=lambda structure: _DummyOutputStructure(["PRO"]),
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+            pd.DataFrame(
+                [
+                    {"id": 0, "type": "hub", "volume": 50.0},
+                    {"id": 1, "type": "pore", "volume": 12.0},
+                ]
+            ),
+            _DummyOutputStructure(["HUB", "POR"]),
+        ),
+    )
+    dummy_utils = SimpleNamespace(
+        get_active_backend=lambda: "native",
+        VOXEL_SIZE=3.0,
+    )
+
+    monkeypatch.setattr(cli, "_pdb_module", lambda: dummy_pdb)
+    monkeypatch.setattr(cli, "_volumizer_module", lambda: dummy_volumizer)
+    monkeypatch.setattr(cli, "_utils_module", lambda: dummy_utils)
+
+    result = cli.analyze_structure_file(
+        source_label="sample",
+        input_path=input_path,
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+    )
+
+    payload = json.loads((tmp_path / "sample.annotation.json").read_text(encoding="utf-8"))
+    assert result["num_volumes"] == 1
+    assert result["largest_type"] == "pore"
+    assert payload["num_volumes"] == 1
+    assert payload["largest_type"] == "pore"
+    assert [volume["type"] for volume in payload["volumes"]] == ["pore"]
+    assert saved_structure["res_name"] == ["PRO", "POR"]
+
+
+def test_analyze_structure_file_include_hubs_preserves_written_outputs(
+    monkeypatch,
+    tmp_path: Path,
+):
+    input_path = tmp_path / "sample.cif"
+    input_path.write_text("dummy", encoding="utf-8")
+    saved_structure = {}
+
+    def _save_structure(structure, output_path):
+        saved_structure["res_name"] = list(structure.res_name)
+        Path(output_path).write_text("filtered-structure", encoding="utf-8")
+
+    dummy_pdb = SimpleNamespace(
+        load_structure=lambda input_path, assembly_policy="biological": "input",
+        save_structure=_save_structure,
+        compute_sse_fractions=lambda prepared_structure: {
+            "frac_alpha": 0.1,
+            "frac_beta": 0.2,
+            "frac_coil": 0.7,
+        },
+    )
+    dummy_volumizer = SimpleNamespace(
+        prepare_pdb_structure=lambda structure: _DummyOutputStructure(["PRO"]),
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+            pd.DataFrame(
+                [
+                    {"id": 0, "type": "hub", "volume": 50.0},
+                    {"id": 1, "type": "pore", "volume": 12.0},
+                ]
+            ),
+            _DummyOutputStructure(["HUB", "POR"]),
+        ),
+    )
+    dummy_utils = SimpleNamespace(
+        get_active_backend=lambda: "native",
+        VOXEL_SIZE=3.0,
+    )
+
+    monkeypatch.setattr(cli, "_pdb_module", lambda: dummy_pdb)
+    monkeypatch.setattr(cli, "_volumizer_module", lambda: dummy_volumizer)
+    monkeypatch.setattr(cli, "_utils_module", lambda: dummy_utils)
+
+    result = cli.analyze_structure_file(
+        source_label="sample",
+        input_path=input_path,
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+        include_hubs=True,
+    )
+
+    payload = json.loads((tmp_path / "sample.annotation.json").read_text(encoding="utf-8"))
+    assert result["num_volumes"] == 2
+    assert result["largest_type"] == "hub"
+    assert payload["num_volumes"] == 2
+    assert payload["largest_type"] == "hub"
+    assert [volume["type"] for volume in payload["volumes"]] == ["hub", "pore"]
+    assert saved_structure["res_name"] == ["PRO", "HUB", "POR"]
 
 
 def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_path: Path):
