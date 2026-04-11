@@ -11,6 +11,9 @@ use std::time::Instant;
 
 const NATIVE_CONTRACT_VERSION: u32 = 1;
 const OCCLUDED_DIMENSION_LIMIT: i32 = 4;
+const DIRECT_SURFACE_DIRECTION_PORE_RATIO: f64 = 0.7;
+const DIRECT_SURFACE_DIRECTION_HUB_RATIO: f64 = 0.4;
+const MIN_DIRECTIONAL_SURFACE_VOXELS: usize = 24;
 
 #[pyfunction]
 fn contract_version() -> u32 {
@@ -252,49 +255,6 @@ fn bfs_component_with_lookup(
     component_indices
 }
 
-fn bfs_component_from_subset_with_lookup(
-    buried_voxels: &[[i32; 3]],
-    coordinate_to_index: &HashMap<[i32; 3], i32>,
-    searchable_indices: &HashSet<i32>,
-) -> Vec<i32> {
-    if searchable_indices.is_empty() {
-        return Vec::new();
-    }
-
-    let start_index = *searchable_indices.iter().min().unwrap();
-    let mut remaining_indices = searchable_indices.clone();
-    remaining_indices.remove(&start_index);
-
-    let mut queue: VecDeque<i32> = VecDeque::new();
-    queue.push_back(start_index);
-
-    let mut component_indices: Vec<i32> = vec![start_index];
-
-    while let Some(current_index) = queue.pop_front() {
-        let current_voxel = buried_voxels[current_index as usize];
-        let neighbor_candidates = [
-            [current_voxel[0] - 1, current_voxel[1], current_voxel[2]],
-            [current_voxel[0] + 1, current_voxel[1], current_voxel[2]],
-            [current_voxel[0], current_voxel[1] - 1, current_voxel[2]],
-            [current_voxel[0], current_voxel[1] + 1, current_voxel[2]],
-            [current_voxel[0], current_voxel[1], current_voxel[2] - 1],
-            [current_voxel[0], current_voxel[1], current_voxel[2] + 1],
-        ];
-
-        for neighbor_voxel in neighbor_candidates.iter() {
-            if let Some(neighbor_index) = coordinate_to_index.get(neighbor_voxel) {
-                if remaining_indices.remove(neighbor_index) {
-                    queue.push_back(*neighbor_index);
-                    component_indices.push(*neighbor_index);
-                }
-            }
-        }
-    }
-
-    component_indices.sort_unstable();
-    component_indices
-}
-
 fn has_neighbor_in_set(voxel: [i32; 3], coordinate_set: &HashSet<[i32; 3]>) -> bool {
     coordinate_set.contains(&[voxel[0] - 1, voxel[1], voxel[2]])
         || coordinate_set.contains(&[voxel[0] + 1, voxel[1], voxel[2]])
@@ -313,10 +273,118 @@ fn is_edge_voxel(voxel: [i32; 3], grid_dimensions: [i32; 3]) -> bool {
         || voxel[2] == grid_dimensions[2] - 1
 }
 
+fn direct_surface_component_sizes_26(
+    direct_surface_indices: &HashSet<i32>,
+    buried_voxels: &[[i32; 3]],
+) -> Vec<usize> {
+    if direct_surface_indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut coordinate_to_index: HashMap<[i32; 3], i32> =
+        HashMap::with_capacity(direct_surface_indices.len().saturating_mul(2));
+    for surface_index in direct_surface_indices.iter().copied() {
+        coordinate_to_index.insert(buried_voxels[surface_index as usize], surface_index);
+    }
+
+    let mut remaining_surface_indices: HashSet<i32> = direct_surface_indices.clone();
+    let mut component_sizes: Vec<usize> = Vec::new();
+
+    while let Some(start_index) = remaining_surface_indices.iter().next().copied() {
+        remaining_surface_indices.remove(&start_index);
+        let mut stack = vec![start_index];
+        let mut component_size: usize = 1;
+
+        while let Some(current_index) = stack.pop() {
+            let [x, y, z] = buried_voxels[current_index as usize];
+            for delta_x in -1..=1 {
+                for delta_y in -1..=1 {
+                    for delta_z in -1..=1 {
+                        if delta_x == 0 && delta_y == 0 && delta_z == 0 {
+                            continue;
+                        }
+
+                        let neighbor_coord = [x + delta_x, y + delta_y, z + delta_z];
+                        let Some(&neighbor_index) = coordinate_to_index.get(&neighbor_coord) else {
+                            continue;
+                        };
+                        if !remaining_surface_indices.remove(&neighbor_index) {
+                            continue;
+                        }
+
+                        component_size += 1;
+                        stack.push(neighbor_index);
+                    }
+                }
+            }
+        }
+
+        component_sizes.push(component_size);
+    }
+
+    component_sizes.sort_unstable_by(|a, b| b.cmp(a));
+    component_sizes
+}
+
+fn direct_surface_direction_bucket_counts(
+    query_indices: &HashSet<i32>,
+    direct_surface_indices: &HashSet<i32>,
+    buried_voxels: &[[i32; 3]],
+) -> [usize; 6] {
+    let mut bucket_counts = [0_usize; 6];
+    if query_indices.is_empty() || direct_surface_indices.is_empty() {
+        return bucket_counts;
+    }
+
+    let mut center = [0.0_f64; 3];
+    let query_count = query_indices.len() as f64;
+    for query_index in query_indices.iter().copied() {
+        let voxel = buried_voxels[query_index as usize];
+        center[0] += voxel[0] as f64;
+        center[1] += voxel[1] as f64;
+        center[2] += voxel[2] as f64;
+    }
+    center[0] /= query_count;
+    center[1] /= query_count;
+    center[2] /= query_count;
+
+    for surface_index in direct_surface_indices.iter().copied() {
+        let voxel = buried_voxels[surface_index as usize];
+        let delta_x = (voxel[0] as f64) - center[0];
+        let delta_y = (voxel[1] as f64) - center[1];
+        let delta_z = (voxel[2] as f64) - center[2];
+
+        let abs_x = delta_x.abs();
+        let abs_y = delta_y.abs();
+        let abs_z = delta_z.abs();
+
+        let bucket_index = if abs_x >= abs_y && abs_x >= abs_z {
+            if delta_x >= 0.0 {
+                1
+            } else {
+                0
+            }
+        } else if abs_y >= abs_x && abs_y >= abs_z {
+            if delta_y >= 0.0 {
+                3
+            } else {
+                2
+            }
+        } else if delta_z >= 0.0 {
+            5
+        } else {
+            4
+        };
+        bucket_counts[bucket_index] += 1;
+    }
+
+    bucket_counts
+}
+
 fn get_agglomerated_type(
     query_indices: &HashSet<i32>,
     buried_voxels: &[[i32; 3]],
-    buried_coordinate_to_index: &HashMap<[i32; 3], i32>,
+    _buried_coordinate_to_index: &HashMap<[i32; 3], i32>,
     exposed_coordinate_set: &HashSet<[i32; 3]>,
     grid_dimensions: [i32; 3],
 ) -> (Vec<i32>, i8) {
@@ -358,37 +426,41 @@ fn get_agglomerated_type(
         .copied()
         .collect();
     sorted_surface_indices.sort_unstable();
+    let direct_surface_component_sizes =
+        direct_surface_component_sizes_26(&direct_surface_indices, buried_voxels);
+    if direct_surface_component_sizes.len() >= 3 {
+        return (sorted_surface_indices, 4);
+    }
+    if direct_surface_component_sizes.len() == 2 {
+        return (sorted_surface_indices, 3);
+    }
+    if direct_surface_indices.len() < MIN_DIRECTIONAL_SURFACE_VOXELS {
+        return (sorted_surface_indices, 2);
+    }
 
-    let mut remaining_surface_indices: HashSet<i32> =
-        sorted_surface_indices.iter().copied().collect();
-
-    let first_surface = bfs_component_from_subset_with_lookup(
+    let mut direction_bucket_counts = direct_surface_direction_bucket_counts(
+        query_indices,
+        &direct_surface_indices,
         buried_voxels,
-        buried_coordinate_to_index,
-        &remaining_surface_indices,
-    );
+    )
+    .to_vec();
+    direction_bucket_counts.sort_unstable_by(|a, b| b.cmp(a));
 
-    if first_surface.len() < remaining_surface_indices.len() {
-        for index in first_surface {
-            remaining_surface_indices.remove(&index);
-        }
+    let largest_direction_count = direction_bucket_counts[0] as f64;
+    let second_direction_count = direction_bucket_counts[1] as f64;
+    let third_direction_count = direction_bucket_counts[2] as f64;
 
-        let second_surface = bfs_component_from_subset_with_lookup(
-            buried_voxels,
-            buried_coordinate_to_index,
-            &remaining_surface_indices,
-        );
-
-        if second_surface.len() < remaining_surface_indices.len() {
-            // hub
-            return (sorted_surface_indices, 4);
-        }
-
-        // pore
+    if largest_direction_count > 0.0
+        && third_direction_count >= largest_direction_count * DIRECT_SURFACE_DIRECTION_HUB_RATIO
+    {
+        return (sorted_surface_indices, 4);
+    }
+    if largest_direction_count > 0.0
+        && second_direction_count >= largest_direction_count * DIRECT_SURFACE_DIRECTION_PORE_RATIO
+    {
         return (sorted_surface_indices, 3);
     }
 
-    // pocket
     (sorted_surface_indices, 2)
 }
 #[pyfunction]

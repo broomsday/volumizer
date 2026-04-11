@@ -9,6 +9,7 @@ from volumizer.paths import TEST_DIR
 
 TEST_PDB_DIR = TEST_DIR / "pdbs"
 TEST_DF_DIR = TEST_DIR / "dfs"
+RCSB70_RUN_DIR = Path("data/runs/rcsb70/downloads")
 
 GENERAL_TEST_PDB = TEST_PDB_DIR / "4jpn.pdb"
 GENERAL_TEST_CIF = TEST_PDB_DIR / "4jpn.cif"
@@ -61,6 +62,51 @@ def test_volume_annotations(
     assert (annotation_df.iloc[0].type == largest_type) and (
         annotation_df.iloc[0].volume == largest_volume
     )
+
+
+@pytest.mark.parametrize(
+    "pdb_file, expected_volume, expected_type",
+    [
+        (
+            RCSB70_RUN_DIR / "5J3V.cif",
+            19008.0,
+            "pore",
+        ),
+        (
+            RCSB70_RUN_DIR / "9LJ9.cif",
+            18117.0,
+            "hub",
+        ),
+    ],
+)
+def test_reported_surface_regressions(
+    pdb_file: Path,
+    expected_volume: float,
+    expected_type: str,
+):
+    utils.set_resolution(3.0)
+
+    pdb_structure = pdb.load_structure(pdb_file)
+    prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
+    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
+
+    matching_rows = annotation_df[
+        (annotation_df["type"] == expected_type)
+        & (annotation_df["volume"] == expected_volume)
+    ]
+    assert len(matching_rows) >= 1
+
+
+def test_9lj9_promotes_both_symmetric_large_volumes_to_hubs():
+    utils.set_resolution(3.0)
+
+    pdb_structure = pdb.load_structure(RCSB70_RUN_DIR / "9LJ9.cif")
+    prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
+    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
+
+    hub_volumes = set(annotation_df.loc[annotation_df["type"] == "hub", "volume"].tolist())
+    assert 17091.0 in hub_volumes
+    assert 18117.0 in hub_volumes
 
 
 @pytest.mark.parametrize(
@@ -129,7 +175,8 @@ def test_volumize_pdb_and_save(
     actual_annotated_pdb = pdb.load_structure(
         temp_pdb_path,
     )
-    assert expected_annotated_pdb == actual_annotated_pdb
+    if not (expected_annotated_pdb == actual_annotated_pdb):
+        raise AssertionError("Annotated PDB fixture mismatch")
 
     expected_annotation_df = pd.read_json(out_annotation_df)
     actual_annotation_df = pd.read_json(temp_df_path)

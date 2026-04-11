@@ -14,7 +14,13 @@ from pyntcloud import PyntCloud
 from pyntcloud.structures.voxelgrid import VoxelGrid
 
 from volumizer import utils, native_backend
-from volumizer.constants import OCCLUDED_DIMENSION_LIMIT, MIN_NUM_VOXELS
+from volumizer.constants import (
+    OCCLUDED_DIMENSION_LIMIT,
+    MIN_NUM_VOXELS,
+    DIRECT_SURFACE_DIRECTION_PORE_RATIO,
+    DIRECT_SURFACE_DIRECTION_HUB_RATIO,
+    MIN_DIRECTIONAL_SURFACE_VOXELS,
+)
 from volumizer.types import VoxelGroup
 from volumizer.paths import C_CODE_DIR
 
@@ -31,6 +37,14 @@ NATIVE_COMPONENT_TYPE_CODE_MAP = {
     3: "pore",
     4: "hub",
 }
+
+SURFACE_26_NEIGHBOR_OFFSETS = tuple(
+    (delta_x, delta_y, delta_z)
+    for delta_x in (-1, 0, 1)
+    for delta_y in (-1, 0, 1)
+    for delta_z in (-1, 0, 1)
+    if not (delta_x == 0 and delta_y == 0 and delta_z == 0)
+)
 
 
 def _accumulate_stage_timing(
@@ -826,6 +840,104 @@ def is_edge_voxel(voxel: np.ndarray, voxel_grid_dimensions: np.ndarray) -> bool:
     return False
 
 
+def _get_surface_components_26(
+    surface_indices: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+) -> list[set[int]]:
+    """
+    Group direct surface voxels using 26-neighbor connectivity.
+
+    This smooths surface discretization without expanding the surface inward.
+    """
+    if len(surface_indices) == 0:
+        return []
+
+    coordinate_to_index = {
+        (
+            int(buried_voxels[0][surface_index]),
+            int(buried_voxels[1][surface_index]),
+            int(buried_voxels[2][surface_index]),
+        ): surface_index
+        for surface_index in surface_indices
+    }
+    remaining_surface_indices = set(surface_indices)
+    surface_components: list[set[int]] = []
+
+    while remaining_surface_indices:
+        start_index = remaining_surface_indices.pop()
+        queue_indices = [start_index]
+        component_indices = {start_index}
+
+        while queue_indices:
+            current_index = queue_indices.pop()
+            current_voxel = get_single_voxel(buried_voxels, current_index)
+
+            for delta_x, delta_y, delta_z in SURFACE_26_NEIGHBOR_OFFSETS:
+                neighbor_index = coordinate_to_index.get(
+                    (
+                        int(current_voxel[0]) + delta_x,
+                        int(current_voxel[1]) + delta_y,
+                        int(current_voxel[2]) + delta_z,
+                    )
+                )
+                if (
+                    neighbor_index is None
+                    or neighbor_index not in remaining_surface_indices
+                ):
+                    continue
+
+                remaining_surface_indices.remove(neighbor_index)
+                component_indices.add(neighbor_index)
+                queue_indices.append(neighbor_index)
+
+        surface_components.append(component_indices)
+
+    return sorted(surface_components, key=len, reverse=True)
+
+
+def _get_surface_direction_bucket_counts(
+    query_indices: set[int],
+    surface_indices: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+) -> list[int]:
+    """
+    Count dominant signed-axis directions for direct surface voxels.
+
+    A single connected surface can still wrap around multiple solvent-facing
+    directions; this catches hub-like wrapped surfaces that are topologically
+    connected on the buried side.
+    """
+    if len(query_indices) == 0 or len(surface_indices) == 0:
+        return [0, 0, 0, 0, 0, 0]
+
+    query_index_list = list(query_indices)
+    center = np.array(
+        [
+            np.mean([buried_voxels[0][index] for index in query_index_list]),
+            np.mean([buried_voxels[1][index] for index in query_index_list]),
+            np.mean([buried_voxels[2][index] for index in query_index_list]),
+        ],
+        dtype=np.float64,
+    )
+
+    direction_bucket_counts = [0, 0, 0, 0, 0, 0]
+    for surface_index in surface_indices:
+        surface_voxel = np.array(
+            [
+                buried_voxels[0][surface_index],
+                buried_voxels[1][surface_index],
+                buried_voxels[2][surface_index],
+            ],
+            dtype=np.float64,
+        )
+        delta = surface_voxel - center
+        dominant_axis = int(np.argmax(np.abs(delta)))
+        bucket_index = dominant_axis * 2 + int(delta[dominant_axis] >= 0)
+        direction_bucket_counts[bucket_index] += 1
+
+    return direction_bucket_counts
+
+
 def get_agglomerated_type(
     query_indices: set[int],
     buried_voxels: tuple[np.ndarray, ...],
@@ -834,12 +946,13 @@ def get_agglomerated_type(
     backend: str | None = None,
 ) -> tuple[set[int], str]:
     """
-    Find "surface" voxels, being buried voxel in direct contact with an exposed voxel. Four possibilites:
+    Find "surface" voxels, being buried voxel in direct contact with an exposed voxel.
 
-    a) there are no "surface" voxels -> this is a cavity
-    b) all "surface" voxels can be agglomerated (BFS) into a single group -> this is a pocket
-    c) the "surface" voxels can be agglomerated (BFS) into exactly two groups -> this is a pore
-    d) the "surface" voxels cannot be agglomerated (BFS) into less than 3 groups -> this is a hub
+    Direct solvent-contact voxels are grouped with 26-neighbor connectivity to
+    smooth discretization on the surface itself without growing inward through
+    the buried volume. If the direct surface still forms a single connected
+    patch, fall back to a directional spread heuristic to distinguish a wrapped
+    hub-like surface from a single-mouth pocket.
     """
     direct_surface_indices = set()
     for query_index in query_indices:
@@ -874,25 +987,42 @@ def get_agglomerated_type(
     # NOTE: we have to union the direct and neighbor surfaces, otherwise small discritization
     #   on the surface would look like a distinct surface
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
-    single_surface_indices = breadth_first_search(
-        buried_voxels, surface_indices, backend=backend
+    direct_surface_components = _get_surface_components_26(
+        direct_surface_indices, buried_voxels
     )
-    if len(single_surface_indices) < len(surface_indices):
-        # run the agglomeration one more time on what's left
-        remaining_surface_indices = surface_indices - single_surface_indices
-        single_surface_indices = breadth_first_search(
-            buried_voxels, remaining_surface_indices, backend=backend
-        )
+    if len(direct_surface_components) >= 3:
+        return surface_indices, "hub"
+    if len(direct_surface_components) == 2:
+        return surface_indices, "pore"
+    if len(direct_surface_indices) < MIN_DIRECTIONAL_SURFACE_VOXELS:
+        return surface_indices, "pocket"
 
-        # if there are stil indices left, there were more than 2 surfaces, hence a hub
-        if len(single_surface_indices) < len(remaining_surface_indices):
-            return direct_surface_indices.union(neighbor_surface_indices), "hub"
+    direction_bucket_counts = sorted(
+        _get_surface_direction_bucket_counts(
+            query_indices,
+            direct_surface_indices,
+            buried_voxels,
+        ),
+        reverse=True,
+    )
+    largest_direction_count = direction_bucket_counts[0]
+    second_direction_count = direction_bucket_counts[1]
+    third_direction_count = direction_bucket_counts[2]
 
-        # othewise, exactly 2 and a pore
-        return direct_surface_indices.union(neighbor_surface_indices), "pore"
+    if (
+        largest_direction_count > 0
+        and third_direction_count
+        >= largest_direction_count * DIRECT_SURFACE_DIRECTION_HUB_RATIO
+    ):
+        return surface_indices, "hub"
+    if (
+        largest_direction_count > 0
+        and second_direction_count
+        >= largest_direction_count * DIRECT_SURFACE_DIRECTION_PORE_RATIO
+    ):
+        return surface_indices, "pore"
 
-    # if the first BFS went to completion and consumed all surfaces, there was only a single surface, hence pocket
-    return direct_surface_indices.union(neighbor_surface_indices), "pocket"
+    return surface_indices, "pocket"
 
 
 def _get_voxel_group_center_from_indices(
@@ -1445,5 +1575,3 @@ def get_pores_pockets_cavities_occluded(
         )
 
     return hubs, pores, pockets, cavities, occluded
-
-
