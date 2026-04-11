@@ -308,7 +308,10 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
     write_group.add_argument(
         "--reannotate",
         action="store_true",
-        help="Re-run annotation on existing downloads without re-downloading.",
+        help=(
+            "Re-run analysis from existing local input files, overwriting "
+            "annotated outputs without refreshing existing downloads."
+        ),
     )
     write_group.add_argument(
         "--resume",
