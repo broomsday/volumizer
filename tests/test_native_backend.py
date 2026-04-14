@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -47,6 +48,52 @@ def test_forced_native_backend_raises_when_missing(monkeypatch):
     )
 
     with pytest.raises(RuntimeError):
+        native_backend.get_native_module()
+
+
+def test_auto_backend_ignores_stale_local_artifact(monkeypatch):
+    real_import = importlib.import_module
+
+    def fake_import(module_name):
+        if module_name == "volumizer_native":
+            raise ImportError("missing native module")
+        return real_import(module_name)
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "auto")
+    monkeypatch.setattr(native_backend.importlib, "import_module", fake_import)
+    monkeypatch.setattr(
+        native_backend, "_load_native_module_from_local_artifact", lambda: None
+    )
+    monkeypatch.setattr(
+        native_backend,
+        "_find_stale_local_native_artifact",
+        lambda: Path("/tmp/libvolumizer_native.so"),
+    )
+
+    assert native_backend.get_native_module() is None
+    assert native_backend.active_backend() == "python"
+
+
+def test_forced_native_backend_raises_for_stale_local_artifact(monkeypatch):
+    real_import = importlib.import_module
+
+    def fake_import(module_name):
+        if module_name == "volumizer_native":
+            raise ImportError("missing native module")
+        return real_import(module_name)
+
+    monkeypatch.setenv("VOLUMIZER_BACKEND", "native")
+    monkeypatch.setattr(native_backend.importlib, "import_module", fake_import)
+    monkeypatch.setattr(
+        native_backend, "_load_native_module_from_local_artifact", lambda: None
+    )
+    monkeypatch.setattr(
+        native_backend,
+        "_find_stale_local_native_artifact",
+        lambda: Path("/tmp/libvolumizer_native.so"),
+    )
+
+    with pytest.raises(RuntimeError, match="stale"):
         native_backend.get_native_module()
 
 

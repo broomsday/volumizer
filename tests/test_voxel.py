@@ -3,6 +3,8 @@ import numpy as np
 import ctypes
 
 from volumizer.voxel import (
+    _get_surface_components,
+    _is_wrapped_hub_direction_spread,
     get_single_voxel,
     is_neighbor_voxel,
     breadth_first_search_python,
@@ -115,6 +117,71 @@ def test_is_neighbor_voxel_c(voxel_one, voxel_two, is_neighbor):
     )
 
     assert bool(is_neighbor_c) == is_neighbor
+
+
+@pytest.mark.parametrize(
+    "sorted_direction_bucket_counts, expected",
+    [
+        ([2011, 1972, 1893, 1706, 1552, 1551], True),
+        ([95, 65, 60, 38, 23, 22], False),
+        ([107, 63, 0, 0, 0, 0], False),
+    ],
+)
+def test_is_wrapped_hub_direction_spread(
+    sorted_direction_bucket_counts, expected
+):
+    assert _is_wrapped_hub_direction_spread(sorted_direction_bucket_counts) is expected
+
+
+def test_surface_component_connectivity_modes_distinguish_6_18_and_custom18():
+    buried_voxels = (
+        np.array([0, 1, 1]),
+        np.array([0, 1, 0]),
+        np.array([0, 0, 0]),
+    )
+    direct_surface_indices = set([0, 1])
+    support_surface_indices = set([0, 1])
+
+    assert len(_get_surface_components(
+        direct_surface_indices,
+        buried_voxels,
+        support_indices=support_surface_indices,
+        connectivity_mode="6",
+    )) == 2
+    assert len(_get_surface_components(
+        direct_surface_indices,
+        buried_voxels,
+        support_indices=support_surface_indices,
+        connectivity_mode="18",
+    )) == 1
+    assert len(_get_surface_components(
+        direct_surface_indices,
+        buried_voxels,
+        support_indices=support_surface_indices,
+        connectivity_mode="26",
+    )) == 1
+    assert len(_get_surface_components(
+        direct_surface_indices,
+        buried_voxels,
+        support_indices=support_surface_indices,
+        connectivity_mode="custom18",
+    )) == 2
+
+
+def test_surface_component_custom18_uses_supported_shell_diagonal():
+    buried_voxels = (
+        np.array([0, 1, 1]),
+        np.array([0, 1, 0]),
+        np.array([0, 0, 0]),
+    )
+    direct_surface_indices = set([0, 1])
+    support_surface_indices = set([0, 1, 2])
+
+    assert len(_get_surface_components(
+        direct_surface_indices,
+        buried_voxels,
+        support_indices=support_surface_indices,
+    )) == 1
 
 
 @pytest.mark.parametrize(

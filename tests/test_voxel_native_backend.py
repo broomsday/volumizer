@@ -375,11 +375,17 @@ def test_classify_buried_components_native_maps_native_output(monkeypatch):
     class FakeNativeModule:
         @staticmethod
         def classify_buried_components(
-            buried_array, exposed_array, grid_dimensions, min_num_voxels, voxel_size
+            buried_array,
+            exposed_array,
+            grid_dimensions,
+            min_num_voxels,
+            voxel_size,
+            surface_connectivity,
         ):
             assert buried_array.shape == (2, 3)
             assert exposed_array.shape == (0, 3)
             assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            assert surface_connectivity == "custom18"
             return {
                 "component_type_codes": np.array([2], dtype=np.int32),  # pocket
                 "component_offsets": np.array([0, 2], dtype=np.int32),
@@ -412,11 +418,17 @@ def test_classify_buried_components_native_records_kernel_substage_timings(monke
     class FakeNativeModule:
         @staticmethod
         def classify_buried_components(
-            buried_array, exposed_array, grid_dimensions, min_num_voxels, voxel_size
+            buried_array,
+            exposed_array,
+            grid_dimensions,
+            min_num_voxels,
+            voxel_size,
+            surface_connectivity,
         ):
             assert buried_array.shape == (2, 3)
             assert exposed_array.shape == (0, 3)
             assert np.array_equal(grid_dimensions, np.array([4, 4, 4], dtype=np.int32))
+            assert surface_connectivity == "custom18"
             return {
                 "component_type_codes": np.array([2], dtype=np.int32),
                 "component_offsets": np.array([0, 2], dtype=np.int32),

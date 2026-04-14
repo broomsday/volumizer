@@ -21,11 +21,10 @@ VALID_BACKENDS = {BACKEND_AUTO, BACKEND_NATIVE, BACKEND_PYTHON}
 DEFAULT_BACKEND = BACKEND_AUTO
 
 
-def _load_native_module_from_local_artifact() -> ModuleType | None:
+def _get_local_native_artifact_candidates(root_dir: Path) -> list[Path]:
     """
-    Load a locally-built native module artifact (debug/release target) when present.
+    Return existing local build artifacts ordered by newest mtime first.
     """
-    root_dir = Path(__file__).resolve().parents[1]
     candidates = [
         root_dir / "native" / "target" / "debug" / "libvolumizer_native.so",
         root_dir / "native" / "target" / "release" / "libvolumizer_native.so",
@@ -35,17 +34,72 @@ def _load_native_module_from_local_artifact() -> ModuleType | None:
         root_dir / "native" / "target" / "release" / "libvolumizer_native.dylib",
     ]
 
-    for candidate in candidates:
-        if not candidate.is_file():
-            continue
-        spec = importlib.util.spec_from_file_location("volumizer_native", candidate)
-        if spec is None or spec.loader is None:
+    existing_candidates = [candidate for candidate in candidates if candidate.is_file()]
+    return sorted(
+        existing_candidates,
+        key=lambda candidate: candidate.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _get_native_source_mtime(root_dir: Path) -> float:
+    """
+    Return the newest mtime across native build inputs.
+    """
+    source_paths = [
+        root_dir / "native" / "Cargo.toml",
+        root_dir / "native" / "Cargo.lock",
+    ]
+    source_paths.extend((root_dir / "native" / "src").rglob("*.rs"))
+
+    existing_source_paths = [path for path in source_paths if path.is_file()]
+    if not existing_source_paths:
+        return 0.0
+
+    return max(path.stat().st_mtime for path in existing_source_paths)
+
+
+def _find_stale_local_native_artifact() -> Path | None:
+    """
+    Return the newest stale local artifact when one exists.
+    """
+    root_dir = Path(__file__).resolve().parents[1]
+    source_mtime = _get_native_source_mtime(root_dir)
+    for candidate in _get_local_native_artifact_candidates(root_dir):
+        if candidate.stat().st_mtime < source_mtime:
+            return candidate
+
+    return None
+
+
+def _load_native_module_from_artifact_path(candidate: Path) -> ModuleType | None:
+    """
+    Load a native module from a specific local artifact path.
+    """
+    spec = importlib.util.spec_from_file_location("volumizer_native", candidate)
+    if spec is None or spec.loader is None:
+        return None
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["volumizer_native"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_native_module_from_local_artifact() -> ModuleType | None:
+    """
+    Load a locally-built native module artifact (debug/release target) when present.
+    """
+    root_dir = Path(__file__).resolve().parents[1]
+    source_mtime = _get_native_source_mtime(root_dir)
+
+    for candidate in _get_local_native_artifact_candidates(root_dir):
+        if candidate.stat().st_mtime < source_mtime:
             continue
 
-        module = importlib.util.module_from_spec(spec)
-        sys.modules["volumizer_native"] = module
-        spec.loader.exec_module(module)
-        return module
+        module = _load_native_module_from_artifact_path(candidate)
+        if module is not None:
+            return module
 
     return None
 
@@ -74,6 +128,13 @@ def _load_native_module(mode: str) -> ModuleType | None:
         local_module = _load_native_module_from_local_artifact()
         if local_module is not None:
             return local_module
+
+        stale_artifact = _find_stale_local_native_artifact()
+        if stale_artifact is not None and mode == BACKEND_NATIVE:
+            raise RuntimeError(
+                "Native backend requested but local native artifact is stale. "
+                f"Rebuild `{stale_artifact.name}` or set VOLUMIZER_BACKEND=python."
+            ) from error
 
         if mode == BACKEND_NATIVE:
             raise RuntimeError(

@@ -22,6 +22,7 @@ import traceback
 from typing import Sequence
 
 from volumizer import rcsb
+from volumizer.constants import VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES
 
 
 DEFAULT_METADATA_STORE_DIRNAME = "entry_metadata"
@@ -248,6 +249,15 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         choices=sorted(VALID_BACKENDS),
         default=None,
         help="Override backend mode for this run (python|auto|native).",
+    )
+    parser.add_argument(
+        "--surface-connectivity",
+        choices=VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES,
+        default="custom18",
+        help=(
+            "Direct-surface smoothing connectivity for classifying "
+            "cavity/pocket/pore/hub mouths (default: custom18)."
+        ),
     )
     parser.add_argument(
         "--assembly-policy",
@@ -1962,6 +1972,7 @@ def _make_checkpoint_signature(
         "resolution": args.resolution,
         "min_voxels": args.min_voxels,
         "min_volume": args.min_volume,
+        "surface_connectivity": args.surface_connectivity,
         "backend": args.backend,
         "assembly_policy": args.assembly_policy,
         "keep_non_protein": args.keep_non_protein,
@@ -3172,6 +3183,7 @@ def _build_analysis_worker_command(
     resolution: float,
     keep_non_protein: bool,
     backend: str | None,
+    surface_connectivity: str,
     max_residues: int | None = None,
     include_hubs: bool = False,
 ) -> list[str]:
@@ -3191,6 +3203,8 @@ def _build_analysis_worker_command(
         assembly_policy,
         "--resolution",
         str(float(resolution)),
+        "--surface-connectivity",
+        surface_connectivity,
     ]
     if min_volume is not None:
         command.extend(["--min-volume", str(float(min_volume))])
@@ -3292,6 +3306,7 @@ def _run_isolated_analysis_worker(
     resolution: float,
     keep_non_protein: bool,
     backend: str | None,
+    surface_connectivity: str,
     max_residues: int | None = None,
     worker_timeout_seconds: float | None = None,
     include_hubs: bool = False,
@@ -3318,6 +3333,7 @@ def _run_isolated_analysis_worker(
                     resolution=resolution,
                     keep_non_protein=keep_non_protein,
                     backend=attempt_backend,
+                    surface_connectivity=surface_connectivity,
                     max_residues=max_residues,
                     include_hubs=include_hubs,
                 ),
@@ -3494,6 +3510,7 @@ def _analyze_structures(
                         resolution=float(args.resolution),
                         keep_non_protein=bool(args.keep_non_protein),
                         backend=active_backend,
+                        surface_connectivity=str(args.surface_connectivity),
                         max_residues=runtime_max_residues,
                         worker_timeout_seconds=worker_timeout_seconds,
                         include_hubs=bool(args.include_hubs),
@@ -3632,6 +3649,7 @@ def _analyze_structures(
                         "resolution": float(args.resolution),
                         "keep_non_protein": bool(args.keep_non_protein),
                         "backend": active_backend,
+                        "surface_connectivity": str(args.surface_connectivity),
                         "max_residues": runtime_max_residues,
                         "worker_timeout_seconds": worker_timeout_seconds,
                         "include_hubs": bool(args.include_hubs),
@@ -3913,6 +3931,9 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
 
         utils.set_resolution(float(args.resolution))
         utils.set_non_protein(bool(args.keep_non_protein))
+        utils.set_surface_component_connectivity_mode(
+            str(args.surface_connectivity)
+        )
 
         active_backend = native_backend.active_backend()
         print(f"[volumizer] backend: {active_backend}", file=sys.stderr)
@@ -3960,6 +3981,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "assembly_policy": args.assembly_policy,
             "min_voxels": args.min_voxels,
             "min_volume": args.min_volume,
+            "surface_connectivity": args.surface_connectivity,
             "backend": (
                 active_backend
                 if active_backend is not None

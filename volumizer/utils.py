@@ -16,6 +16,9 @@ from volumizer import native_backend
 
 VOXEL_SIZE = constants.VOXEL_SIZE
 VOXEL_VOLUME = VOXEL_SIZE**3
+DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE = (
+    constants.DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE
+)
 KEEP_MODELS = (
     True  # by default keep all models in case they are other biological assembly units
 )
@@ -40,6 +43,33 @@ def set_non_protein(non_protein: bool) -> None:
     """
     global KEEP_NON_PROTEIN
     KEEP_NON_PROTEIN = non_protein
+
+
+def set_surface_component_connectivity_mode(connectivity_mode: str) -> None:
+    """
+    Set the direct-surface smoothing connectivity mode.
+    """
+    global DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE
+
+    normalized_mode = connectivity_mode.strip().lower()
+    if (
+        normalized_mode
+        not in constants.VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES
+    ):
+        raise ValueError(
+            "Unsupported surface connectivity mode: "
+            f"{connectivity_mode!r}. Expected one of "
+            f"{constants.VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES}."
+        )
+
+    DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE = normalized_mode
+
+
+def get_surface_component_connectivity_mode() -> str:
+    """
+    Return the currently active direct-surface smoothing connectivity mode.
+    """
+    return DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE
 
 
 def get_volume_summary(

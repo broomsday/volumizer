@@ -14,6 +14,7 @@ const OCCLUDED_DIMENSION_LIMIT: i32 = 4;
 const DIRECT_SURFACE_DIRECTION_PORE_RATIO: f64 = 0.7;
 const DIRECT_SURFACE_DIRECTION_HUB_RATIO: f64 = 0.4;
 const MIN_DIRECTIONAL_SURFACE_VOXELS: usize = 24;
+const DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE: &str = "custom18";
 
 #[pyfunction]
 fn contract_version() -> u32 {
@@ -273,9 +274,60 @@ fn is_edge_voxel(voxel: [i32; 3], grid_dimensions: [i32; 3]) -> bool {
         || voxel[2] == grid_dimensions[2] - 1
 }
 
-fn direct_surface_component_sizes_26(
+fn surface_neighbor_offset_allowed(
+    delta_x: i32,
+    delta_y: i32,
+    delta_z: i32,
+    connectivity_mode: &str,
+) -> bool {
+    let abs_sum = delta_x.abs() + delta_y.abs() + delta_z.abs();
+    if abs_sum == 0 {
+        return false;
+    }
+
+    match connectivity_mode {
+        "6" => abs_sum == 1,
+        "18" | "custom18" => abs_sum <= 2,
+        "26" => true,
+        _ => surface_neighbor_offset_allowed(
+            delta_x,
+            delta_y,
+            delta_z,
+            DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE,
+        ),
+    }
+}
+
+fn has_custom18_diagonal_support(
+    current_voxel: [i32; 3],
+    delta_x: i32,
+    delta_y: i32,
+    delta_z: i32,
+    support_coordinate_set: &HashSet<[i32; 3]>,
+) -> bool {
+    let abs_sum = delta_x.abs() + delta_y.abs() + delta_z.abs();
+    if abs_sum != 2 {
+        return true;
+    }
+
+    let support_offsets = [[delta_x.signum(), 0, 0], [0, delta_y.signum(), 0], [0, 0, delta_z.signum()]];
+    support_offsets
+        .iter()
+        .filter(|offset| offset[0] != 0 || offset[1] != 0 || offset[2] != 0)
+        .any(|offset| {
+            support_coordinate_set.contains(&[
+                current_voxel[0] + offset[0],
+                current_voxel[1] + offset[1],
+                current_voxel[2] + offset[2],
+            ])
+        })
+}
+
+fn direct_surface_component_sizes(
     direct_surface_indices: &HashSet<i32>,
+    support_indices: &HashSet<i32>,
     buried_voxels: &[[i32; 3]],
+    connectivity_mode: &str,
 ) -> Vec<usize> {
     if direct_surface_indices.is_empty() {
         return Vec::new();
@@ -285,6 +337,11 @@ fn direct_surface_component_sizes_26(
         HashMap::with_capacity(direct_surface_indices.len().saturating_mul(2));
     for surface_index in direct_surface_indices.iter().copied() {
         coordinate_to_index.insert(buried_voxels[surface_index as usize], surface_index);
+    }
+    let mut support_coordinate_set: HashSet<[i32; 3]> =
+        HashSet::with_capacity(support_indices.len().saturating_mul(2));
+    for support_index in support_indices.iter().copied() {
+        support_coordinate_set.insert(buried_voxels[support_index as usize]);
     }
 
     let mut remaining_surface_indices: HashSet<i32> = direct_surface_indices.clone();
@@ -300,7 +357,23 @@ fn direct_surface_component_sizes_26(
             for delta_x in -1..=1 {
                 for delta_y in -1..=1 {
                     for delta_z in -1..=1 {
-                        if delta_x == 0 && delta_y == 0 && delta_z == 0 {
+                        if !surface_neighbor_offset_allowed(
+                            delta_x,
+                            delta_y,
+                            delta_z,
+                            connectivity_mode,
+                        ) {
+                            continue;
+                        }
+                        if connectivity_mode == "custom18"
+                            && !has_custom18_diagonal_support(
+                                [x, y, z],
+                                delta_x,
+                                delta_y,
+                                delta_z,
+                                &support_coordinate_set,
+                            )
+                        {
                             continue;
                         }
 
@@ -381,12 +454,25 @@ fn direct_surface_direction_bucket_counts(
     bucket_counts
 }
 
+fn has_wrapped_hub_direction_spread(sorted_direction_bucket_counts: &[usize]) -> bool {
+    if sorted_direction_bucket_counts.len() < 5 {
+        return false;
+    }
+
+    let largest_direction_count = sorted_direction_bucket_counts[0] as f64;
+    let fifth_direction_count = sorted_direction_bucket_counts[4] as f64;
+
+    largest_direction_count > 0.0
+        && fifth_direction_count >= largest_direction_count * DIRECT_SURFACE_DIRECTION_HUB_RATIO
+}
+
 fn get_agglomerated_type(
     query_indices: &HashSet<i32>,
     buried_voxels: &[[i32; 3]],
     _buried_coordinate_to_index: &HashMap<[i32; 3], i32>,
     exposed_coordinate_set: &HashSet<[i32; 3]>,
     grid_dimensions: [i32; 3],
+    connectivity_mode: &str,
 ) -> (Vec<i32>, i8) {
     let mut direct_surface_indices: HashSet<i32> = HashSet::with_capacity(query_indices.len());
     for query_index in query_indices.iter().copied() {
@@ -427,17 +513,15 @@ fn get_agglomerated_type(
         .collect();
     sorted_surface_indices.sort_unstable();
     let direct_surface_component_sizes =
-        direct_surface_component_sizes_26(&direct_surface_indices, buried_voxels);
+        direct_surface_component_sizes(
+            &direct_surface_indices,
+            &direct_surface_indices.union(&neighbor_surface_indices).copied().collect(),
+            buried_voxels,
+            connectivity_mode,
+        );
     if direct_surface_component_sizes.len() >= 3 {
         return (sorted_surface_indices, 4);
     }
-    if direct_surface_component_sizes.len() == 2 {
-        return (sorted_surface_indices, 3);
-    }
-    if direct_surface_indices.len() < MIN_DIRECTIONAL_SURFACE_VOXELS {
-        return (sorted_surface_indices, 2);
-    }
-
     let mut direction_bucket_counts = direct_surface_direction_bucket_counts(
         query_indices,
         &direct_surface_indices,
@@ -445,6 +529,15 @@ fn get_agglomerated_type(
     )
     .to_vec();
     direction_bucket_counts.sort_unstable_by(|a, b| b.cmp(a));
+    if direct_surface_component_sizes.len() == 2 {
+        if has_wrapped_hub_direction_spread(&direction_bucket_counts) {
+            return (sorted_surface_indices, 4);
+        }
+        return (sorted_surface_indices, 3);
+    }
+    if direct_surface_indices.len() < MIN_DIRECTIONAL_SURFACE_VOXELS {
+        return (sorted_surface_indices, 2);
+    }
 
     let largest_direction_count = direction_bucket_counts[0] as f64;
     let second_direction_count = direction_bucket_counts[1] as f64;
@@ -1049,6 +1142,7 @@ fn classify_buried_components(
     grid_dimensions: PyReadonlyArray1<'_, i32>,
     min_num_voxels: i32,
     _voxel_size: f32,
+    surface_connectivity: &str,
 ) -> PyResult<PyObject> {
     validate_voxel_array_shape(&buried_voxels, "buried_voxels")?;
     validate_voxel_array_shape(&exposed_voxels, "exposed_voxels")?;
@@ -1059,6 +1153,7 @@ fn classify_buried_components(
 
     let buried_view = buried_voxels.as_array();
     let exposed_view = exposed_voxels.as_array();
+    let normalized_surface_connectivity = surface_connectivity.trim().to_ascii_lowercase();
 
     let mut build_voxel_vectors_seconds = 0.0_f64;
     let mut build_coordinate_index_lookup_seconds = 0.0_f64;
@@ -1149,14 +1244,15 @@ fn classify_buried_components(
         let (surface_indices, type_code) = if component_indices.len() <= min_num_voxels as usize {
             (Vec::new(), 0_i8) // occluded
         } else {
-            get_agglomerated_type(
-                &component_index_set,
-                &buried,
-                &coordinate_to_index,
-                &exposed_coordinate_set,
-                grid_dims_array,
-            )
-        };
+                get_agglomerated_type(
+                    &component_index_set,
+                    &buried,
+                    &coordinate_to_index,
+                    &exposed_coordinate_set,
+                    grid_dims_array,
+                    &normalized_surface_connectivity,
+                )
+            };
         classify_component_type_seconds += classify_start.elapsed().as_secs_f64();
 
         let flatten_start = Instant::now();

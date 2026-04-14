@@ -58,6 +58,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "min_volume": None,
         "include_hubs": False,
         "backend": None,
+        "surface_connectivity": "custom18",
         "assembly_policy": "biological",
         "keep_non_protein": False,
         "jobs": 1,
@@ -134,6 +135,13 @@ def test_build_parser_defaults_min_voxels_to_four():
     assert args.min_voxels == 4
 
 
+def test_build_parser_defaults_surface_connectivity_to_custom18():
+    args = cli.build_parser().parse_args(
+        ["analyze", "--input", "input.cif", "--output-dir", "out"]
+    )
+    assert args.surface_connectivity == "custom18"
+
+
 def test_build_analysis_worker_command_include_hubs_flag():
     command = cli._build_analysis_worker_command(
         source_label="sample",
@@ -146,10 +154,12 @@ def test_build_analysis_worker_command_include_hubs_flag():
         resolution=3.0,
         keep_non_protein=False,
         backend=None,
+        surface_connectivity="custom18",
         max_residues=None,
         include_hubs=False,
     )
     assert "--include-hubs" not in command
+    assert command[command.index("--surface-connectivity") + 1] == "custom18"
 
     include_hubs_command = cli._build_analysis_worker_command(
         source_label="sample",
@@ -162,10 +172,14 @@ def test_build_analysis_worker_command_include_hubs_flag():
         resolution=3.0,
         keep_non_protein=False,
         backend=None,
+        surface_connectivity="18",
         max_residues=None,
         include_hubs=True,
     )
     assert "--include-hubs" in include_hubs_command
+    assert include_hubs_command[
+        include_hubs_command.index("--surface-connectivity") + 1
+    ] == "18"
 
 
 def test_resolve_input_structures_for_pdb_id(monkeypatch, tmp_path: Path):
@@ -1151,6 +1165,7 @@ def test_run_cli_cluster_native_uses_isolated_workers(
         lambda: SimpleNamespace(
             set_resolution=lambda resolution: None,
             set_non_protein=lambda keep_non_protein: None,
+            set_surface_component_connectivity_mode=lambda mode: None,
         ),
     )
     monkeypatch.setattr(cli, "analyze_structure_file", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cluster native path should use isolated workers")))
@@ -1214,6 +1229,7 @@ def test_run_cli_cluster_native_records_isolated_worker_failure(
         lambda: SimpleNamespace(
             set_resolution=lambda resolution: None,
             set_non_protein=lambda keep_non_protein: None,
+            set_surface_component_connectivity_mode=lambda mode: None,
         ),
     )
 
@@ -1276,6 +1292,7 @@ def test_run_cli_cluster_native_records_post_assembly_residue_limit_skip(
         lambda: SimpleNamespace(
             set_resolution=lambda resolution: None,
             set_non_protein=lambda keep_non_protein: None,
+            set_surface_component_connectivity_mode=lambda mode: None,
         ),
     )
 
@@ -1348,6 +1365,7 @@ def test_run_isolated_analysis_worker_reports_signal(monkeypatch, tmp_path: Path
             resolution=3.0,
             keep_non_protein=False,
             backend="native",
+            surface_connectivity="custom18",
         )
         assert False, "expected RuntimeError"
     except RuntimeError as error:
@@ -1404,6 +1422,7 @@ def test_run_isolated_analysis_worker_retries_native_signal_then_succeeds(
         resolution=3.0,
         keep_non_protein=False,
         backend="native",
+        surface_connectivity="custom18",
         max_residues=10000,
     )
 
@@ -1465,6 +1484,7 @@ def test_run_isolated_analysis_worker_retries_native_timeout_then_succeeds(
         resolution=3.0,
         keep_non_protein=False,
         backend="native",
+        surface_connectivity="18",
         max_residues=10000,
         worker_timeout_seconds=12.5,
     )
@@ -1520,6 +1540,7 @@ def test_run_isolated_analysis_worker_falls_back_to_python_backend(
         resolution=3.0,
         keep_non_protein=False,
         backend="native",
+        surface_connectivity="custom18",
         max_residues=10000,
     )
 
@@ -1568,6 +1589,7 @@ def test_run_isolated_analysis_worker_reports_post_assembly_residue_limit(
             resolution=3.0,
             keep_non_protein=False,
             backend="native",
+            surface_connectivity="custom18",
             max_residues=10000,
         )
         assert False, "expected PostAssemblyResidueLimitExceeded"
@@ -2579,6 +2601,7 @@ def test_run_cli_resume_skips_cached_post_assembly_limit_status(
         lambda: SimpleNamespace(
             set_resolution=lambda resolution: None,
             set_non_protein=lambda keep_non_protein: None,
+            set_surface_component_connectivity_mode=lambda mode: None,
         ),
     )
     monkeypatch.setattr(
@@ -2664,6 +2687,7 @@ def test_run_cli_resume_ignores_cached_post_assembly_limit_when_threshold_relaxe
         lambda: SimpleNamespace(
             set_resolution=lambda resolution: None,
             set_non_protein=lambda keep_non_protein: None,
+            set_surface_component_connectivity_mode=lambda mode: None,
         ),
     )
 

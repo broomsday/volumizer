@@ -14,6 +14,7 @@ from volumizer.cli import (
     PostAssemblyResidueLimitExceeded,
     analyze_structure_file,
 )
+from volumizer.constants import VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES
 from volumizer.pdb import VALID_ASSEMBLY_POLICIES
 from volumizer import native_backend, utils
 
@@ -37,6 +38,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resolution", type=float, required=True)
     parser.add_argument("--keep-non-protein", action="store_true")
     parser.add_argument("--backend", default=None)
+    parser.add_argument(
+        "--surface-connectivity",
+        choices=VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES,
+        default=utils.get_surface_component_connectivity_mode(),
+    )
     parser.add_argument("--max-residues", type=int, default=None)
     parser.add_argument("--include-hubs", action="store_true")
     return parser
@@ -53,6 +59,9 @@ def main(argv: list[str] | None = None) -> int:
 
         utils.set_resolution(float(args.resolution))
         utils.set_non_protein(bool(args.keep_non_protein))
+        utils.set_surface_component_connectivity_mode(
+            str(args.surface_connectivity)
+        )
 
         result = analyze_structure_file(
             source_label=str(args.source_label),

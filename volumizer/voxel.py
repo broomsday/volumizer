@@ -38,6 +38,22 @@ NATIVE_COMPONENT_TYPE_CODE_MAP = {
     4: "hub",
 }
 
+SURFACE_6_NEIGHBOR_OFFSETS = tuple(
+    (delta_x, delta_y, delta_z)
+    for delta_x in (-1, 0, 1)
+    for delta_y in (-1, 0, 1)
+    for delta_z in (-1, 0, 1)
+    if abs(delta_x) + abs(delta_y) + abs(delta_z) == 1
+)
+
+SURFACE_18_NEIGHBOR_OFFSETS = tuple(
+    (delta_x, delta_y, delta_z)
+    for delta_x in (-1, 0, 1)
+    for delta_y in (-1, 0, 1)
+    for delta_z in (-1, 0, 1)
+    if 1 <= abs(delta_x) + abs(delta_y) + abs(delta_z) <= 2
+)
+
 SURFACE_26_NEIGHBOR_OFFSETS = tuple(
     (delta_x, delta_y, delta_z)
     for delta_x in (-1, 0, 1)
@@ -840,18 +856,89 @@ def is_edge_voxel(voxel: np.ndarray, voxel_grid_dimensions: np.ndarray) -> bool:
     return False
 
 
-def _get_surface_components_26(
+def _get_surface_neighbor_offsets(
+    connectivity_mode: str,
+) -> tuple[tuple[int, int, int], ...]:
+    """
+    Return neighbor offsets for a requested direct-surface connectivity mode.
+    """
+    normalized_mode = connectivity_mode.strip().lower()
+    if normalized_mode == "6":
+        return SURFACE_6_NEIGHBOR_OFFSETS
+    if normalized_mode in {"18", "custom18"}:
+        return SURFACE_18_NEIGHBOR_OFFSETS
+    if normalized_mode == "26":
+        return SURFACE_26_NEIGHBOR_OFFSETS
+
+    return _get_surface_neighbor_offsets(
+        utils.get_surface_component_connectivity_mode()
+    )
+
+
+def _has_custom18_diagonal_support(
+    current_voxel: tuple[np.int64, ...],
+    neighbor_offset: tuple[int, int, int],
+    support_coordinate_set: set[tuple[int, int, int]],
+) -> bool:
+    """
+    Return True when an 18-neighbor diagonal contact is supported by the surface shell.
+
+    For an edge-diagonal move such as `(1, 1, 0)`, at least one of the
+    intermediate ordinal support coordinates must exist in the direct-plus-neighbor
+    surface shell.
+    """
+    if abs(neighbor_offset[0]) + abs(neighbor_offset[1]) + abs(neighbor_offset[2]) != 2:
+        return True
+
+    support_offsets = [
+        (
+            int(np.sign(neighbor_offset[0])) if axis_index == 0 and neighbor_offset[0] != 0 else 0,
+            int(np.sign(neighbor_offset[1])) if axis_index == 1 and neighbor_offset[1] != 0 else 0,
+            int(np.sign(neighbor_offset[2])) if axis_index == 2 and neighbor_offset[2] != 0 else 0,
+        )
+        for axis_index in range(3)
+        if neighbor_offset[axis_index] != 0
+    ]
+
+    current_coord = (
+        int(current_voxel[0]),
+        int(current_voxel[1]),
+        int(current_voxel[2]),
+    )
+    return any(
+        (
+            current_coord[0] + support_offset[0],
+            current_coord[1] + support_offset[1],
+            current_coord[2] + support_offset[2],
+        )
+        in support_coordinate_set
+        for support_offset in support_offsets
+    )
+
+
+def _get_surface_components(
     surface_indices: set[int],
     buried_voxels: tuple[np.ndarray, ...],
+    support_indices: set[int] | None = None,
+    connectivity_mode: str | None = None,
 ) -> list[set[int]]:
     """
-    Group direct surface voxels using 26-neighbor connectivity.
+    Group direct surface voxels using configurable smoothing connectivity.
 
-    This smooths surface discretization without expanding the surface inward.
+    Modes:
+    - `6`: face-adjacent only
+    - `18`: face- and edge-adjacent
+    - `26`: face-, edge-, and corner-adjacent
+    - `custom18`: like `18`, but diagonal links require support from the
+      direct-plus-neighbor surface shell
     """
     if len(surface_indices) == 0:
         return []
 
+    if connectivity_mode is None:
+        connectivity_mode = utils.get_surface_component_connectivity_mode()
+    normalized_mode = connectivity_mode.strip().lower()
+    neighbor_offsets = _get_surface_neighbor_offsets(normalized_mode)
     coordinate_to_index = {
         (
             int(buried_voxels[0][surface_index]),
@@ -859,6 +946,16 @@ def _get_surface_components_26(
             int(buried_voxels[2][surface_index]),
         ): surface_index
         for surface_index in surface_indices
+    }
+    if support_indices is None:
+        support_indices = surface_indices
+    support_coordinate_set = {
+        (
+            int(buried_voxels[0][support_index]),
+            int(buried_voxels[1][support_index]),
+            int(buried_voxels[2][support_index]),
+        )
+        for support_index in support_indices
     }
     remaining_surface_indices = set(surface_indices)
     surface_components: list[set[int]] = []
@@ -872,7 +969,16 @@ def _get_surface_components_26(
             current_index = queue_indices.pop()
             current_voxel = get_single_voxel(buried_voxels, current_index)
 
-            for delta_x, delta_y, delta_z in SURFACE_26_NEIGHBOR_OFFSETS:
+            for delta_x, delta_y, delta_z in neighbor_offsets:
+                if (
+                    normalized_mode == "custom18"
+                    and not _has_custom18_diagonal_support(
+                        current_voxel,
+                        (delta_x, delta_y, delta_z),
+                        support_coordinate_set,
+                    )
+                ):
+                    continue
                 neighbor_index = coordinate_to_index.get(
                     (
                         int(current_voxel[0]) + delta_x,
@@ -938,6 +1044,29 @@ def _get_surface_direction_bucket_counts(
     return direction_bucket_counts
 
 
+def _is_wrapped_hub_direction_spread(
+    sorted_direction_bucket_counts: list[int],
+) -> bool:
+    """
+    Return True when direct solvent contact wraps around at least five directions.
+
+    This catches "surface shell" volumes that present as two disconnected
+    direct-contact patches because of discretization, but still surround the
+    buried volume too broadly to behave like a simple two-mouth pore.
+    """
+    if len(sorted_direction_bucket_counts) < 5:
+        return False
+
+    largest_direction_count = sorted_direction_bucket_counts[0]
+    fifth_direction_count = sorted_direction_bucket_counts[4]
+
+    return (
+        largest_direction_count > 0
+        and fifth_direction_count
+        >= largest_direction_count * DIRECT_SURFACE_DIRECTION_HUB_RATIO
+    )
+
+
 def get_agglomerated_type(
     query_indices: set[int],
     buried_voxels: tuple[np.ndarray, ...],
@@ -987,16 +1116,11 @@ def get_agglomerated_type(
     # NOTE: we have to union the direct and neighbor surfaces, otherwise small discritization
     #   on the surface would look like a distinct surface
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
-    direct_surface_components = _get_surface_components_26(
-        direct_surface_indices, buried_voxels
+    direct_surface_components = _get_surface_components(
+        direct_surface_indices,
+        buried_voxels,
+        support_indices=surface_indices,
     )
-    if len(direct_surface_components) >= 3:
-        return surface_indices, "hub"
-    if len(direct_surface_components) == 2:
-        return surface_indices, "pore"
-    if len(direct_surface_indices) < MIN_DIRECTIONAL_SURFACE_VOXELS:
-        return surface_indices, "pocket"
-
     direction_bucket_counts = sorted(
         _get_surface_direction_bucket_counts(
             query_indices,
@@ -1005,6 +1129,15 @@ def get_agglomerated_type(
         ),
         reverse=True,
     )
+    if len(direct_surface_components) >= 3:
+        return surface_indices, "hub"
+    if len(direct_surface_components) == 2:
+        if _is_wrapped_hub_direction_spread(direction_bucket_counts):
+            return surface_indices, "hub"
+        return surface_indices, "pore"
+    if len(direct_surface_indices) < MIN_DIRECTIONAL_SURFACE_VOXELS:
+        return surface_indices, "pocket"
+
     largest_direction_count = direction_bucket_counts[0]
     second_direction_count = direction_bucket_counts[1]
     third_direction_count = direction_bucket_counts[2]
@@ -1324,6 +1457,7 @@ def classify_buried_components_native(
         grid_dimensions,
         int(MIN_NUM_VOXELS),
         float(utils.VOXEL_SIZE),
+        utils.get_surface_component_connectivity_mode(),
     )
     if stage_timings is not None:
         kernel_seconds = perf_counter() - kernel_start
