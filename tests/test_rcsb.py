@@ -207,3 +207,59 @@ def test_download_structure_cif_writes_downloaded_data(monkeypatch, tmp_path: Pa
     )
     cached_path = rcsb.download_structure_cif("1ABC", tmp_path, overwrite=False)
     assert cached_path == output_path
+
+
+def test_download_structure_cif_retries_on_corruption(monkeypatch, tmp_path: Path):
+    attempts = {"count": 0}
+    good_payload = b"data_TEST\n_cell.length_a 405.92\n"
+    corrupt_payload = b"data_TEST\n_cell.length_a 405.\x1792\n"
+
+    def _fake_download_bytes(url, timeout=60.0, retries=0, retry_delay=1.0):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return corrupt_payload
+        return good_payload
+
+    monkeypatch.setattr(rcsb, "_download_bytes", _fake_download_bytes)
+    monkeypatch.setattr(rcsb.time, "sleep", lambda seconds: None)
+
+    output_path = rcsb.download_structure_cif(
+        "1abc",
+        tmp_path,
+        retry_delay=0.0,
+        corruption_retries=4,
+    )
+    assert output_path.read_bytes() == good_payload
+    assert attempts["count"] == 3
+
+
+def test_download_structure_cif_raises_on_persistent_corruption(monkeypatch, tmp_path: Path):
+    attempts = {"count": 0}
+    corrupt_payload = b"data_TEST\n_cell.length_a 405.\x1792\n"
+
+    def _fake_download_bytes(url, timeout=60.0, retries=0, retry_delay=1.0):
+        attempts["count"] += 1
+        return corrupt_payload
+
+    monkeypatch.setattr(rcsb, "_download_bytes", _fake_download_bytes)
+    monkeypatch.setattr(rcsb.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(rcsb.RCSBFetchError) as error_info:
+        rcsb.download_structure_cif(
+            "1abc",
+            tmp_path,
+            retry_delay=0.0,
+            corruption_retries=4,
+        )
+
+    assert attempts["count"] == 5
+    assert error_info.value.permanent is False
+    assert not (tmp_path / "1ABC.cif").exists()
+
+
+def test_find_cif_corruption_reason_detects_control_bytes_and_empty():
+    assert rcsb._find_cif_corruption_reason(b"") == "empty payload"
+    assert rcsb._find_cif_corruption_reason(b"data_OK\n405.92\n") is None
+    assert rcsb._find_cif_corruption_reason(b"405.\x1792") == "contains control byte 0x17"
+    # tab / newline / carriage return are fine
+    assert rcsb._find_cif_corruption_reason(b"a\tb\nc\rd") is None

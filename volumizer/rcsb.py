@@ -20,6 +20,9 @@ RCSB_ENTRY_URL_TEMPLATE = "https://data.rcsb.org/rest/v1/core/entry/{pdb_id}"
 VALID_CLUSTER_IDENTITIES = frozenset([30, 40, 50, 70, 90, 95, 100])
 TERMINAL_HTTP_STATUS_CODES = frozenset([400, 401, 403, 404])
 
+DEFAULT_CIF_CORRUPTION_RETRIES = 4
+_CIF_ALLOWED_CONTROL_BYTES = frozenset({0x09, 0x0A, 0x0D})
+
 EXPERIMENTAL_METHOD_FILTERS = {
     "xray": frozenset(["X-RAY DIFFRACTION"]),
     "em": frozenset(["ELECTRON MICROSCOPY"]),
@@ -139,6 +142,18 @@ def _download_bytes(
     )
 
 
+def _find_cif_corruption_reason(data: bytes) -> str | None:
+    """
+    Return a human-readable reason if CIF bytes look corrupt, else None.
+    """
+    if len(data) == 0:
+        return "empty payload"
+    for byte in data:
+        if byte < 0x20 and byte not in _CIF_ALLOWED_CONTROL_BYTES:
+            return f"contains control byte 0x{byte:02X}"
+    return None
+
+
 def download_structure_cif(
     pdb_id: str,
     output_dir: Path,
@@ -146,9 +161,15 @@ def download_structure_cif(
     timeout: float = 60.0,
     retries: int = 0,
     retry_delay: float = 1.0,
+    corruption_retries: int = DEFAULT_CIF_CORRUPTION_RETRIES,
 ) -> Path:
     """
     Download a structure CIF by PDB ID and return local file path.
+
+    Each downloaded payload is scanned for corruption (empty body or stray
+    control bytes). On corruption, the fetch is retried up to
+    `corruption_retries` additional times with exponential backoff. If every
+    attempt is corrupt, no file is written and `RCSBFetchError` is raised.
     """
     normalized_id = normalize_pdb_id(pdb_id)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -158,14 +179,32 @@ def download_structure_cif(
         return out_path
 
     url = RCSB_CIF_URL_TEMPLATE.format(pdb_id=normalized_id)
-    data = _download_bytes(
-        url,
-        timeout=timeout,
-        retries=retries,
-        retry_delay=retry_delay,
+    max_corruption_retries = max(0, int(corruption_retries))
+    base_delay = max(0.0, float(retry_delay))
+
+    last_reason: str | None = None
+    for attempt in range(max_corruption_retries + 1):
+        data = _download_bytes(
+            url,
+            timeout=timeout,
+            retries=retries,
+            retry_delay=retry_delay,
+        )
+        reason = _find_cif_corruption_reason(data)
+        if reason is None:
+            out_path.write_bytes(data)
+            return out_path
+
+        last_reason = reason
+        if attempt < max_corruption_retries and base_delay > 0:
+            time.sleep(base_delay * (2**attempt))
+
+    raise RCSBFetchError(
+        f"Downloaded CIF appears corrupt after "
+        f"{max_corruption_retries + 1} attempt(s) ({last_reason}): {url}",
+        url=url,
+        permanent=False,
     )
-    out_path.write_bytes(data)
-    return out_path
 
 
 def fetch_entry_metadata(
