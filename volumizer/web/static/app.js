@@ -86,13 +86,26 @@ const BUILTIN_DISPLAY_PRESETS = Object.freeze({
 });
 
 const NON_PROTEIN_COMP_IDS = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
-const VOLUME_COLORS = {
-  POR: 0xDD8833,  // orange
-  POK: 0x3366CC,  // blue
-  CAV: 0xCC33CC,  // magenta
+const VOLUME_STYLES = {
+  POR: {
+    label: 'Pores',
+    color: 0xDD8833,      // orange
+    mouthColor: 0xA85618, // dark orange
+    mouthLabel: 'Pore Mouths',
+  },
+  POK: {
+    label: 'Pockets',
+    color: 0x3366CC,      // blue
+    mouthColor: 0x1F3F80, // dark blue
+    mouthLabel: 'Pocket Mouths',
+  },
+  CAV: {
+    label: 'Cavities',
+    color: 0xCC33CC,      // magenta
+    mouthColor: 0x8A238A, // dark magenta
+    mouthLabel: 'Cavity Mouths',
+  },
 };
-
-const VOLUME_LABELS = { POR: 'Pores', POK: 'Pockets', CAV: 'Cavities' };
 
 const PROTEIN_PALETTE = [
   0x2E8B57, 0x808080, 0x3CB371, 0xA0A0A0,
@@ -100,18 +113,30 @@ const PROTEIN_PALETTE = [
   0x4CAF50, 0x959595, 0x66BB6A, 0x7A7A7A,
 ];
 
-// MolScript text expression selecting atoms by label_comp_id
-function compIdScript(compId) {
+// MolScript text expression selecting atoms by label_comp_id and optional shell flag.
+function volumeScript(compId, variant = 'all') {
+  let atomTest = '';
+  if (variant === 'core') {
+    atomTest = ' :atom-test (<= atom.B_iso_or_equiv 0)';
+  } else if (variant === 'mouth') {
+    atomTest = ' :atom-test (> atom.B_iso_or_equiv 0)';
+  }
+
+  const style = VOLUME_STYLES[compId];
+  const label = variant === 'mouth'
+    ? style?.mouthLabel || `${compId} Mouths`
+    : style?.label || compId;
+
   return {
     type: {
       name: 'script',
       params: {
         language: 'mol-script',
-        expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${compId}))`,
+        expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${compId})${atomTest})`,
       },
     },
     nullIfEmpty: true,
-    label: VOLUME_LABELS[compId] || compId,
+    label,
   };
 }
 
@@ -539,22 +564,37 @@ async function applyVolumeStyle(viewer) {
       );
     }
 
-    // Add per-type volume components with distinct colors
-    for (const [compId, color] of Object.entries(VOLUME_COLORS)) {
+    // Add per-type volume components with darker overlays for mouth shells.
+    for (const [compId, style] of Object.entries(VOLUME_STYLES)) {
+      const componentSpecs = [
+        {
+          key: `volume-${compId.toLowerCase()}-core`,
+          selection: volumeScript(compId, 'core'),
+          color: style.color,
+        },
+        {
+          key: `volume-${compId.toLowerCase()}-mouth`,
+          selection: volumeScript(compId, 'mouth'),
+          color: style.mouthColor,
+        },
+      ];
+
       try {
-        const comp = await plugin.builders.structure.tryCreateComponent(
-          structRef.cell,
-          compIdScript(compId),
-          `volume-${compId.toLowerCase()}`,
-        );
-        if (comp) {
-          await plugin.builders.structure.representation.addRepresentation(
-            comp, {
-              type: 'gaussian-surface',
-              color: 'uniform',
-              colorParams: { value: color },
-            },
+        for (const spec of componentSpecs) {
+          const comp = await plugin.builders.structure.tryCreateComponent(
+            structRef.cell,
+            spec.selection,
+            spec.key,
           );
+          if (comp) {
+            await plugin.builders.structure.representation.addRepresentation(
+              comp, {
+                type: 'gaussian-surface',
+                color: 'uniform',
+                colorParams: { value: spec.color },
+              },
+            );
+          }
         }
       } catch (err) {
         console.warn(`Failed to create ${compId} volume component:`, err);
