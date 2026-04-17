@@ -21,19 +21,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
-ALLOWED_CONTROL_BYTES = frozenset({0x09, 0x0A, 0x0D})
 CHECKPOINT_ENTRY_KINDS = ("results", "errors", "skipped", "planned")
+DEFAULT_PROGRESS_INTERVAL_SECONDS = 2.0
+
+_BAD_BYTE_PATTERN = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
-def find_first_bad_byte(data: bytes) -> int | None:
-    for byte in data:
-        if byte < 0x20 and byte not in ALLOWED_CONTROL_BYTES:
-            return byte
-    return None
+def _default_jobs() -> int:
+    return min(8, os.cpu_count() or 1)
 
 
 def inspect_cif(path: Path) -> tuple[bool, str | None]:
@@ -45,9 +48,9 @@ def inspect_cif(path: Path) -> tuple[bool, str | None]:
     if len(data) == 0:
         return True, "empty file"
 
-    bad_byte = find_first_bad_byte(data)
-    if bad_byte is not None:
-        return True, f"contains control byte 0x{bad_byte:02X}"
+    match = _BAD_BYTE_PATTERN.search(data)
+    if match is not None:
+        return True, f"contains control byte 0x{match.group()[0]:02X}"
 
     return False, None
 
@@ -130,6 +133,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Override checkpoint path (default: <output-dir>/run.checkpoint.json).",
     )
     parser.add_argument(
+        "--jobs",
+        type=int,
+        default=_default_jobs(),
+        help=(
+            "Parallel worker threads for scanning CIF files "
+            f"(default: min(8, cpu_count) = {_default_jobs()})."
+        ),
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=float,
+        default=DEFAULT_PROGRESS_INTERVAL_SECONDS,
+        help=(
+            "Seconds between progress updates during scanning "
+            f"(default: {DEFAULT_PROGRESS_INTERVAL_SECONDS}). Set <=0 to disable."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Report what would be removed without modifying files.",
@@ -140,6 +161,70 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print every scanned file, not just corrupted ones.",
     )
     return parser.parse_args(argv)
+
+
+def _emit_progress(
+    processed: int,
+    total: int,
+    corrupt_count: int,
+    start_time: float,
+) -> None:
+    elapsed = max(1e-9, time.monotonic() - start_time)
+    rate = processed / elapsed
+    percent = 100.0 * processed / total if total > 0 else 100.0
+    remaining = max(0, total - processed)
+    eta_seconds = remaining / rate if rate > 0 else 0.0
+    print(
+        f"scan progress: {processed}/{total} ({percent:.1f}%), "
+        f"corrupt={corrupt_count}, rate={rate:.1f}/s, eta={eta_seconds:.0f}s",
+        file=sys.stderr,
+    )
+
+
+def scan_downloads(
+    cif_paths: list[Path],
+    jobs: int,
+    verbose: bool,
+    progress_interval_seconds: float,
+) -> list[tuple[Path, str]]:
+    total = len(cif_paths)
+    corrupt: list[tuple[Path, str]] = []
+    start_time = time.monotonic()
+    last_emit = start_time
+    processed = 0
+    workers = max(1, int(jobs))
+
+    def _record(path: Path, is_bad: bool, reason: str | None) -> None:
+        nonlocal last_emit
+        if is_bad:
+            corrupt.append((path, reason or "unknown"))
+            print(f"corrupt: {path} ({reason})")
+        elif verbose:
+            print(f"ok: {path}")
+        if progress_interval_seconds > 0:
+            now = time.monotonic()
+            if now - last_emit >= progress_interval_seconds:
+                _emit_progress(processed, total, len(corrupt), start_time)
+                last_emit = now
+
+    if workers <= 1:
+        for path in cif_paths:
+            is_bad, reason = inspect_cif(path)
+            processed += 1
+            _record(path, is_bad, reason)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            future_to_path = {
+                executor.submit(inspect_cif, path): path for path in cif_paths
+            }
+            for future in as_completed(future_to_path):
+                path = future_to_path[future]
+                is_bad, reason = future.result()
+                processed += 1
+                _record(path, is_bad, reason)
+
+    _emit_progress(processed, total, len(corrupt), start_time)
+    return corrupt
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -162,15 +247,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     total = len(cif_paths)
-    corrupt_paths: list[tuple[Path, str]] = []
-
-    for cif_path in cif_paths:
-        is_bad, reason = inspect_cif(cif_path)
-        if is_bad:
-            corrupt_paths.append((cif_path, reason or "unknown"))
-            print(f"corrupt: {cif_path} ({reason})")
-        elif args.verbose:
-            print(f"ok: {cif_path}")
+    print(
+        f"scanning {total} cif file(s) with {args.jobs} worker thread(s)...",
+        file=sys.stderr,
+    )
+    corrupt_paths = scan_downloads(
+        cif_paths,
+        jobs=args.jobs,
+        verbose=args.verbose,
+        progress_interval_seconds=args.progress_interval,
+    )
 
     action = "would delete" if args.dry_run else "deleting"
     for cif_path, _reason in corrupt_paths:
