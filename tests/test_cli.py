@@ -46,7 +46,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "cluster_method": None,
         "cluster_allow_all_methods": False,
         "cluster_max_resolution": None,
-        "cluster_max_residues": 10000,
+        "cluster_max_residues": 20000,
         "metadata_cache": None,
         "no_metadata_cache": False,
         "checkpoint": None,
@@ -140,6 +140,13 @@ def test_build_parser_defaults_surface_connectivity_to_custom18():
         ["analyze", "--input", "input.cif", "--output-dir", "out"]
     )
     assert args.surface_connectivity == "custom18"
+
+
+def test_build_parser_defaults_cluster_max_residues_to_twenty_thousand():
+    args = cli.build_parser().parse_args(
+        ["cluster", "--cluster-identity", "30", "--output-dir", "out"]
+    )
+    assert args.cluster_max_residues == 20000
 
 
 def test_build_analysis_worker_command_include_hubs_flag():

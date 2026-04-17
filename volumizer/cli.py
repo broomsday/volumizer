@@ -36,6 +36,7 @@ BACKEND_NATIVE = "native"
 BACKEND_PYTHON = "python"
 VALID_BACKENDS = (BACKEND_AUTO, BACKEND_NATIVE, BACKEND_PYTHON)
 DEFAULT_ASSEMBLY_POLICY = "biological"
+DEFAULT_CLUSTER_MAX_RESIDUES = 20000
 VALID_ASSEMBLY_POLICIES = (
     "biological",
     "asymmetric",
@@ -452,10 +453,11 @@ def _add_cluster_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--cluster-max-residues",
         type=int,
-        default=10000,
+        default=DEFAULT_CLUSTER_MAX_RESIDUES,
         help=(
             "Max total deposited polymer residues per entry. "
-            "Entries exceeding this are skipped. (default: 10000)"
+            f"Entries exceeding this are skipped. "
+            f"(default: {DEFAULT_CLUSTER_MAX_RESIDUES})"
         ),
     )
     parser.add_argument(

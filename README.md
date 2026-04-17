@@ -192,6 +192,7 @@ Cluster filtering defaults:
 - Override with `--cluster-method` (repeatable), e.g. `--cluster-method xray --cluster-method neutron`
 - Disable method filtering with `--cluster-allow-all-methods`
 - Optional resolution gate with `--cluster-max-resolution`, e.g. `--cluster-max-resolution 3.0`
+- Residue-count gate defaults to `--cluster-max-residues 20000`
 - Parallel workers for metadata/download + analysis with `--jobs`, e.g. `--jobs 8`
 - Deterministic run partitioning with `--num-shards <N> --shard-index <K>` to split representative lists across machines/jobs (`0 <= K < N`; both flags required)
 - Retry transient network errors with `--retries` and `--retry-delay`
