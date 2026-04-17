@@ -21,6 +21,17 @@ class DummyVoxelGrid:
         self.voxel_centers = voxel_centers
 
 
+def _make_test_protein_structure() -> bts.AtomArray:
+    structure = bts.AtomArray(1)
+    structure.coord = np.array([[10.0, 0.0, 0.0]], dtype=np.float64)
+    structure.atom_name = np.array(["CA"], dtype=object)
+    structure.res_name = np.array(["ALA"], dtype=object)
+    structure.res_id = np.array([1], dtype=np.int64)
+    structure.chain_id = np.array(["A"], dtype=object)
+    structure.element = np.array(["C"], dtype=object)
+    return structure
+
+
 def _make_voxel_group(indices: set[int], surface_indices: set[int]) -> VoxelGroup:
     empty = np.array([], dtype=np.int64)
     return VoxelGroup(
@@ -50,6 +61,7 @@ def test_volume_to_structure_assigns_surface_and_metadata():
     )
 
     assert len(structure) == 2
+    assert {"atom_id", "b_factor"}.issubset(structure.get_annotation_categories())
 
     atom_ids = np.asarray(structure.atom_id, dtype=np.int64)
     b_factors = np.asarray(structure.b_factor, dtype=np.float64)
@@ -93,6 +105,7 @@ def test_volumes_to_structure_combines_voxel_groups():
     )
 
     assert len(structure) == 3
+    assert {"atom_id", "b_factor"}.issubset(structure.get_annotation_categories())
 
     expected = {
         0: ("HUB", "A", "F", "F", 1, 0.0),
@@ -112,6 +125,37 @@ def test_volumes_to_structure_combines_voxel_groups():
         assert str(structure.element[index]) == element
         assert int(structure.res_id[index]) == res_id
         assert float(structure.b_factor[index]) == b_factor
+
+
+def test_save_structure_cif_preserves_b_factor_after_concat(tmp_path: Path):
+    protein_structure = _make_test_protein_structure()
+    pdb.ensure_b_factor_annotation(protein_structure)
+
+    voxel_centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    volume_structure = pdb.volume_to_structure(
+        voxel_type="POR",
+        voxel_group_index=7,
+        voxel_indices=np.array([0, 2], dtype=np.int64),
+        surface_indices=np.array([2], dtype=np.int64),
+        voxel_grid_centers=voxel_centers,
+    )
+
+    combined_structure = protein_structure + volume_structure
+    out_path = tmp_path / "combined.annotated.cif"
+    pdb.save_structure(combined_structure, out_path)
+
+    pdbx_file = pdbx.PDBxFile.read(out_path)
+    atom_site = pdbx_file.get_category("atom_site", expect_looped=True)
+
+    assert "B_iso_or_equiv" in atom_site
+    assert atom_site["B_iso_or_equiv"].tolist() == ["0.00", "0.00", "50.00"]
 
 
 def test_load_structure_rejects_invalid_assembly_policy():

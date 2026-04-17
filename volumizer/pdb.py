@@ -35,6 +35,38 @@ _LOAD_STRUCTURE_FALLBACK_STAGE = "load_structure_fallback"
 _IDENTITY_OPERATION_EXPRESSIONS = {"1", "(1)"}
 
 
+def _set_atom_array_annotation(
+    structure: bts.AtomArray,
+    category: str,
+    values: np.ndarray,
+) -> None:
+    """
+    Register an optional Biotite annotation and clear any plain attribute shadow.
+    """
+    if category in getattr(structure, "__dict__", {}):
+        delattr(structure, category)
+    structure.set_annotation(category, np.asarray(values))
+
+
+def ensure_b_factor_annotation(
+    structure: bts.AtomArray,
+    default_value: float = 0.0,
+) -> bts.AtomArray:
+    """
+    Ensure a real ``b_factor`` annotation exists so concatenation/serialization preserves it.
+    """
+    if "b_factor" in structure.get_annotation_categories():
+        return structure
+
+    if "b_factor" in getattr(structure, "__dict__", {}):
+        values = np.asarray(getattr(structure, "b_factor"), dtype=np.float64)
+    else:
+        values = np.full(len(structure), float(default_value), dtype=np.float64)
+
+    _set_atom_array_annotation(structure, "b_factor", values)
+    return structure
+
+
 def _accumulate_stage_timing(
     stage_timings: dict[str, float] | None,
     stage_name: str,
@@ -468,6 +500,9 @@ def save_structure(structure: bts.AtomArray, output: Path | str) -> None:
     """
     Save a structure to PDB or CIF based on file suffix.
     """
+    if "b_factor" in getattr(structure, "__dict__", {}):
+        ensure_b_factor_annotation(structure)
+
     output_path = Path(output)
     suffix = output_path.suffix.lower()
 
@@ -667,8 +702,12 @@ def volume_to_structure(
     )
 
     volume_structure.coord = voxel_grid_centers[voxel_index_array]
-    volume_structure.atom_id = voxel_index_array
-    volume_structure.b_factor = np.where(is_surface, 50.0, 0.0)
+    _set_atom_array_annotation(volume_structure, "atom_id", voxel_index_array)
+    _set_atom_array_annotation(
+        volume_structure,
+        "b_factor",
+        np.where(is_surface, 50.0, 0.0),
+    )
 
     volume_structure.atom_name = np.full(num_voxels, VOXEL_TYPE_ATOM_MAP[voxel_type])
     volume_structure.res_name = np.full(num_voxels, voxel_type)
@@ -802,8 +841,8 @@ def volumes_to_structure(
 
     volume_structure = bts.AtomArray(total_voxels)
     volume_structure.coord = voxel_grid.voxel_centers[all_voxel_indices]
-    volume_structure.atom_id = all_voxel_indices
-    volume_structure.b_factor = all_b_factors
+    _set_atom_array_annotation(volume_structure, "atom_id", all_voxel_indices)
+    _set_atom_array_annotation(volume_structure, "b_factor", all_b_factors)
     volume_structure.atom_name = all_atom_names
     volume_structure.res_name = all_res_names
     volume_structure.res_id = all_res_ids
