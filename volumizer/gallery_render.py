@@ -53,6 +53,39 @@ class PlannedRenderJob:
     z_path: Path
 
 
+def _adopt_existing_render_outputs(
+    *,
+    connection: sqlite3.Connection,
+    structure_id: int,
+    x_path: Path,
+    y_path: Path,
+    z_path: Path,
+    style_hash: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE renders
+        SET x_png_path = ?,
+            y_png_path = ?,
+            z_png_path = ?,
+            render_style_hash = ?,
+            render_status = ?,
+            render_error = NULL,
+            updated_at = ?
+        WHERE structure_id = ?
+        """,
+        (
+            str(x_path),
+            str(y_path),
+            str(z_path),
+            style_hash,
+            "done",
+            datetime.now(tz=timezone.utc).isoformat(),
+            int(structure_id),
+        ),
+    )
+
+
 def _sanitize_path_token(token: str) -> str:
     sanitized = "".join(
         char if (char.isalnum() or char in {"-", "_"}) else "_" for char in token
@@ -396,6 +429,7 @@ def render_gallery_thumbnails(
     limit: int | None = None,
     include_failed: bool = False,
     force: bool = False,
+    reuse_existing_only: bool = False,
     width: int = 320,
     height: int = 240,
     node_executable: str = "node",
@@ -483,6 +517,7 @@ def render_gallery_thumbnails(
     rendered_jobs = 0
     failed_jobs = 0
     skipped_jobs = 0
+    reused_jobs = 0
     queue_scan_seconds = 0.0
     dispatch_seconds = 0.0
 
@@ -492,7 +527,7 @@ def render_gallery_thumbnails(
         planned_jobs: list[PlannedRenderJob] = []
 
         for row in rows:
-            if normalized_limit is not None and len(planned_jobs) >= normalized_limit:
+            if normalized_limit is not None and (len(planned_jobs) + reused_jobs) >= normalized_limit:
                 break
 
             job = _build_planned_job(row=row, render_root=render_root)
@@ -501,6 +536,21 @@ def render_gallery_thumbnails(
             existing_style_hash = row["render_style_hash"]
             style_mismatch = str(existing_style_hash or "") != style_hash
             outputs_exist = job.x_path.is_file() and job.y_path.is_file() and job.z_path.is_file()
+
+            if reuse_existing_only:
+                if outputs_exist:
+                    _adopt_existing_render_outputs(
+                        connection=connection,
+                        structure_id=job.structure_id,
+                        x_path=job.x_path,
+                        y_path=job.y_path,
+                        z_path=job.z_path,
+                        style_hash=style_hash,
+                    )
+                    reused_jobs += 1
+                else:
+                    skipped_jobs += 1
+                continue
 
             should_render = _should_render_row(
                 status=status,
@@ -528,6 +578,7 @@ def render_gallery_thumbnails(
                     "jobs": jobs,
                     "queue_scan_seconds": queue_scan_seconds,
                     "planned_jobs": total_jobs,
+                    "reused_jobs": reused_jobs,
                     "skipped_jobs": skipped_jobs,
                     "render_backend": render_backend,
                     "axis_render_mode": axis_render_mode,
@@ -760,6 +811,7 @@ def render_gallery_thumbnails(
         "total_jobs": total_jobs,
         "rendered_jobs": rendered_jobs,
         "failed_jobs": failed_jobs,
+        "reused_jobs": reused_jobs,
         "skipped_jobs": skipped_jobs,
         "queue_scan_seconds": queue_scan_seconds,
         "dispatch_seconds": dispatch_seconds,
@@ -796,6 +848,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--force",
         action="store_true",
         help="Ignore render status and process all matching structures.",
+    )
+    parser.add_argument(
+        "--reuse-existing-only",
+        action="store_true",
+        help=(
+            "Do not render new thumbnails. Instead, relink any complete existing "
+            "x/y/z PNG triplets already present under --render-root into the DB."
+        ),
     )
     parser.add_argument("--width", type=int, default=320, help="Thumbnail width in pixels.")
     parser.add_argument("--height", type=int, default=240, help="Thumbnail height in pixels.")
@@ -870,6 +930,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         include_failed=bool(args.include_failed),
         force=bool(args.force),
+        reuse_existing_only=bool(args.reuse_existing_only),
         width=args.width,
         height=args.height,
         jobs=args.jobs,

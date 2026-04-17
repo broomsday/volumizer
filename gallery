@@ -29,7 +29,7 @@ Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 Options:
   --force-index        Rebuild the index even if it is up to date
   --force-thumbnails   Re-render all thumbnails even if they already exist
-  --skip-thumbnails    Skip thumbnail rendering and serve the gallery with placeholders
+  --skip-thumbnails    Skip new thumbnail rendering, relink existing cached thumbnails, and serve placeholders for missing ones
   --progress-interval  Seconds between thumbnail progress updates (default: 30)
   --jobs               Parallel thumbnail render workers (default: 1)
   --render-backend     software, hardware, or auto (default: software)
@@ -271,14 +271,17 @@ if [[ "$NEED_REBUILD" == true ]]; then
   run_python_module volumizer.gallery_index \
     --summary "$SUMMARY_PATH" \
     --db "$DB_PATH" \
-    --skip-structure-metrics \
     --progress-every 500
 fi
 
 # --- Step 2: Render thumbnails (skips existing unless --force-thumbnails) ---
 if [[ "$SKIP_THUMBNAILS" == true ]]; then
   ensure_molstar_assets
-  log "thumbnails: skipped (--skip-thumbnails); the web UI will use placeholders where needed"
+  log "thumbnails: skipped (--skip-thumbnails); relinking any cached thumbnails already on disk"
+  run_python_module volumizer.gallery_render \
+    --db "$DB_PATH" \
+    --reuse-existing-only \
+    --progress-interval 0
 else
   ensure_thumbnail_renderer_deps
   ensure_playwright_browser

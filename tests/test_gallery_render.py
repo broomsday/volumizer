@@ -274,6 +274,53 @@ def test_render_gallery_thumbnails_rerenders_when_style_hash_changes(tmp_path: P
     assert calls == ["hit-a", "hit-b"]
 
 
+def test_render_gallery_thumbnails_reuses_existing_outputs_without_rendering(tmp_path: Path):
+    db_path, run_id, _ = _build_render_fixture_db(tmp_path)
+    render_root = tmp_path / "renders"
+
+    for source_label in ("hit-a", "hit-b"):
+        output_dir = render_root / run_id / source_label
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for axis in ("x", "y", "z"):
+            (output_dir / f"{axis}.png").write_bytes(f"cached-{axis}".encode("utf-8"))
+
+    result = gallery_render.render_gallery_thumbnails(
+        db_path=db_path,
+        render_root=render_root,
+        run_id=run_id,
+        reuse_existing_only=True,
+        render_fn=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("render_fn should not be called in reuse_existing_only mode")
+        ),
+    )
+
+    assert result["total_jobs"] == 0
+    assert result["rendered_jobs"] == 0
+    assert result["failed_jobs"] == 0
+    assert result["reused_jobs"] == 2
+    assert result["skipped_jobs"] == 0
+
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT s.source_label, r.render_status, r.x_png_path, r.y_png_path, r.z_png_path,
+                   r.render_style_hash, r.render_error
+            FROM renders r
+            INNER JOIN structures s ON s.structure_id = r.structure_id
+            ORDER BY s.source_label ASC
+            """
+        ).fetchall()
+
+    assert len(rows) == 2
+    for source_label, status, x_path, y_path, z_path, style_hash, render_error in rows:
+        assert source_label in {"hit-a", "hit-b"}
+        assert status == "done"
+        assert render_error is None
+        assert style_hash == result["style_hash"]
+        for raw_path in (x_path, y_path, z_path):
+            assert Path(raw_path).is_file()
+
+
 def test_render_gallery_thumbnails_handles_failed_and_missing_structures(tmp_path: Path):
     db_path, run_id, _ = _build_render_fixture_db(
         tmp_path,
