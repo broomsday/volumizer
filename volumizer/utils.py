@@ -19,6 +19,9 @@ VOXEL_VOLUME = VOXEL_SIZE**3
 DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE = (
     constants.DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE
 )
+DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS = (
+    constants.DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS
+)
 KEEP_MODELS = (
     True  # by default keep all models in case they are other biological assembly units
 )
@@ -70,6 +73,21 @@ def get_surface_component_connectivity_mode() -> str:
     Return the currently active direct-surface smoothing connectivity mode.
     """
     return DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODE
+
+
+def set_surface_mouth_merge_gap_voxels(gap_voxels: int) -> None:
+    """
+    Set the user-facing pore-mouth merge gap threshold in voxels.
+    """
+    global DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS
+    DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS = int(gap_voxels)
+
+
+def get_surface_mouth_merge_gap_voxels() -> int:
+    """
+    Return the active pore-mouth merge gap threshold in voxels.
+    """
+    return DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS
 
 
 def get_volume_summary(

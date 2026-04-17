@@ -14,7 +14,9 @@ from volumizer.cli import (
     PostAssemblyResidueLimitExceeded,
     analyze_structure_file,
 )
-from volumizer.constants import VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES
+from volumizer.constants import (
+    VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES,
+)
 from volumizer.pdb import VALID_ASSEMBLY_POLICIES
 from volumizer import native_backend, utils
 
@@ -43,6 +45,11 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES,
         default=utils.get_surface_component_connectivity_mode(),
     )
+    parser.add_argument(
+        "--merge-mouth-gap-voxels",
+        type=int,
+        default=utils.get_surface_mouth_merge_gap_voxels(),
+    )
     parser.add_argument("--max-residues", type=int, default=None)
     parser.add_argument("--include-hubs", action="store_true")
     return parser
@@ -61,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
         utils.set_non_protein(bool(args.keep_non_protein))
         utils.set_surface_component_connectivity_mode(
             str(args.surface_connectivity)
+        )
+        utils.set_surface_mouth_merge_gap_voxels(
+            int(args.merge_mouth_gap_voxels)
         )
 
         result = analyze_structure_file(

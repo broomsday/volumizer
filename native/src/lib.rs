@@ -323,12 +323,12 @@ fn has_custom18_diagonal_support(
         })
 }
 
-fn direct_surface_component_sizes(
+fn direct_surface_components(
     direct_surface_indices: &HashSet<i32>,
     support_indices: &HashSet<i32>,
     buried_voxels: &[[i32; 3]],
     connectivity_mode: &str,
-) -> Vec<usize> {
+) -> Vec<HashSet<i32>> {
     if direct_surface_indices.is_empty() {
         return Vec::new();
     }
@@ -345,12 +345,13 @@ fn direct_surface_component_sizes(
     }
 
     let mut remaining_surface_indices: HashSet<i32> = direct_surface_indices.clone();
-    let mut component_sizes: Vec<usize> = Vec::new();
+    let mut components: Vec<HashSet<i32>> = Vec::new();
 
     while let Some(start_index) = remaining_surface_indices.iter().next().copied() {
         remaining_surface_indices.remove(&start_index);
         let mut stack = vec![start_index];
-        let mut component_size: usize = 1;
+        let mut component_indices: HashSet<i32> = HashSet::new();
+        component_indices.insert(start_index);
 
         while let Some(current_index) = stack.pop() {
             let [x, y, z] = buried_voxels[current_index as usize];
@@ -385,18 +386,119 @@ fn direct_surface_component_sizes(
                             continue;
                         }
 
-                        component_size += 1;
+                        component_indices.insert(neighbor_index);
                         stack.push(neighbor_index);
                     }
                 }
             }
         }
 
-        component_sizes.push(component_size);
+        components.push(component_indices);
     }
 
-    component_sizes.sort_unstable_by(|a, b| b.cmp(a));
-    component_sizes
+    components.sort_unstable_by(|a, b| b.len().cmp(&a.len()));
+    components
+}
+
+fn expand_direct_surface_component_shell(
+    direct_surface_component: &HashSet<i32>,
+    query_coordinate_to_index: &HashMap<[i32; 3], i32>,
+    buried_voxels: &[[i32; 3]],
+) -> HashSet<i32> {
+    let mut shell_indices: HashSet<i32> = direct_surface_component.clone();
+
+    for surface_index in direct_surface_component.iter().copied() {
+        let [x, y, z] = buried_voxels[surface_index as usize];
+        let neighbor_candidates = [
+            [x - 1, y, z],
+            [x + 1, y, z],
+            [x, y - 1, z],
+            [x, y + 1, z],
+            [x, y, z - 1],
+            [x, y, z + 1],
+        ];
+        for neighbor_voxel in neighbor_candidates.iter() {
+            if let Some(&neighbor_index) = query_coordinate_to_index.get(neighbor_voxel) {
+                shell_indices.insert(neighbor_index);
+            }
+        }
+    }
+
+    shell_indices
+}
+
+fn get_direct_surface_shell_gap(
+    query_indices: &HashSet<i32>,
+    direct_surface_components: &[HashSet<i32>],
+    buried_voxels: &[[i32; 3]],
+    max_gap_voxels: i32,
+) -> Option<i32> {
+    if max_gap_voxels < 0 || direct_surface_components.len() != 2 {
+        return None;
+    }
+
+    let mut query_coordinate_to_index: HashMap<[i32; 3], i32> =
+        HashMap::with_capacity(query_indices.len().saturating_mul(2));
+    for query_index in query_indices.iter().copied() {
+        query_coordinate_to_index.insert(buried_voxels[query_index as usize], query_index);
+    }
+
+    let first_shell_indices = expand_direct_surface_component_shell(
+        &direct_surface_components[0],
+        &query_coordinate_to_index,
+        buried_voxels,
+    );
+    let second_shell_indices = expand_direct_surface_component_shell(
+        &direct_surface_components[1],
+        &query_coordinate_to_index,
+        buried_voxels,
+    );
+
+    if !first_shell_indices.is_disjoint(&second_shell_indices) {
+        return Some(0);
+    }
+
+    let max_path_edges = max_gap_voxels + 1;
+    let mut visited_indices: HashSet<i32> = first_shell_indices.clone();
+    let mut queue: VecDeque<(i32, i32)> = first_shell_indices
+        .iter()
+        .copied()
+        .map(|surface_index| (surface_index, 0))
+        .collect();
+
+    while let Some((current_index, path_edges)) = queue.pop_front() {
+        if path_edges >= max_path_edges {
+            continue;
+        }
+
+        let [x, y, z] = buried_voxels[current_index as usize];
+        let neighbor_candidates = [
+            [x - 1, y, z],
+            [x + 1, y, z],
+            [x, y - 1, z],
+            [x, y + 1, z],
+            [x, y, z - 1],
+            [x, y, z + 1],
+        ];
+        for neighbor_voxel in neighbor_candidates.iter() {
+            let Some(&neighbor_index) = query_coordinate_to_index.get(neighbor_voxel) else {
+                continue;
+            };
+            if visited_indices.contains(&neighbor_index) {
+                continue;
+            }
+
+            let next_path_edges = path_edges + 1;
+            if second_shell_indices.contains(&neighbor_index) {
+                return Some((next_path_edges - 1).max(0));
+            }
+
+            visited_indices.insert(neighbor_index);
+            queue.push_back((neighbor_index, next_path_edges));
+        }
+    }
+
+    None
 }
 
 fn direct_surface_direction_bucket_counts(
@@ -473,6 +575,7 @@ fn get_agglomerated_type(
     exposed_coordinate_set: &HashSet<[i32; 3]>,
     grid_dimensions: [i32; 3],
     connectivity_mode: &str,
+    mouth_merge_gap_voxels: i32,
 ) -> (Vec<i32>, i8) {
     let mut direct_surface_indices: HashSet<i32> = HashSet::with_capacity(query_indices.len());
     for query_index in query_indices.iter().copied() {
@@ -512,14 +615,13 @@ fn get_agglomerated_type(
         .copied()
         .collect();
     sorted_surface_indices.sort_unstable();
-    let direct_surface_component_sizes =
-        direct_surface_component_sizes(
-            &direct_surface_indices,
-            &direct_surface_indices.union(&neighbor_surface_indices).copied().collect(),
-            buried_voxels,
-            connectivity_mode,
-        );
-    if direct_surface_component_sizes.len() >= 3 {
+    let direct_surface_components = direct_surface_components(
+        &direct_surface_indices,
+        &direct_surface_indices.union(&neighbor_surface_indices).copied().collect(),
+        buried_voxels,
+        connectivity_mode,
+    );
+    if direct_surface_components.len() >= 3 {
         return (sorted_surface_indices, 4);
     }
     let mut direction_bucket_counts = direct_surface_direction_bucket_counts(
@@ -529,9 +631,19 @@ fn get_agglomerated_type(
     )
     .to_vec();
     direction_bucket_counts.sort_unstable_by(|a, b| b.cmp(a));
-    if direct_surface_component_sizes.len() == 2 {
+    if direct_surface_components.len() == 2 {
         if has_wrapped_hub_direction_spread(&direction_bucket_counts) {
             return (sorted_surface_indices, 4);
+        }
+        if get_direct_surface_shell_gap(
+            query_indices,
+            &direct_surface_components,
+            buried_voxels,
+            mouth_merge_gap_voxels,
+        )
+        .is_some()
+        {
+            return (sorted_surface_indices, 2);
         }
         return (sorted_surface_indices, 3);
     }
@@ -1143,6 +1255,7 @@ fn classify_buried_components(
     min_num_voxels: i32,
     _voxel_size: f32,
     surface_connectivity: &str,
+    mouth_merge_gap_voxels: i32,
 ) -> PyResult<PyObject> {
     validate_voxel_array_shape(&buried_voxels, "buried_voxels")?;
     validate_voxel_array_shape(&exposed_voxels, "exposed_voxels")?;
@@ -1251,6 +1364,7 @@ fn classify_buried_components(
                     &exposed_coordinate_set,
                     grid_dims_array,
                     &normalized_surface_connectivity,
+                    mouth_merge_gap_voxels,
                 )
             };
         classify_component_type_seconds += classify_start.elapsed().as_secs_f64();

@@ -22,7 +22,10 @@ import traceback
 from typing import Sequence
 
 from volumizer import rcsb
-from volumizer.constants import VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES
+from volumizer.constants import (
+    DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS,
+    VALID_DIRECT_SURFACE_COMPONENT_CONNECTIVITY_MODES,
+)
 
 
 DEFAULT_METADATA_STORE_DIRNAME = "entry_metadata"
@@ -258,6 +261,15 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         help=(
             "Direct-surface smoothing connectivity for classifying "
             "cavity/pocket/pore/hub mouths (default: custom18)."
+        ),
+    )
+    parser.add_argument(
+        "--merge-mouth-gap-voxels",
+        type=int,
+        default=DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS,
+        help=(
+            "Merge very close raw pore mouths into a single human-facing mouth. "
+            "Negative values disable the override (default: 1)."
         ),
     )
     parser.add_argument(
@@ -1975,6 +1987,7 @@ def _make_checkpoint_signature(
         "min_voxels": args.min_voxels,
         "min_volume": args.min_volume,
         "surface_connectivity": args.surface_connectivity,
+        "merge_mouth_gap_voxels": args.merge_mouth_gap_voxels,
         "backend": args.backend,
         "assembly_policy": args.assembly_policy,
         "keep_non_protein": args.keep_non_protein,
@@ -3190,6 +3203,7 @@ def _build_analysis_worker_command(
     keep_non_protein: bool,
     backend: str | None,
     surface_connectivity: str,
+    merge_mouth_gap_voxels: int,
     max_residues: int | None = None,
     include_hubs: bool = False,
 ) -> list[str]:
@@ -3211,6 +3225,8 @@ def _build_analysis_worker_command(
         str(float(resolution)),
         "--surface-connectivity",
         surface_connectivity,
+        "--merge-mouth-gap-voxels",
+        str(int(merge_mouth_gap_voxels)),
     ]
     if min_volume is not None:
         command.extend(["--min-volume", str(float(min_volume))])
@@ -3313,6 +3329,7 @@ def _run_isolated_analysis_worker(
     keep_non_protein: bool,
     backend: str | None,
     surface_connectivity: str,
+    merge_mouth_gap_voxels: int,
     max_residues: int | None = None,
     worker_timeout_seconds: float | None = None,
     include_hubs: bool = False,
@@ -3340,6 +3357,7 @@ def _run_isolated_analysis_worker(
                     keep_non_protein=keep_non_protein,
                     backend=attempt_backend,
                     surface_connectivity=surface_connectivity,
+                    merge_mouth_gap_voxels=merge_mouth_gap_voxels,
                     max_residues=max_residues,
                     include_hubs=include_hubs,
                 ),
@@ -3517,6 +3535,7 @@ def _analyze_structures(
                         keep_non_protein=bool(args.keep_non_protein),
                         backend=active_backend,
                         surface_connectivity=str(args.surface_connectivity),
+                        merge_mouth_gap_voxels=int(args.merge_mouth_gap_voxels),
                         max_residues=runtime_max_residues,
                         worker_timeout_seconds=worker_timeout_seconds,
                         include_hubs=bool(args.include_hubs),
@@ -3656,6 +3675,7 @@ def _analyze_structures(
                         "keep_non_protein": bool(args.keep_non_protein),
                         "backend": active_backend,
                         "surface_connectivity": str(args.surface_connectivity),
+                        "merge_mouth_gap_voxels": int(args.merge_mouth_gap_voxels),
                         "max_residues": runtime_max_residues,
                         "worker_timeout_seconds": worker_timeout_seconds,
                         "include_hubs": bool(args.include_hubs),
@@ -3942,6 +3962,9 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
         utils.set_surface_component_connectivity_mode(
             str(args.surface_connectivity)
         )
+        utils.set_surface_mouth_merge_gap_voxels(
+            int(args.merge_mouth_gap_voxels)
+        )
 
         active_backend = native_backend.active_backend()
         print(f"[volumizer] backend: {active_backend}", file=sys.stderr)
@@ -3990,6 +4013,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             "min_voxels": args.min_voxels,
             "min_volume": args.min_volume,
             "surface_connectivity": args.surface_connectivity,
+            "merge_mouth_gap_voxels": args.merge_mouth_gap_voxels,
             "backend": (
                 active_backend
                 if active_backend is not None

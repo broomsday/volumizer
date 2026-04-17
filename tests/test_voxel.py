@@ -2,9 +2,11 @@ import pytest
 import numpy as np
 import ctypes
 
+from volumizer import utils
 from volumizer.voxel import (
     _get_surface_components,
     _is_wrapped_hub_direction_spread,
+    get_agglomerated_type,
     get_single_voxel,
     is_neighbor_voxel,
     breadth_first_search_python,
@@ -182,6 +184,61 @@ def test_surface_component_custom18_uses_supported_shell_diagonal():
         buried_voxels,
         support_indices=support_surface_indices,
     )) == 1
+
+
+def _make_linear_two_mouth_component(num_buried_voxels: int):
+    buried_voxels = (
+        np.arange(1, num_buried_voxels + 1, dtype=np.int64),
+        np.ones(num_buried_voxels, dtype=np.int64),
+        np.ones(num_buried_voxels, dtype=np.int64),
+    )
+    exposed_voxels = (
+        np.array([0, num_buried_voxels + 1], dtype=np.int64),
+        np.array([1, 1], dtype=np.int64),
+        np.array([1, 1], dtype=np.int64),
+    )
+    grid_dimensions = np.array([num_buried_voxels + 3, 3, 3], dtype=np.int64)
+    query_indices = set(range(num_buried_voxels))
+    return query_indices, buried_voxels, exposed_voxels, grid_dimensions
+
+
+@pytest.mark.parametrize(
+    "num_buried_voxels, gap_threshold, expected_type",
+    [
+        (4, -1, "pore"),
+        (4, 0, "pocket"),
+        (5, 0, "pore"),
+        (5, 1, "pocket"),
+        (6, 1, "pore"),
+        (6, 2, "pocket"),
+    ],
+)
+def test_get_agglomerated_type_merges_close_two_mouth_pores(
+    monkeypatch,
+    num_buried_voxels,
+    gap_threshold,
+    expected_type,
+):
+    monkeypatch.setattr(
+        utils,
+        "DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS",
+        gap_threshold,
+    )
+    (
+        query_indices,
+        buried_voxels,
+        exposed_voxels,
+        grid_dimensions,
+    ) = _make_linear_two_mouth_component(num_buried_voxels)
+
+    _, agglomerated_type = get_agglomerated_type(
+        query_indices,
+        buried_voxels,
+        exposed_voxels,
+        grid_dimensions,
+    )
+
+    assert agglomerated_type == expected_type
 
 
 @pytest.mark.parametrize(

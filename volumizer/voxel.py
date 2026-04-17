@@ -3,6 +3,7 @@ Functions to manipulate and analyze voxels.
 """
 
 
+from collections import deque
 from copy import deepcopy
 import ctypes
 from time import perf_counter
@@ -1001,6 +1002,116 @@ def _get_surface_components(
     return sorted(surface_components, key=len, reverse=True)
 
 
+def _build_query_coordinate_index(
+    query_indices: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+) -> dict[tuple[int, int, int], int]:
+    """
+    Build a coordinate-to-index lookup for one connected buried component.
+    """
+    return {
+        (
+            int(buried_voxels[0][query_index]),
+            int(buried_voxels[1][query_index]),
+            int(buried_voxels[2][query_index]),
+        ): query_index
+        for query_index in query_indices
+    }
+
+
+def _expand_direct_surface_component_shell(
+    direct_surface_component: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+    query_coordinate_to_index: dict[tuple[int, int, int], int],
+) -> set[int]:
+    """
+    Expand one direct mouth component by one buried voxel into the component interior.
+    """
+    shell_indices = set(direct_surface_component)
+
+    for surface_index in direct_surface_component:
+        surface_voxel = get_single_voxel(buried_voxels, surface_index)
+        for delta_x, delta_y, delta_z in SURFACE_6_NEIGHBOR_OFFSETS:
+            neighbor_index = query_coordinate_to_index.get(
+                (
+                    int(surface_voxel[0]) + delta_x,
+                    int(surface_voxel[1]) + delta_y,
+                    int(surface_voxel[2]) + delta_z,
+                )
+            )
+            if neighbor_index is not None:
+                shell_indices.add(neighbor_index)
+
+    return shell_indices
+
+
+def _get_direct_surface_shell_gap(
+    query_indices: set[int],
+    direct_surface_components: list[set[int]],
+    buried_voxels: tuple[np.ndarray, ...],
+    max_gap_voxels: int,
+) -> int | None:
+    """
+    Return the shortest gap between two expanded mouth shells when it is within threshold.
+
+    The gap is measured after expanding each direct mouth by one buried voxel.
+    Overlapping or face-touching shells therefore have gap `0`, one intermediate
+    buried voxel gives gap `1`, and so on.
+    """
+    if len(direct_surface_components) != 2 or max_gap_voxels < 0:
+        return None
+
+    query_coordinate_to_index = _build_query_coordinate_index(
+        query_indices,
+        buried_voxels,
+    )
+    first_shell_indices = _expand_direct_surface_component_shell(
+        direct_surface_components[0],
+        buried_voxels,
+        query_coordinate_to_index,
+    )
+    second_shell_indices = _expand_direct_surface_component_shell(
+        direct_surface_components[1],
+        buried_voxels,
+        query_coordinate_to_index,
+    )
+
+    if first_shell_indices.intersection(second_shell_indices):
+        return 0
+
+    max_path_edges = max_gap_voxels + 1
+    visited_indices = set(first_shell_indices)
+    queue_indices: deque[tuple[int, int]] = deque(
+        (surface_index, 0) for surface_index in first_shell_indices
+    )
+
+    while queue_indices:
+        current_index, path_edges = queue_indices.popleft()
+        if path_edges >= max_path_edges:
+            continue
+
+        current_voxel = get_single_voxel(buried_voxels, current_index)
+        for delta_x, delta_y, delta_z in SURFACE_6_NEIGHBOR_OFFSETS:
+            neighbor_index = query_coordinate_to_index.get(
+                (
+                    int(current_voxel[0]) + delta_x,
+                    int(current_voxel[1]) + delta_y,
+                    int(current_voxel[2]) + delta_z,
+                )
+            )
+            if neighbor_index is None or neighbor_index in visited_indices:
+                continue
+
+            next_path_edges = path_edges + 1
+            if neighbor_index in second_shell_indices:
+                return max(next_path_edges - 1, 0)
+
+            visited_indices.add(neighbor_index)
+            queue_indices.append((neighbor_index, next_path_edges))
+
+    return None
+
+
 def _get_surface_direction_bucket_counts(
     query_indices: set[int],
     surface_indices: set[int],
@@ -1077,11 +1188,11 @@ def get_agglomerated_type(
     """
     Find "surface" voxels, being buried voxel in direct contact with an exposed voxel.
 
-    Direct solvent-contact voxels are grouped with 26-neighbor connectivity to
-    smooth discretization on the surface itself without growing inward through
-    the buried volume. If the direct surface still forms a single connected
-    patch, fall back to a directional spread heuristic to distinguish a wrapped
-    hub-like surface from a single-mouth pocket.
+    Direct solvent-contact voxels are grouped using the configured surface
+    connectivity to smooth discretization on the surface itself without growing
+    inward through the buried volume. If the direct surface still forms a single
+    connected patch, fall back to a directional spread heuristic to distinguish
+    a wrapped hub-like surface from a single-mouth pocket.
     """
     direct_surface_indices = set()
     for query_index in query_indices:
@@ -1134,6 +1245,15 @@ def get_agglomerated_type(
     if len(direct_surface_components) == 2:
         if _is_wrapped_hub_direction_spread(direction_bucket_counts):
             return surface_indices, "hub"
+        mouth_merge_gap_voxels = utils.get_surface_mouth_merge_gap_voxels()
+        shell_gap_voxels = _get_direct_surface_shell_gap(
+            query_indices,
+            direct_surface_components,
+            buried_voxels,
+            mouth_merge_gap_voxels,
+        )
+        if shell_gap_voxels is not None:
+            return surface_indices, "pocket"
         return surface_indices, "pore"
     if len(direct_surface_indices) < MIN_DIRECTIONAL_SURFACE_VOXELS:
         return surface_indices, "pocket"
@@ -1458,6 +1578,7 @@ def classify_buried_components_native(
         int(MIN_NUM_VOXELS),
         float(utils.VOXEL_SIZE),
         utils.get_surface_component_connectivity_mode(),
+        int(utils.get_surface_mouth_merge_gap_voxels()),
     )
     if stage_timings is not None:
         kernel_seconds = perf_counter() - kernel_start
