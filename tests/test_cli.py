@@ -901,6 +901,7 @@ def test_analyze_structure_file_excludes_hubs_from_written_outputs_by_default(
     dummy_pdb = SimpleNamespace(
         load_structure=lambda input_path, assembly_policy="biological": "input",
         save_structure=_save_structure,
+        ensure_b_factor_annotation=lambda structure: None,
         compute_sse_fractions=lambda prepared_structure: {
             "frac_alpha": 0.1,
             "frac_beta": 0.2,
@@ -962,6 +963,7 @@ def test_analyze_structure_file_include_hubs_preserves_written_outputs(
     dummy_pdb = SimpleNamespace(
         load_structure=lambda input_path, assembly_policy="biological": "input",
         save_structure=_save_structure,
+        ensure_b_factor_annotation=lambda structure: None,
         compute_sse_fractions=lambda prepared_structure: {
             "frac_alpha": 0.1,
             "frac_beta": 0.2,
@@ -1041,6 +1043,72 @@ def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_pa
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["num_processed"] == 2
     assert summary["num_failed"] == 0
+
+
+def test_run_cli_parallel_jobs_batches_checkpoint_persistence_after_completion(
+    monkeypatch,
+    tmp_path: Path,
+):
+    args = _make_args(tmp_path, command="analyze", jobs=2)
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_input_structures",
+        lambda args, download_dir, output_dir: [
+            ("first", tmp_path / "first.cif"),
+            ("second", tmp_path / "second.cif"),
+            ("third", tmp_path / "third.cif"),
+        ],
+    )
+
+    persist_snapshots = []
+
+    def _persist_checkpoint(self):
+        persist_snapshots.append(
+            {
+                "results": len(self.results),
+                "errors": len(self.errors),
+                "skipped": len(self.skipped),
+                "planned": len(self.planned),
+            }
+        )
+
+    monkeypatch.setattr(cli._RunTracker, "persist_checkpoint", _persist_checkpoint)
+
+    def _analyze(source_label, input_path, output_dir, min_voxels, min_volume, overwrite, assembly_policy="biological"):
+        if source_label == "first":
+            return {
+                "source": source_label,
+                "input_path": str(input_path),
+                "structure_output": str(output_dir / f"{source_label}.annotated.cif"),
+                "annotation_output": str(output_dir / f"{source_label}.annotation.json"),
+                "num_volumes": 1,
+                "largest_type": "pore",
+                "largest_volume": 12.0,
+            }
+        if source_label == "second":
+            raise RuntimeError("boom")
+        raise cli.PostAssemblyResidueLimitExceeded(
+            actual_residues=12000,
+            max_residues=10000,
+            assembly_policy=assembly_policy,
+        )
+
+    monkeypatch.setattr(cli, "analyze_structure_file", _analyze)
+
+    exit_code = cli.run_cli(args)
+    assert exit_code == 1
+
+    summary = json.loads((tmp_path / "run.summary.json").read_text(encoding="utf-8"))
+    assert summary["num_processed"] == 1
+    assert summary["num_failed"] == 1
+    assert summary["num_skipped"] == 1
+
+    assert persist_snapshots == [
+        {"results": 0, "errors": 0, "skipped": 0, "planned": 0},
+        {"results": 1, "errors": 1, "skipped": 1, "planned": 0},
+        {"results": 1, "errors": 1, "skipped": 1, "planned": 0},
+    ]
 
 
 def test_run_cli_parallel_jobs_emits_periodic_progress(
@@ -1869,6 +1937,7 @@ def test_analyze_structure_file_removes_partial_outputs_before_reanalysis(
             "fresh-structure",
             encoding="utf-8",
         ),
+        ensure_b_factor_annotation=lambda structure: None,
         compute_sse_fractions=lambda prepared_structure: {
             "frac_alpha": 0.1,
             "frac_beta": 0.2,
@@ -1931,6 +2000,7 @@ def test_analyze_structure_file_removes_stale_status_record_before_analysis(
             "fresh-structure",
             encoding="utf-8",
         ),
+        ensure_b_factor_annotation=lambda structure: None,
         compute_sse_fractions=lambda prepared_structure: {
             "frac_alpha": 0.1,
             "frac_beta": 0.2,

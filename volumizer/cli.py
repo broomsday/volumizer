@@ -2269,7 +2269,7 @@ class _RunTracker:
             input_path=str(input_path),
         )
 
-    def mark_result(self, entry: dict) -> None:
+    def mark_result(self, entry: dict, persist: bool = True) -> None:
         self._set_entry("results", entry)
         self.emit_event(
             "structure_succeeded",
@@ -2277,9 +2277,10 @@ class _RunTracker:
             input_path=entry["input_path"],
             num_volumes=entry.get("num_volumes"),
         )
-        self.persist_checkpoint()
+        if persist:
+            self.persist_checkpoint()
 
-    def mark_error(self, entry: dict) -> None:
+    def mark_error(self, entry: dict, persist: bool = True) -> None:
         self._set_entry("errors", entry)
         self.emit_event(
             "structure_failed",
@@ -2287,7 +2288,8 @@ class _RunTracker:
             input_path=entry["input_path"],
             error=entry["error"],
         )
-        self.persist_checkpoint()
+        if persist:
+            self.persist_checkpoint()
 
 
 def _extract_status_code_from_error_message(error: Exception) -> int | None:
@@ -3092,6 +3094,8 @@ def analyze_structure_file(
         include_hubs=include_hubs,
     )
 
+    pdb.ensure_b_factor_annotation(prepared_structure)
+    pdb.ensure_b_factor_annotation(output_annotation_structure)
     combined_structure = prepared_structure + output_annotation_structure
     try:
         pdb.save_structure(combined_structure, structure_output_path)
@@ -3812,11 +3816,13 @@ def _analyze_structures(
 
     for index in range(total_pending):
         if index in ordered_results:
-            tracker.mark_result(ordered_results[index])
+            tracker.mark_result(ordered_results[index], persist=False)
         elif index in ordered_skips:
-            tracker.mark_skipped(ordered_skips[index])
+            tracker.mark_skipped(ordered_skips[index], persist=False)
         elif index in ordered_errors:
-            tracker.mark_error(ordered_errors[index])
+            tracker.mark_error(ordered_errors[index], persist=False)
+
+    tracker.persist_checkpoint()
 
     return analysis_workers
 
