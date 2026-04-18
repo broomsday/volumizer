@@ -38,6 +38,40 @@ def _timed_call(
     return result
 
 
+def _apply_display_type_overrides(
+    annotation_df: pd.DataFrame,
+    voxel_grid,
+    pockets,
+) -> pd.DataFrame:
+    """
+    Add user-facing display labels when a pocket should be presented as a cavity.
+    """
+    if len(annotation_df) == 0 or len(pockets) == 0:
+        return annotation_df
+
+    display_type_overrides: dict[tuple[str, int], str] = {}
+    for pocket_id, pocket in pockets.items():
+        display_type = voxel.get_voxel_group_display_type(
+            pocket,
+            voxel_grid.x_y_z,
+        )
+        if display_type != "pocket":
+            display_type_overrides[("pocket", int(pocket_id))] = display_type
+
+    if len(display_type_overrides) == 0:
+        return annotation_df
+
+    updated_annotation_df = annotation_df.copy()
+    updated_annotation_df["display_type"] = updated_annotation_df["type"].astype(str)
+
+    for row_index, row in updated_annotation_df.iterrows():
+        display_type = display_type_overrides.get((str(row["type"]), int(row["id"])))
+        if display_type is not None:
+            updated_annotation_df.at[row_index, "display_type"] = display_type
+
+    return updated_annotation_df
+
+
 def annotate_structure_volumes(
     structure: bts.AtomArray,
     min_voxels: Optional[int] = 4,
@@ -201,6 +235,14 @@ def annotate_structure_volumes(
         "make_annotation_dataframe",
         utils.make_annotation_dataframe,
         annotation,
+    )
+    annotation_df = _timed_call(
+        stage_timings,
+        "apply_display_type_overrides",
+        _apply_display_type_overrides,
+        annotation_df,
+        voxel_grid,
+        pockets,
     )
 
     annotation_structure = _timed_call(

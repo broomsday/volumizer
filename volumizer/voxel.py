@@ -21,6 +21,8 @@ from volumizer.constants import (
     DIRECT_SURFACE_DIRECTION_PORE_RATIO,
     DIRECT_SURFACE_DIRECTION_HUB_RATIO,
     MIN_DIRECTIONAL_SURFACE_VOXELS,
+    CAVITY_LIKE_POCKET_NECK_WIDTH_VOXELS,
+    CAVITY_LIKE_POCKET_CORE_TO_MOUTH_SHELL_RATIO,
 )
 from volumizer.types import VoxelGroup
 from volumizer.paths import C_CODE_DIR
@@ -718,6 +720,17 @@ def _compute_voxel_indices_array(
     return x_coords * grid_dimension_1_2 + y_coords * grid_dimension_2 + z_coords
 
 
+def _index_values_to_array(index_values: set[int] | np.ndarray) -> np.ndarray:
+    """
+    Normalize voxel index containers to an int64 numpy array.
+    """
+    if isinstance(index_values, np.ndarray):
+        return np.asarray(index_values, dtype=np.int64)
+    if len(index_values) == 0:
+        return np.array([], dtype=np.int64)
+    return np.fromiter(index_values, dtype=np.int64, count=len(index_values))
+
+
 def compute_voxel_indices(
     voxels: tuple[np.ndarray, ...], grid_dimensions: np.ndarray
 ) -> set[int]:
@@ -1276,6 +1289,142 @@ def get_agglomerated_type(
         return surface_indices, "pore"
 
     return surface_indices, "pocket"
+
+
+def _get_voxel_group_neck_width(
+    voxel_group: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray,
+) -> int | None:
+    """
+    Estimate the narrowest near-mouth interior layer using the stored surface shell.
+
+    The probe starts one layer inward from the stored mouth shell and only examines
+    enough early interior layers to match the shell width. This keeps the heuristic
+    focused on the mouth-adjacent bottleneck rather than deep interior branches.
+    """
+    if len(voxel_group.voxels[0]) == 0:
+        return None
+
+    volume_index_array = _compute_voxel_indices_array(
+        voxel_group.voxels,
+        voxel_grid_dimensions,
+    )
+    if volume_index_array.size == 0:
+        return None
+
+    x_coords = np.asarray(voxel_group.voxels[0], dtype=np.int64)
+    y_coords = np.asarray(voxel_group.voxels[1], dtype=np.int64)
+    z_coords = np.asarray(voxel_group.voxels[2], dtype=np.int64)
+    index_to_coord = {
+        int(flat_index): (int(x_coord), int(y_coord), int(z_coord))
+        for flat_index, x_coord, y_coord, z_coord in zip(
+            volume_index_array,
+            x_coords,
+            y_coords,
+            z_coords,
+        )
+    }
+    coord_to_index = {
+        coord: flat_index for flat_index, coord in index_to_coord.items()
+    }
+
+    surface_index_array = _index_values_to_array(voxel_group.surface_indices)
+    surface_indices = {
+        int(surface_index)
+        for surface_index in surface_index_array
+        if int(surface_index) in index_to_coord
+    }
+    if len(surface_indices) == 0:
+        return None
+
+    visited_indices = set(surface_indices)
+    queue_indices: deque[tuple[int, int]] = deque(
+        (surface_index, 0) for surface_index in surface_indices
+    )
+    layer_counts: dict[int, int] = {}
+
+    while queue_indices:
+        current_index, layer = queue_indices.popleft()
+        layer_counts[layer] = layer_counts.get(layer, 0) + 1
+
+        current_coord = index_to_coord[current_index]
+        for delta_x, delta_y, delta_z in SURFACE_6_NEIGHBOR_OFFSETS:
+            neighbor_index = coord_to_index.get(
+                (
+                    current_coord[0] + delta_x,
+                    current_coord[1] + delta_y,
+                    current_coord[2] + delta_z,
+                )
+            )
+            if neighbor_index is None or neighbor_index in visited_indices:
+                continue
+
+            visited_indices.add(neighbor_index)
+            queue_indices.append((neighbor_index, layer + 1))
+
+    interior_layer_counts = [
+        layer_counts[layer]
+        for layer in sorted(layer_counts.keys())
+        if layer > 0
+    ]
+    if len(interior_layer_counts) == 0:
+        return None
+
+    shell_width = len(surface_indices)
+    candidate_layer_counts: list[int] = []
+    cumulative_width = 0
+    for layer_count in interior_layer_counts:
+        candidate_layer_counts.append(int(layer_count))
+        cumulative_width += int(layer_count)
+        if cumulative_width >= shell_width:
+            break
+
+    if len(candidate_layer_counts) == 0:
+        return None
+    return min(candidate_layer_counts)
+
+
+def get_voxel_group_display_type(
+    voxel_group: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray,
+) -> str:
+    """
+    Return the user-facing label for a voxel group without changing topology.
+
+    Large pocket components that connect to solvent only through a very narrow
+    near-mouth bottleneck are presented as `cavity` for display purposes while
+    retaining their underlying topological `pocket` classification.
+    """
+    topology_type = str(voxel_group.voxel_type or "")
+    if topology_type != "pocket":
+        return topology_type
+
+    mouth_shell_count = len(
+        {
+            int(surface_index)
+            for surface_index in _index_values_to_array(voxel_group.surface_indices)
+        }
+    )
+    core_count = int(voxel_group.num_voxels) - int(mouth_shell_count)
+    if mouth_shell_count <= 0 or core_count <= 0:
+        return topology_type
+
+    neck_width = _get_voxel_group_neck_width(
+        voxel_group,
+        voxel_grid_dimensions,
+    )
+    if neck_width is None:
+        return topology_type
+
+    core_to_mouth_shell_ratio = core_count / float(mouth_shell_count)
+    if (
+        neck_width <= CAVITY_LIKE_POCKET_NECK_WIDTH_VOXELS
+        and core_to_mouth_shell_ratio
+        > CAVITY_LIKE_POCKET_CORE_TO_MOUTH_SHELL_RATIO
+    ):
+        return "cavity"
+
+    return topology_type
 
 
 def _get_voxel_group_center_from_indices(

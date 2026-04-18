@@ -6,7 +6,9 @@ from volumizer import utils
 from volumizer.voxel import (
     _get_surface_components,
     _is_wrapped_hub_direction_spread,
+    compute_voxel_indices,
     get_agglomerated_type,
+    get_voxel_group_display_type,
     get_single_voxel,
     is_neighbor_voxel,
     breadth_first_search_python,
@@ -15,6 +17,7 @@ from volumizer.voxel import (
     get_neighbor_voxels_c,
 )
 from volumizer.paths import C_CODE_DIR
+from volumizer.types import VoxelGroup
 
 
 VOXEL_C_PATH = C_CODE_DIR / "voxel.so"
@@ -200,6 +203,53 @@ def _make_linear_two_mouth_component(num_buried_voxels: int):
     grid_dimensions = np.array([num_buried_voxels + 3, 3, 3], dtype=np.int64)
     query_indices = set(range(num_buried_voxels))
     return query_indices, buried_voxels, exposed_voxels, grid_dimensions
+
+
+def _make_necked_pocket_voxel_group(core_edge: int) -> tuple[VoxelGroup, np.ndarray]:
+    shell_coords = [(0, 0, 0), (1, 0, 0), (2, 0, 0)]
+    neck_coords = [(3, 0, 0), (4, 0, 0), (5, 0, 0)]
+    core_coords = [
+        (x_coord, y_coord, z_coord)
+        for x_coord in range(6, 6 + core_edge)
+        for y_coord in range(core_edge)
+        for z_coord in range(core_edge)
+    ]
+    all_coords = shell_coords + neck_coords + core_coords
+
+    voxels = (
+        np.array([coord[0] for coord in all_coords], dtype=np.int64),
+        np.array([coord[1] for coord in all_coords], dtype=np.int64),
+        np.array([coord[2] for coord in all_coords], dtype=np.int64),
+    )
+    shell_voxels = (
+        np.array([coord[0] for coord in shell_coords], dtype=np.int64),
+        np.array([coord[1] for coord in shell_coords], dtype=np.int64),
+        np.array([coord[2] for coord in shell_coords], dtype=np.int64),
+    )
+    grid_dimensions = np.array([6 + core_edge + 2, core_edge + 2, core_edge + 2], dtype=np.int64)
+
+    return (
+        VoxelGroup(
+            voxels=voxels,
+            indices=compute_voxel_indices(voxels, grid_dimensions),
+            num_voxels=len(all_coords),
+            surface_indices=compute_voxel_indices(shell_voxels, grid_dimensions),
+            voxel_type="pocket",
+        ),
+        grid_dimensions,
+    )
+
+
+def test_get_voxel_group_display_type_promotes_large_necked_pocket_to_cavity():
+    voxel_group, grid_dimensions = _make_necked_pocket_voxel_group(core_edge=12)
+
+    assert get_voxel_group_display_type(voxel_group, grid_dimensions) == "cavity"
+
+
+def test_get_voxel_group_display_type_keeps_low_ratio_necked_pocket_as_pocket():
+    voxel_group, grid_dimensions = _make_necked_pocket_voxel_group(core_edge=6)
+
+    assert get_voxel_group_display_type(voxel_group, grid_dimensions) == "pocket"
 
 
 @pytest.mark.parametrize(

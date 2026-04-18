@@ -1032,6 +1032,68 @@ def test_analyze_structure_file_include_hubs_preserves_written_outputs(
     assert saved_structure["res_name"] == ["PRO", "HUB", "POR"]
 
 
+def test_analyze_structure_file_prefers_display_type_in_written_payload(
+    monkeypatch,
+    tmp_path: Path,
+):
+    input_path = tmp_path / "sample.cif"
+    input_path.write_text("dummy", encoding="utf-8")
+
+    dummy_pdb = SimpleNamespace(
+        load_structure=lambda input_path, assembly_policy="biological": "input",
+        save_structure=lambda structure, output_path: Path(output_path).write_text(
+            "filtered-structure",
+            encoding="utf-8",
+        ),
+        ensure_b_factor_annotation=lambda structure: None,
+        compute_sse_fractions=lambda prepared_structure: {
+            "frac_alpha": 0.1,
+            "frac_beta": 0.2,
+            "frac_coil": 0.7,
+        },
+    )
+    dummy_volumizer = SimpleNamespace(
+        prepare_pdb_structure=lambda structure: _DummyOutputStructure(["PRO"]),
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+            pd.DataFrame(
+                [
+                    {
+                        "id": 0,
+                        "type": "pocket",
+                        "display_type": "cavity",
+                        "volume": 49113.0,
+                    },
+                ]
+            ),
+            _DummyOutputStructure(["POK"]),
+        ),
+    )
+    dummy_utils = SimpleNamespace(
+        get_active_backend=lambda: "native",
+        VOXEL_SIZE=3.0,
+    )
+
+    monkeypatch.setattr(cli, "_pdb_module", lambda: dummy_pdb)
+    monkeypatch.setattr(cli, "_volumizer_module", lambda: dummy_volumizer)
+    monkeypatch.setattr(cli, "_utils_module", lambda: dummy_utils)
+
+    result = cli.analyze_structure_file(
+        source_label="sample",
+        input_path=input_path,
+        output_dir=tmp_path,
+        min_voxels=2,
+        min_volume=None,
+        overwrite=False,
+        assembly_policy="biological",
+    )
+
+    payload = json.loads((tmp_path / "sample.annotation.json").read_text(encoding="utf-8"))
+    assert result["largest_type"] == "cavity"
+    assert payload["largest_type"] == "cavity"
+    assert payload["volumes"][0]["type"] == "pocket"
+    assert payload["volumes"][0]["display_type"] == "cavity"
+
+
 def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_path: Path):
     args = _make_args(tmp_path, command="analyze", jobs=2)
 

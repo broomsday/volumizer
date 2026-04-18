@@ -2994,6 +2994,10 @@ def _build_annotation_payload(
 ) -> dict:
     utils = _utils_module()
     volumes = json.loads(annotation_df.to_json(orient="records"))
+    largest_type = None
+    if volumes:
+        largest_volume = volumes[0]
+        largest_type = largest_volume.get("display_type") or largest_volume.get("type")
     payload = {
         "source": source_label,
         "input_path": str(input_path),
@@ -3001,7 +3005,7 @@ def _build_annotation_payload(
         "backend": utils.get_active_backend(),
         "resolution": utils.VOXEL_SIZE,
         "num_volumes": len(volumes),
-        "largest_type": volumes[0]["type"] if volumes else None,
+        "largest_type": largest_type,
         "largest_volume": volumes[0]["volume"] if volumes else None,
         "volumes": volumes,
     }
