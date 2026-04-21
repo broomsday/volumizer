@@ -232,6 +232,70 @@ def test_build_gallery_index_ignores_hub_rows(tmp_path: Path):
     assert aggregate_row == (1, 200.0, 0, None)
 
 
+def test_build_gallery_index_groups_by_display_type(tmp_path: Path):
+    summary_path = tmp_path / "run.summary.json"
+    annotation_path = tmp_path / "hit-a.annotation.json"
+    structure_output_path = tmp_path / "hit-a.annotated.cif"
+    db_path = tmp_path / "gallery.db"
+
+    structure_output_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path.write_text(
+        json.dumps(
+            {
+                "source": "hit-a",
+                "num_volumes": 2,
+                "volumes": [
+                    {
+                        "id": 0,
+                        "type": "pocket",
+                        "display_type": "cavity",
+                        "volume": 600.0,
+                        "x": 14.0,
+                        "y": 6.0,
+                        "z": 4.0,
+                    },
+                    {
+                        "id": 0,
+                        "type": "cavity",
+                        "display_type": "cavity",
+                        "volume": 80.0,
+                        "x": 7.0,
+                        "y": 4.0,
+                        "z": 2.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    _write_summary(summary_path, annotation_path, structure_output_path)
+
+    result = gallery_index.build_gallery_index(
+        summary_path=summary_path,
+        db_path=db_path,
+        run_id="display-type-test",
+        replace_run=False,
+        strict=True,
+    )
+
+    assert result["indexed_volumes"] == 2
+
+    with sqlite3.connect(db_path) as connection:
+        volume_rows = connection.execute(
+            "SELECT kind, rank_in_kind, volume_a3 FROM volumes ORDER BY volume_a3 DESC"
+        ).fetchall()
+        aggregate_row = connection.execute(
+            """
+            SELECT num_pockets, largest_pocket_volume_a3,
+                   num_cavities, largest_cavity_volume_a3
+            FROM structure_aggregates
+            """
+        ).fetchone()
+
+    assert volume_rows == [("cavity", 1, 600.0), ("cavity", 2, 80.0)]
+    assert aggregate_row == (0, None, 2, 600.0)
+
+
 def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_path: Path):
     summary_path = tmp_path / "run.summary.json"
     annotation_path = tmp_path / "hit-a.annotation.json"
@@ -246,10 +310,13 @@ def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_pa
                 {
                     "id": {"0": 0},
                     "type": {"0": "pore"},
+                    "display_type": {"0": "cavity"},
                     "volume": {"0": volume},
                     "x": {"0": 9.0},
                     "y": {"0": 4.0},
                     "z": {"0": 2.0},
+                    "cross_section_circularity": {"0": 0.75},
+                    "cross_section_uniformity": {"0": 0.50},
                 }
             ),
             encoding="utf-8",
@@ -287,12 +354,13 @@ def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_pa
     with sqlite3.connect(db_path) as connection:
         rows = connection.execute(
             """
-            SELECT volume_a3, length_a, min_diameter_a, max_diameter_a
+            SELECT kind, volume_a3, length_a, min_diameter_a, max_diameter_a,
+                   cross_section_circularity, cross_section_uniformity
             FROM volumes
             """
         ).fetchall()
 
-    assert rows == [(222.0, 9.0, 2.0, 4.0)]
+    assert rows == [("cavity", 222.0, 9.0, 2.0, 4.0, 0.75, 0.50)]
 
 
 def test_build_gallery_index_infers_pdb_id_from_source_when_missing(tmp_path: Path):

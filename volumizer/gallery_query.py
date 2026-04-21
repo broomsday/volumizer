@@ -42,6 +42,20 @@ _SORT_COLUMN_MAP = {
     "largest_cavity_circularity": "a.largest_cavity_circularity",
     "largest_cavity_uniformity": "a.largest_cavity_uniformity",
 }
+_SORT_ALIASES = {
+    "largest_pore_volume_a3": "largest_pore_volume",
+    "largest_pore_length_a": "largest_pore_length",
+    "largest_pore_min_diameter_a": "largest_pore_min_diameter",
+    "largest_pore_max_diameter_a": "largest_pore_max_diameter",
+    "largest_pocket_volume_a3": "largest_pocket_volume",
+    "largest_pocket_length_a": "largest_pocket_length",
+    "largest_pocket_min_diameter_a": "largest_pocket_min_diameter",
+    "largest_pocket_max_diameter_a": "largest_pocket_max_diameter",
+    "largest_cavity_volume_a3": "largest_cavity_volume",
+    "largest_cavity_length_a": "largest_cavity_length",
+    "largest_cavity_min_diameter_a": "largest_cavity_min_diameter",
+    "largest_cavity_max_diameter_a": "largest_cavity_max_diameter",
+}
 _DEFAULT_SORT_BY = "largest_pore_volume"
 _DEFAULT_SORT_DIR = "desc"
 
@@ -54,7 +68,8 @@ def _safe_non_negative_int(value: int, name: str) -> int:
 
 
 def _normalize_sort(sort_by: str, sort_dir: str) -> tuple[str, str]:
-    normalized_sort_by = str(sort_by).strip()
+    requested_sort_by = str(sort_by).strip()
+    normalized_sort_by = _SORT_ALIASES.get(requested_sort_by, requested_sort_by)
     if normalized_sort_by not in _SORT_COLUMN_MAP:
         raise ValueError(
             f"Unsupported sort_by: {sort_by}. "

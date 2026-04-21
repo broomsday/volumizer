@@ -359,6 +359,9 @@ def test_gallery_web_static_filter_presets_restore_active_selection():
     assert "restoreActiveFilterPreset();" in app_js
     assert "event.preventDefault();" in app_js
     assert "const restoredActivePreset = restoreActiveFilterPreset();" in app_js
+    assert "const SORT_BY_ALIASES = Object.freeze" in app_js
+    assert "function normalizeSortBy(value)" in app_js
+    assert "Number(volume.rank_in_kind) + 1" not in app_js
 
 
 def test_gallery_web_static_sparse_filter_presets_reset_previous_values():
@@ -540,7 +543,7 @@ def test_gallery_web_static_sparse_filter_presets_reset_previous_values():
 
     assert payload["chains_max"] == ""
     assert payload["seq_unique_chains_max"] == "3"
-    assert payload["sort_by"] == "largest_pore_volume_a3"
+    assert payload["sort_by"] == "largest_pore_volume"
     assert payload["sort_dir"] == "desc"
     assert payload["limit"] == "24"
     assert payload["pdb_id_query"] == ""
@@ -756,7 +759,7 @@ def test_gallery_web_static_none_filter_preset_clears_restored_values():
     assert payload["pore_dmin_min"] == ""
     assert payload["pore_circularity_min"] == ""
     assert payload["pore_uniformity_min"] == ""
-    assert payload["sort_by"] == "largest_pore_volume_a3"
+    assert payload["sort_by"] == "largest_pore_volume"
     assert payload["sort_dir"] == "desc"
     assert payload["limit"] == "24"
     assert payload["pdb_id_query"] == ""

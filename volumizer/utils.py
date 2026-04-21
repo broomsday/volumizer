@@ -221,7 +221,17 @@ def make_annotation_dataframe(annotation: Annotation) -> pd.DataFrame:
         ]
     )
 
-    return pd.concat([hubs_df, pores_df, cavities_df, pockets_df], ignore_index=True)
+    annotation_df = pd.concat(
+        [hubs_df, pores_df, cavities_df, pockets_df],
+        ignore_index=True,
+    )
+    if "volume" not in annotation_df.columns or len(annotation_df) == 0:
+        return annotation_df
+
+    return annotation_df.sort_values(
+        by=["volume", "type", "id"],
+        ascending=[False, True, True],
+    ).reset_index(drop=True)
 
 
 def using_performant() -> bool:

@@ -36,6 +36,20 @@ const BUILTIN_FILTER_PRESET_PREFIX = '__builtin__:';
 const DISPLAY_PRESET_DEFAULT_LABEL = 'Default';
 const BUILTIN_DISPLAY_PRESET_PREFIX = '__builtin-display__:';
 const NON_FILTER_FORM_FIELD_NAMES = new Set(['sort_by', 'sort_dir', 'limit']);
+const SORT_BY_ALIASES = Object.freeze({
+  largest_pore_volume_a3: 'largest_pore_volume',
+  largest_pore_length_a: 'largest_pore_length',
+  largest_pore_min_diameter_a: 'largest_pore_min_diameter',
+  largest_pore_max_diameter_a: 'largest_pore_max_diameter',
+  largest_pocket_volume_a3: 'largest_pocket_volume',
+  largest_pocket_length_a: 'largest_pocket_length',
+  largest_pocket_min_diameter_a: 'largest_pocket_min_diameter',
+  largest_pocket_max_diameter_a: 'largest_pocket_max_diameter',
+  largest_cavity_volume_a3: 'largest_cavity_volume',
+  largest_cavity_length_a: 'largest_cavity_length',
+  largest_cavity_min_diameter_a: 'largest_cavity_min_diameter',
+  largest_cavity_max_diameter_a: 'largest_cavity_max_diameter',
+});
 const DEFAULT_DISPLAY_METRICS = Object.freeze([
   'num_chains',
   'num_residues',
@@ -188,6 +202,11 @@ function textInputValue(input) {
   return value;
 }
 
+function normalizeSortBy(value) {
+  const key = String(value || '').trim();
+  return SORT_BY_ALIASES[key] || key;
+}
+
 function buildSearchParams() {
   const params = new URLSearchParams();
   const pdbIdQuery = textInputValue(elements.pdbIdQueryInput);
@@ -206,7 +225,7 @@ function buildSearchParams() {
     params.set(field.name, value);
   }
 
-  params.set('sort_by', elements.sortBySelect.value);
+  params.set('sort_by', normalizeSortBy(elements.sortBySelect.value));
   params.set('sort_dir', elements.sortDirSelect.value);
   params.set('limit', String(state.currentLimit));
   params.set('offset', String(state.currentOffset));
@@ -411,6 +430,12 @@ function buildDetailMetric(label, value) {
   return wrapper;
 }
 
+function appendTableCell(row, value) {
+  const cell = document.createElement('td');
+  cell.textContent = value;
+  row.append(cell);
+}
+
 function renderDetail(detail, viewerData) {
   elements.detailTitle.textContent = detail.source_label;
   elements.detailLinks.innerHTML = '';
@@ -454,16 +479,14 @@ function renderDetail(detail, viewerData) {
     .sort((a, b) => (b.volume_a3 ?? 0) - (a.volume_a3 ?? 0));
   for (const volume of sortedVolumes) {
     const row = document.createElement('tr');
-    row.innerHTML = [
-      `<td>${volume.kind}</td>`,
-      `<td>${Number(volume.rank_in_kind) + 1}</td>`,
-      `<td>${prettyNumber(volume.volume_a3, 0)}</td>`,
-      `<td>${prettyNumber(volume.length_a)}</td>`,
-      `<td>${prettyNumber(volume.min_diameter_a)}</td>`,
-      `<td>${prettyNumber(volume.max_diameter_a)}</td>`,
-      `<td>${prettyNumber(volume.cross_section_circularity, 2)}</td>`,
-      `<td>${prettyNumber(volume.cross_section_uniformity, 2)}</td>`,
-    ].join('');
+    appendTableCell(row, volume.kind);
+    appendTableCell(row, prettyNumber(volume.rank_in_kind, 0));
+    appendTableCell(row, prettyNumber(volume.volume_a3, 0));
+    appendTableCell(row, prettyNumber(volume.length_a));
+    appendTableCell(row, prettyNumber(volume.min_diameter_a));
+    appendTableCell(row, prettyNumber(volume.max_diameter_a));
+    appendTableCell(row, prettyNumber(volume.cross_section_circularity, 2));
+    appendTableCell(row, prettyNumber(volume.cross_section_uniformity, 2));
     elements.detailVolumes.append(row);
   }
 }
@@ -792,7 +815,9 @@ function setActiveFilterPresetName(name) {
 function captureFilterState() {
   const data = {};
   for (const el of elements.filtersForm.elements) {
-    if (el.name) data[el.name] = el.value;
+    if (el.name) {
+      data[el.name] = el.name === 'sort_by' ? normalizeSortBy(el.value) : el.value;
+    }
   }
   data.pdb_id_query = elements.pdbIdQueryInput.value;
   return data;
@@ -801,7 +826,12 @@ function captureFilterState() {
 function clearFilterState() {
   elements.filtersForm.reset();
   for (const el of elements.filtersForm.elements) {
-    if (!el || !el.name || NON_FILTER_FORM_FIELD_NAMES.has(el.name)) continue;
+    if (!el || !el.name) continue;
+    if (el.name === 'sort_by') {
+      el.value = normalizeSortBy(el.value);
+      continue;
+    }
+    if (NON_FILTER_FORM_FIELD_NAMES.has(el.name)) continue;
     if (el.type === 'checkbox' || el.type === 'radio') {
       el.checked = false;
       continue;
@@ -817,7 +847,7 @@ function applyFilterState(data) {
   clearFilterState();
   for (const el of elements.filtersForm.elements) {
     if (el.name && data[el.name] !== undefined) {
-      el.value = data[el.name];
+      el.value = el.name === 'sort_by' ? normalizeSortBy(data[el.name]) : data[el.name];
     }
   }
   elements.pdbIdQueryInput.value = data.pdb_id_query ?? '';

@@ -121,8 +121,9 @@ def run_single_case(
     largest_type = None
     largest_volume = None
     if not annotation_df.empty:
-        largest_type = str(annotation_df.iloc[0]["type"])
-        largest_volume = float(annotation_df.iloc[0]["volume"])
+        largest_row = annotation_df.loc[annotation_df["volume"].astype(float).idxmax()]
+        largest_type = str(largest_row.get("display_type") or largest_row["type"])
+        largest_volume = float(largest_row["volume"])
 
     normalized_stage_timings, tracked_stage_seconds = _normalize_stage_timings(
         stage_timings,

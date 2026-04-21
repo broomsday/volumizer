@@ -3005,9 +3005,14 @@ def _build_annotation_payload(
     utils = _utils_module()
     volumes = json.loads(annotation_df.to_json(orient="records"))
     largest_type = None
+    largest_volume_value = None
     if volumes:
-        largest_volume = volumes[0]
+        largest_volume = max(
+            volumes,
+            key=lambda volume: float(volume.get("volume") or 0.0),
+        )
         largest_type = largest_volume.get("display_type") or largest_volume.get("type")
+        largest_volume_value = largest_volume.get("volume")
     payload = {
         "source": source_label,
         "input_path": str(input_path),
@@ -3016,7 +3021,7 @@ def _build_annotation_payload(
         "resolution": utils.VOXEL_SIZE,
         "num_volumes": len(volumes),
         "largest_type": largest_type,
-        "largest_volume": volumes[0]["volume"] if volumes else None,
+        "largest_volume": largest_volume_value,
         "volumes": volumes,
     }
     if prepared_structure is not None:

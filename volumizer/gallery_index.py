@@ -138,6 +138,11 @@ def _records_from_dataframe_json(payload: dict[str, Any]) -> list[dict[str, Any]
     if any(not isinstance(payload[column], dict) for column in required_columns):
         return []
 
+    optional_columns = (
+        "display_type",
+        "cross_section_circularity",
+        "cross_section_uniformity",
+    )
     row_keys = sorted(
         set(payload["type"].keys()),
         key=_sort_row_key,
@@ -145,16 +150,19 @@ def _records_from_dataframe_json(payload: dict[str, Any]) -> list[dict[str, Any]
 
     records: list[dict[str, Any]] = []
     for row_key in row_keys:
-        records.append(
-            {
-                "id": payload["id"].get(row_key),
-                "type": payload["type"].get(row_key),
-                "volume": payload["volume"].get(row_key),
-                "x": payload["x"].get(row_key),
-                "y": payload["y"].get(row_key),
-                "z": payload["z"].get(row_key),
-            }
-        )
+        record = {
+            "id": payload["id"].get(row_key),
+            "type": payload["type"].get(row_key),
+            "volume": payload["volume"].get(row_key),
+            "x": payload["x"].get(row_key),
+            "y": payload["y"].get(row_key),
+            "z": payload["z"].get(row_key),
+        }
+        for column in optional_columns:
+            column_values = payload.get(column)
+            if isinstance(column_values, dict):
+                record[column] = column_values.get(row_key)
+        records.append(record)
 
     return records
 
@@ -182,9 +190,12 @@ def _normalize_volume_rows(
     }
 
     for raw_row in volume_records:
-        kind = str(raw_row.get("type", "")).strip().lower()
-        if kind not in _INDEXABLE_VOLUME_KINDS:
+        topology_kind = str(raw_row.get("type", "")).strip().lower()
+        if topology_kind not in _INDEXABLE_VOLUME_KINDS:
             continue
+
+        display_kind = str(raw_row.get("display_type") or topology_kind).strip().lower()
+        kind = display_kind if display_kind in _INDEXABLE_VOLUME_KINDS else topology_kind
 
         volume_value = _safe_float(raw_row.get("volume"))
         if volume_value is None:

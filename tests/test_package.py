@@ -76,7 +76,7 @@ def test_volume_annotations(
         (
             RCSB70_RUN_DIR / "5J3V.cif",
             19008.0,
-            "pore",
+            "pocket",
         ),
         (
             RCSB70_RUN_DIR / "9LJ9.cif",

@@ -351,6 +351,15 @@ def test_query_gallery_index_sorts_by_pocket_volume(tmp_path: Path):
     assert labels[0] == "hit-a"
     assert result["rows"][0]["largest_pocket_volume_a3"] == 40.0
 
+    legacy_alias_result = gallery_query.query_gallery_index(
+        db_path=db_path,
+        run_id=run_id,
+        sort_by="largest_pocket_volume_a3",
+        sort_dir="desc",
+    )
+    assert legacy_alias_result["sort_by"] == "largest_pocket_volume"
+    assert [row["source_label"] for row in legacy_alias_result["rows"]][0] == "hit-a"
+
 
 def test_query_gallery_index_filters_and_sorts_by_cross_section_metrics(tmp_path: Path):
     db_path, run_id = _build_query_fixture_db(tmp_path)
