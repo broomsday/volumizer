@@ -158,6 +158,14 @@ def test_build_parser_defaults_necked_pocket_cavity_to_enabled():
     assert args.necked_pocket_cavity is True
 
 
+def test_build_parser_cluster_defaults_merge_mouth_and_necked_pocket_display():
+    args = cli.build_parser().parse_args(
+        ["cluster", "--cluster-identity", "30", "--output-dir", "out"]
+    )
+    assert args.merge_mouth_gap_voxels == 1
+    assert args.necked_pocket_cavity is True
+
+
 def test_build_parser_no_necked_pocket_cavity_disables_display_override():
     args = cli.build_parser().parse_args(
         [

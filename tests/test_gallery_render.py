@@ -703,6 +703,8 @@ def test_render_single_structure_with_node_passes_backend_flags_and_parses_timin
 ):
     structure_path = tmp_path / "sample.cif"
     structure_path.write_text("data_test\n#\n", encoding="utf-8")
+    annotation_path = tmp_path / "sample.annotation.json"
+    annotation_path.write_text('{"volumes":[]}', encoding="utf-8")
     output_dir = tmp_path / "renders"
     captured: dict[str, object] = {}
 
@@ -726,6 +728,7 @@ def test_render_single_structure_with_node_passes_backend_flags_and_parses_timin
         renderer_script=tmp_path / "renderer.mjs",
         node_executable="node",
         structure_path=structure_path,
+        annotation_path=annotation_path,
         output_dir=output_dir,
         width=320,
         height=240,
@@ -741,6 +744,8 @@ def test_render_single_structure_with_node_passes_backend_flags_and_parses_timin
     assert command[command.index("--render-backend") + 1] == "auto"
     assert "--axis-render-mode" in command
     assert command[command.index("--axis-render-mode") + 1] == "fast"
+    assert "--annotation" in command
+    assert command[command.index("--annotation") + 1] == str(annotation_path)
     assert captured["timeout"] == 12.5
     assert result["timing"]["backend_used"] == "software"
     assert result["timing"]["fallback_used"] is True

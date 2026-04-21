@@ -364,6 +364,107 @@ def test_gallery_web_static_filter_presets_restore_active_selection():
     assert "Number(volume.rank_in_kind) + 1" not in app_js
 
 
+def test_gallery_web_static_viewer_uses_display_type_for_volume_selections():
+    static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
+    app_js_path = static_dir / "app.js"
+
+    node_script = textwrap.dedent(
+        f"""
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+
+        const source = fs.readFileSync({str(app_js_path)!r}, 'utf8')
+          + '\\n;globalThis.__galleryTest = {{ buildVolumeDisplaySelections, volumeScript }};';
+
+        function stubElement() {{
+          return {{
+            value: '',
+            innerHTML: '',
+            textContent: '',
+            hidden: false,
+            disabled: false,
+            open: false,
+            options: [],
+            append() {{}},
+            appendChild() {{}},
+            addEventListener() {{}},
+            querySelectorAll() {{ return []; }},
+            getBoundingClientRect() {{
+              return {{ top: 0, left: 0, width: 0, height: 0 }};
+            }},
+            showModal() {{}},
+            close() {{}},
+          }};
+        }}
+
+        const document = {{
+          getElementById() {{ return stubElement(); }},
+          createElement() {{ return stubElement(); }},
+        }};
+        const context = {{
+          console,
+          document,
+          window: {{ addEventListener() {{}}, molstar: null }},
+          localStorage: {{
+            getItem() {{ return null; }},
+            setItem() {{}},
+            removeItem() {{}},
+          }},
+          URLSearchParams,
+          fetch: async () => ({{ ok: true, json: async () => ({{}}) }}),
+          confirm: () => true,
+          prompt: () => '',
+          alert: () => {{}},
+          Set,
+          Number,
+          String,
+          JSON,
+          Promise,
+          Object,
+          Array,
+          Math,
+        }};
+
+        vm.createContext(context);
+        vm.runInContext(source, context);
+
+        const annotation = {{
+          volumes: [
+            {{ id: 0, type: 'pore', display_type: 'pocket' }},
+            {{ id: 1, type: 'pocket', display_type: 'cavity' }},
+            {{ id: 2, type: 'pocket' }},
+          ],
+        }};
+        const selections = context.__galleryTest.buildVolumeDisplaySelections(annotation);
+        const pore = context.__galleryTest.volumeScript('POR', 'core', selections)
+          .type.params.expression;
+        const pocket = context.__galleryTest.volumeScript('POK', 'core', selections)
+          .type.params.expression;
+        const cavity = context.__galleryTest.volumeScript('CAV', 'mouth', selections)
+          .type.params.expression;
+
+        console.log(JSON.stringify({{ pore, pocket, cavity }}));
+        """
+    )
+
+    result = subprocess.run(
+        ["node", "-e", node_script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)
+
+    assert "(= atom.auth_seq_id -999999999)" in payload["pore"]
+    assert "(= atom.label_comp_id POR)" in payload["pocket"]
+    assert "(= atom.auth_seq_id 0)" in payload["pocket"]
+    assert "(= atom.label_comp_id POK)" in payload["pocket"]
+    assert "(= atom.auth_seq_id 2)" in payload["pocket"]
+    assert "(= atom.label_comp_id POK)" in payload["cavity"]
+    assert "(= atom.auth_seq_id 1)" in payload["cavity"]
+    assert ":atom-test (> atom.B_iso_or_equiv 0)" in payload["cavity"]
+
+
 def test_gallery_web_static_sparse_filter_presets_reset_previous_values():
     static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
     app_js_path = static_dir / "app.js"
