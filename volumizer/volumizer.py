@@ -77,6 +77,7 @@ def annotate_structure_volumes(
     min_voxels: Optional[int] = 4,
     min_volume: Optional[float] = None,
     stage_timings: dict[str, float] | None = None,
+    enable_necked_pocket_cavity: bool = True,
 ) -> tuple[pd.DataFrame, bts.AtomArray]:
     """
     Perform analysis of a prepared structure.
@@ -236,14 +237,15 @@ def annotate_structure_volumes(
         utils.make_annotation_dataframe,
         annotation,
     )
-    annotation_df = _timed_call(
-        stage_timings,
-        "apply_display_type_overrides",
-        _apply_display_type_overrides,
-        annotation_df,
-        voxel_grid,
-        pockets,
-    )
+    if enable_necked_pocket_cavity:
+        annotation_df = _timed_call(
+            stage_timings,
+            "apply_display_type_overrides",
+            _apply_display_type_overrides,
+            annotation_df,
+            voxel_grid,
+            pockets,
+        )
 
     annotation_structure = _timed_call(
         stage_timings,

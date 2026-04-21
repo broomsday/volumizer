@@ -57,6 +57,7 @@ def _make_args(tmp_path: Path, **overrides) -> SimpleNamespace:
         "min_voxels": 4,
         "min_volume": None,
         "include_hubs": False,
+        "necked_pocket_cavity": True,
         "backend": None,
         "surface_connectivity": "custom18",
         "merge_mouth_gap_voxels": 1,
@@ -150,6 +151,27 @@ def test_build_parser_defaults_merge_mouth_gap_voxels_to_one():
     assert args.merge_mouth_gap_voxels == 1
 
 
+def test_build_parser_defaults_necked_pocket_cavity_to_enabled():
+    args = cli.build_parser().parse_args(
+        ["analyze", "--input", "input.cif", "--output-dir", "out"]
+    )
+    assert args.necked_pocket_cavity is True
+
+
+def test_build_parser_no_necked_pocket_cavity_disables_display_override():
+    args = cli.build_parser().parse_args(
+        [
+            "analyze",
+            "--input",
+            "input.cif",
+            "--output-dir",
+            "out",
+            "--no-necked-pocket-cavity",
+        ]
+    )
+    assert args.necked_pocket_cavity is False
+
+
 def test_build_parser_defaults_cluster_max_residues_to_twenty_thousand():
     args = cli.build_parser().parse_args(
         ["cluster", "--cluster-identity", "30", "--output-dir", "out"]
@@ -157,7 +179,7 @@ def test_build_parser_defaults_cluster_max_residues_to_twenty_thousand():
     assert args.cluster_max_residues == 20000
 
 
-def test_build_analysis_worker_command_include_hubs_flag():
+def test_build_analysis_worker_command_include_hubs_and_necked_pocket_flags():
     command = cli._build_analysis_worker_command(
         source_label="sample",
         input_path=Path("input.cif"),
@@ -173,8 +195,10 @@ def test_build_analysis_worker_command_include_hubs_flag():
         merge_mouth_gap_voxels=1,
         max_residues=None,
         include_hubs=False,
+        enable_necked_pocket_cavity=True,
     )
     assert "--include-hubs" not in command
+    assert "--no-necked-pocket-cavity" not in command
     assert command[command.index("--surface-connectivity") + 1] == "custom18"
     assert command[command.index("--merge-mouth-gap-voxels") + 1] == "1"
 
@@ -193,8 +217,10 @@ def test_build_analysis_worker_command_include_hubs_flag():
         merge_mouth_gap_voxels=-1,
         max_residues=None,
         include_hubs=True,
+        enable_necked_pocket_cavity=False,
     )
     assert "--include-hubs" in include_hubs_command
+    assert "--no-necked-pocket-cavity" in include_hubs_command
     assert include_hubs_command[
         include_hubs_command.index("--surface-connectivity") + 1
     ] == "18"
@@ -931,7 +957,7 @@ def test_analyze_structure_file_excludes_hubs_from_written_outputs_by_default(
     )
     dummy_volumizer = SimpleNamespace(
         prepare_pdb_structure=lambda structure: _DummyOutputStructure(["PRO"]),
-        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None, enable_necked_pocket_cavity=True: (
             pd.DataFrame(
                 [
                     {"id": 0, "type": "hub", "volume": 50.0},
@@ -993,7 +1019,7 @@ def test_analyze_structure_file_include_hubs_preserves_written_outputs(
     )
     dummy_volumizer = SimpleNamespace(
         prepare_pdb_structure=lambda structure: _DummyOutputStructure(["PRO"]),
-        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None, enable_necked_pocket_cavity=True: (
             pd.DataFrame(
                 [
                     {"id": 0, "type": "hub", "volume": 50.0},
@@ -1054,7 +1080,7 @@ def test_analyze_structure_file_prefers_display_type_in_written_payload(
     )
     dummy_volumizer = SimpleNamespace(
         prepare_pdb_structure=lambda structure: _DummyOutputStructure(["PRO"]),
-        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None, enable_necked_pocket_cavity=True: (
             pd.DataFrame(
                 [
                     {
@@ -2037,7 +2063,7 @@ def test_analyze_structure_file_removes_partial_outputs_before_reanalysis(
     )
     dummy_volumizer = SimpleNamespace(
         prepare_pdb_structure=lambda structure: "prepared",
-        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None, enable_necked_pocket_cavity=True: (
             pd.DataFrame([{"id": 1, "type": "pore", "volume": 12.0}]),
             "annotation",
         ),
@@ -2100,7 +2126,7 @@ def test_analyze_structure_file_removes_stale_status_record_before_analysis(
     )
     dummy_volumizer = SimpleNamespace(
         prepare_pdb_structure=lambda structure: "prepared",
-        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None, enable_necked_pocket_cavity=True: (
             pd.DataFrame([{"id": 1, "type": "pore", "volume": 12.0}]),
             "annotation",
         ),
@@ -2141,7 +2167,7 @@ def test_analyze_structure_file_enforces_post_assembly_residue_limit(
     )
     dummy_volumizer = SimpleNamespace(
         prepare_pdb_structure=lambda structure: "prepared",
-        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None: (_ for _ in ()).throw(
+        annotate_structure_volumes=lambda prepared_structure, min_voxels=2, min_volume=None, enable_necked_pocket_cavity=True: (_ for _ in ()).throw(
             AssertionError("annotation should not run for oversize assemblies")
         ),
     )

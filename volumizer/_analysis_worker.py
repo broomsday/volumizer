@@ -52,6 +52,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-residues", type=int, default=None)
     parser.add_argument("--include-hubs", action="store_true")
+    parser.add_argument(
+        "--no-necked-pocket-cavity",
+        action="store_false",
+        dest="necked_pocket_cavity",
+        default=True,
+    )
     return parser
 
 
@@ -83,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
             assembly_policy=str(args.assembly_policy),
             max_residues=args.max_residues,
             include_hubs=bool(args.include_hubs),
+            enable_necked_pocket_cavity=bool(args.necked_pocket_cavity),
         )
     except PostAssemblyResidueLimitExceeded as error:
         json.dump(

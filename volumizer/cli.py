@@ -249,6 +249,16 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--no-necked-pocket-cavity",
+        action="store_false",
+        dest="necked_pocket_cavity",
+        default=True,
+        help=(
+            "Disable the display-only relabel that presents large pockets "
+            "with single-voxel necks as cavities."
+        ),
+    )
+    parser.add_argument(
         "--backend",
         choices=sorted(VALID_BACKENDS),
         default=None,
@@ -3058,6 +3068,7 @@ def analyze_structure_file(
     assembly_policy: str = DEFAULT_ASSEMBLY_POLICY,
     max_residues: int | None = None,
     include_hubs: bool = False,
+    enable_necked_pocket_cavity: bool = True,
 ) -> dict:
     """
     Run volumizer on one structure file and write outputs.
@@ -3103,6 +3114,7 @@ def analyze_structure_file(
         prepared_structure,
         min_voxels=min_voxels,
         min_volume=min_volume,
+        enable_necked_pocket_cavity=bool(enable_necked_pocket_cavity),
     )
     output_annotation_df = _filter_annotation_dataframe_for_output(
         annotation_df,
@@ -3169,6 +3181,7 @@ def _invoke_analysis_callable(
     assembly_policy: str,
     max_residues: int | None = None,
     include_hubs: bool = False,
+    enable_necked_pocket_cavity: bool = True,
 ) -> dict:
     kwargs = {
         "source_label": source_label,
@@ -3183,6 +3196,8 @@ def _invoke_analysis_callable(
         kwargs["max_residues"] = int(max_residues)
     if _callable_accepts_keyword(fn, "include_hubs"):
         kwargs["include_hubs"] = bool(include_hubs)
+    if _callable_accepts_keyword(fn, "enable_necked_pocket_cavity"):
+        kwargs["enable_necked_pocket_cavity"] = bool(enable_necked_pocket_cavity)
     return fn(**kwargs)
 
 
@@ -3210,6 +3225,7 @@ def _build_analysis_worker_command(
     merge_mouth_gap_voxels: int,
     max_residues: int | None = None,
     include_hubs: bool = False,
+    enable_necked_pocket_cavity: bool = True,
 ) -> list[str]:
     command = [
         sys.executable,
@@ -3244,6 +3260,8 @@ def _build_analysis_worker_command(
         command.extend(["--max-residues", str(int(max_residues))])
     if include_hubs:
         command.append("--include-hubs")
+    if not enable_necked_pocket_cavity:
+        command.append("--no-necked-pocket-cavity")
     return command
 
 
@@ -3337,6 +3355,7 @@ def _run_isolated_analysis_worker(
     max_residues: int | None = None,
     worker_timeout_seconds: float | None = None,
     include_hubs: bool = False,
+    enable_necked_pocket_cavity: bool = True,
 ) -> dict:
     env = _build_analysis_worker_env()
     backend_attempts: list[str | None] = [backend]
@@ -3364,6 +3383,7 @@ def _run_isolated_analysis_worker(
                     merge_mouth_gap_voxels=merge_mouth_gap_voxels,
                     max_residues=max_residues,
                     include_hubs=include_hubs,
+                    enable_necked_pocket_cavity=enable_necked_pocket_cavity,
                 ),
                 capture_output=True,
                 text=True,
@@ -3543,6 +3563,7 @@ def _analyze_structures(
                         max_residues=runtime_max_residues,
                         worker_timeout_seconds=worker_timeout_seconds,
                         include_hubs=bool(args.include_hubs),
+                        enable_necked_pocket_cavity=bool(args.necked_pocket_cavity),
                     )
                 else:
                     result = _invoke_analysis_callable(
@@ -3560,6 +3581,7 @@ def _analyze_structures(
                         assembly_policy=str(args.assembly_policy),
                         max_residues=runtime_max_residues,
                         include_hubs=bool(args.include_hubs),
+                        enable_necked_pocket_cavity=bool(args.necked_pocket_cavity),
                     )
                 tracker.mark_result(
                     _enrich_structure_entry(
@@ -3683,6 +3705,7 @@ def _analyze_structures(
                         "max_residues": runtime_max_residues,
                         "worker_timeout_seconds": worker_timeout_seconds,
                         "include_hubs": bool(args.include_hubs),
+                        "enable_necked_pocket_cavity": bool(args.necked_pocket_cavity),
                     }
                     if use_isolated_workers
                     else {
@@ -3700,6 +3723,7 @@ def _analyze_structures(
                         "assembly_policy": str(args.assembly_policy),
                         "max_residues": runtime_max_residues,
                         "include_hubs": bool(args.include_hubs),
+                        "enable_necked_pocket_cavity": bool(args.necked_pocket_cavity),
                     }
                 ),
             ): (index, source_label, input_path)
@@ -4025,6 +4049,7 @@ def _run_analysis_command(args: argparse.Namespace) -> int:
             ),
             "keep_non_protein": args.keep_non_protein,
             "include_hubs": args.include_hubs,
+            "necked_pocket_cavity": args.necked_pocket_cavity,
             "jobs": args.jobs,
             "analysis_workers": analysis_workers,
             "timeout": args.timeout,
