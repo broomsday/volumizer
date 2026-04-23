@@ -127,6 +127,50 @@ def test_volumes_to_structure_combines_voxel_groups():
         assert float(structure.b_factor[index]) == b_factor
 
 
+def test_volumes_to_structure_uses_display_type_overrides_for_labels():
+    voxel_centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    pockets = {5: _make_voxel_group(indices={0, 1}, surface_indices={1})}
+    cavities = {9: _make_voxel_group(indices={2}, surface_indices={2})}
+
+    structure = pdb.volumes_to_structure(
+        voxel_grid=DummyVoxelGrid(voxel_centers),
+        hubs={},
+        pores={},
+        pockets=pockets,
+        cavities=cavities,
+        occluded={},
+        display_type_overrides={("POK", 5): "CAV"},
+    )
+
+    assert len(structure) == 3
+    by_atom_id = {
+        int(structure.atom_id[index]): (
+            str(structure.res_name[index]),
+            str(structure.chain_id[index]),
+            str(structure.atom_name[index]),
+            str(structure.element[index]),
+            int(structure.res_id[index]),
+            float(structure.b_factor[index]),
+        )
+        for index in range(len(structure))
+    }
+
+    assert by_atom_id == {
+        0: ("CAV", "D", "S", "S", 5, 0.0),
+        1: ("CAV", "D", "S", "S", 5, 50.0),
+        2: ("CAV", "D", "S", "S", 9, 50.0),
+    }
+    assert "POK" not in set(np.asarray(structure.res_name).tolist())
+
+
 def test_save_structure_cif_preserves_b_factor_after_concat(tmp_path: Path):
     protein_structure = _make_test_protein_structure()
     pdb.ensure_b_factor_annotation(protein_structure)

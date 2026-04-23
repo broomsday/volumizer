@@ -15,6 +15,13 @@ from volumizer.types import Annotation
 
 
 _T = TypeVar("_T")
+_VOLUME_TYPE_TO_STRUCTURE_CODE = {
+    "hub": "HUB",
+    "pore": "POR",
+    "pocket": "POK",
+    "cavity": "CAV",
+    "occluded": "OCC",
+}
 
 
 def _timed_call(
@@ -70,6 +77,39 @@ def _apply_display_type_overrides(
             updated_annotation_df.at[row_index, "display_type"] = display_type
 
     return updated_annotation_df
+
+
+def _get_structure_display_type_overrides(
+    annotation_df: pd.DataFrame,
+) -> dict[tuple[str, int], str]:
+    if (
+        len(annotation_df) == 0
+        or "type" not in annotation_df.columns
+        or "display_type" not in annotation_df.columns
+        or "id" not in annotation_df.columns
+    ):
+        return {}
+
+    display_type_overrides: dict[tuple[str, int], str] = {}
+    for _, row in annotation_df.iterrows():
+        raw_type = str(row["type"]).strip().lower()
+        display_type = str(row["display_type"]).strip().lower()
+        if raw_type == display_type:
+            continue
+
+        raw_code = _VOLUME_TYPE_TO_STRUCTURE_CODE.get(raw_type)
+        display_code = _VOLUME_TYPE_TO_STRUCTURE_CODE.get(display_type)
+        if raw_code is None or display_code is None:
+            continue
+
+        try:
+            volume_id = int(row["id"])
+        except (TypeError, ValueError):
+            continue
+
+        display_type_overrides[(raw_code, volume_id)] = display_code
+
+    return display_type_overrides
 
 
 def annotate_structure_volumes(
@@ -246,6 +286,7 @@ def annotate_structure_volumes(
             voxel_grid,
             pockets,
         )
+    display_type_overrides = _get_structure_display_type_overrides(annotation_df)
 
     annotation_structure = _timed_call(
         stage_timings,
@@ -258,6 +299,7 @@ def annotate_structure_volumes(
         cavities,
         occluded,
         existing_chain_ids=set(structure.chain_id),
+        display_type_overrides=display_type_overrides,
     )
 
     return annotation_df, annotation_structure

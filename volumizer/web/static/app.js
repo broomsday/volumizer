@@ -99,15 +99,7 @@ const BUILTIN_DISPLAY_PRESETS = Object.freeze({
   ]),
 });
 
-const RAW_VOLUME_KIND_TO_COMP_ID = Object.freeze({
-  hub: 'HUB',
-  pore: 'POR',
-  pocket: 'POK',
-  cavity: 'CAV',
-  occluded: 'OCC',
-});
 const NON_PROTEIN_COMP_IDS = ['HUB', 'POR', 'POK', 'CAV', 'OCC'];
-const DISPLAY_VOLUME_COMP_IDS = ['POR', 'POK', 'CAV'];
 const VOLUME_STYLES = {
   POR: {
     label: 'Pores',
@@ -135,91 +127,8 @@ const PROTEIN_PALETTE = [
   0x4CAF50, 0x959595, 0x66BB6A, 0x7A7A7A,
 ];
 
-function normalizeVolumeKind(value) {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  return RAW_VOLUME_KIND_TO_COMP_ID[normalized] ? normalized : null;
-}
-
-function normalizeVolumeId(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || !Number.isInteger(numeric)) return null;
-  return numeric;
-}
-
-function recordsFromAnnotationPayload(payload) {
-  if (Array.isArray(payload)) {
-    return payload.filter((row) => row && typeof row === 'object');
-  }
-
-  if (!payload || typeof payload !== 'object') return [];
-  if (Array.isArray(payload.volumes)) {
-    return payload.volumes.filter((row) => row && typeof row === 'object');
-  }
-
-  const ids = payload.id;
-  const types = payload.type;
-  if (!ids || !types || typeof ids !== 'object' || typeof types !== 'object') {
-    return [];
-  }
-
-  return Object.keys(types)
-    .sort((left, right) => Number(left) - Number(right))
-    .map((key) => ({
-      id: ids[key],
-      type: types[key],
-      display_type: payload.display_type && typeof payload.display_type === 'object'
-        ? payload.display_type[key]
-        : undefined,
-    }));
-}
-
-function buildVolumeDisplaySelections(annotationPayload) {
-  const selections = Object.fromEntries(
-    DISPLAY_VOLUME_COMP_IDS.map((compId) => [compId, []]),
-  );
-  let hasUsableAnnotation = false;
-
-  for (const record of recordsFromAnnotationPayload(annotationPayload)) {
-    const rawKind = normalizeVolumeKind(record.type);
-    if (!rawKind) continue;
-
-    const rawCompId = RAW_VOLUME_KIND_TO_COMP_ID[rawKind];
-    if (!rawCompId) continue;
-
-    const displayKind = normalizeVolumeKind(record.display_type) || rawKind;
-    const displayCompId = RAW_VOLUME_KIND_TO_COMP_ID[displayKind];
-    if (!DISPLAY_VOLUME_COMP_IDS.includes(displayCompId)) continue;
-
-    const id = normalizeVolumeId(record.id);
-    if (id === null) continue;
-
-    selections[displayCompId].push({ compId: rawCompId, id });
-    hasUsableAnnotation = true;
-  }
-
-  return hasUsableAnnotation ? selections : null;
-}
-
-function buildVolumeSelectionExpression(compId, displaySelections) {
-  if (!displaySelections) {
-    return `(= atom.label_comp_id ${compId})`;
-  }
-
-  const selectors = displaySelections[compId] || [];
-  if (selectors.length === 0) {
-    return `(and (= atom.label_comp_id ${compId}) (= atom.auth_seq_id -999999999))`;
-  }
-
-  const terms = selectors.map(
-    (selector) =>
-      `(and (= atom.label_comp_id ${selector.compId}) (= atom.auth_seq_id ${selector.id}))`,
-  );
-  return terms.length === 1 ? terms[0] : `(or ${terms.join(' ')})`;
-}
-
 // MolScript text expression selecting displayed volumes and optional shell flag.
-function volumeScript(compId, variant = 'all', displaySelections = null) {
+function volumeScript(compId, variant = 'all') {
   let atomTest = '';
   if (variant === 'core') {
     atomTest = ' :atom-test (<= atom.B_iso_or_equiv 0)';
@@ -237,10 +146,7 @@ function volumeScript(compId, variant = 'all', displaySelections = null) {
       name: 'script',
       params: {
         language: 'mol-script',
-        expression: (
-          `(sel.atom.atom-groups :residue-test `
-          + `${buildVolumeSelectionExpression(compId, displaySelections)}${atomTest})`
-        ),
+        expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${compId})${atomTest})`,
       },
     },
     nullIfEmpty: true,
@@ -339,16 +245,6 @@ async function fetchJson(url) {
     throw new Error(detail);
   }
   return response.json();
-}
-
-async function fetchOptionalJson(url) {
-  if (!url) return null;
-  try {
-    return await fetchJson(url);
-  } catch (error) {
-    console.warn(`Unable to load optional JSON ${url}:`, error);
-    return null;
-  }
 }
 
 async function loadHealth() {
@@ -626,17 +522,15 @@ async function mountViewer(viewerData) {
   });
 
   state.currentViewer = viewer;
-  const annotationPayload = await fetchOptionalJson(viewerData.annotation_url);
-  const displaySelections = buildVolumeDisplaySelections(annotationPayload);
   await viewer.loadStructureFromUrl(
     viewerData.structure_url,
     viewerData.structure_format,
     viewerData.structure_format === 'bcif',
   );
-  await applyVolumeStyle(viewer, displaySelections);
+  await applyVolumeStyle(viewer);
 }
 
-async function applyVolumeStyle(viewer, displaySelections = null) {
+async function applyVolumeStyle(viewer) {
   try {
     const plugin = viewer.plugin;
     if (!plugin || !plugin.managers || !plugin.managers.structure) return;
@@ -698,12 +592,12 @@ async function applyVolumeStyle(viewer, displaySelections = null) {
       const componentSpecs = [
         {
           key: `volume-${compId.toLowerCase()}-core`,
-          selection: volumeScript(compId, 'core', displaySelections),
+          selection: volumeScript(compId, 'core'),
           color: style.color,
         },
         {
           key: `volume-${compId.toLowerCase()}-mouth`,
-          selection: volumeScript(compId, 'mouth', displaySelections),
+          selection: volumeScript(compId, 'mouth'),
           color: style.mouthColor,
         },
       ];

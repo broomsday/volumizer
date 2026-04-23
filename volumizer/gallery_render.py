@@ -47,7 +47,6 @@ class PlannedRenderJob:
     run_id: str
     source_label: str
     structure_path: Path
-    annotation_path: Path | None
     output_dir: Path
     x_path: Path
     y_path: Path
@@ -223,7 +222,6 @@ def _render_single_structure_with_node(
     renderer_script: Path,
     node_executable: str,
     structure_path: Path,
-    annotation_path: Path | None = None,
     output_dir: Path,
     width: int,
     height: int,
@@ -254,8 +252,6 @@ def _render_single_structure_with_node(
         "--axis-render-mode",
         axis_render_mode,
     ]
-    if annotation_path is not None:
-        command.extend(["--annotation", str(annotation_path)])
 
     timeout_seconds = None
     if worker_timeout_seconds is not None and worker_timeout_seconds > 0:
@@ -349,11 +345,6 @@ def _build_planned_job(
         run_id=str(row["run_id"]),
         source_label=source_label,
         structure_path=_coerce_absolute_path(str(row["annotated_cif_path"])),
-        annotation_path=(
-            _coerce_absolute_path(str(row["annotation_json_path"]))
-            if row["annotation_json_path"]
-            else None
-        ),
         output_dir=output_dir,
         x_path=output_dir / AXIS_FILENAMES["x"],
         y_path=output_dir / AXIS_FILENAMES["y"],
@@ -406,7 +397,6 @@ def _execute_render_job(
                 renderer_script=renderer_script,
                 node_executable=node_executable,
                 structure_path=job.structure_path,
-                annotation_path=job.annotation_path,
                 output_dir=job.output_dir,
                 width=width,
                 height=height,
@@ -508,8 +498,7 @@ def render_gallery_thumbnails(
 
     query = (
         "SELECT "
-        "s.structure_id, s.run_id, s.source_label, "
-        "s.annotated_cif_path, s.annotation_json_path, "
+        "s.structure_id, s.run_id, s.source_label, s.annotated_cif_path, "
         "r.render_status, r.render_style_hash "
         "FROM structures s "
         "INNER JOIN renders r ON r.structure_id = s.structure_id "

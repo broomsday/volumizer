@@ -1072,13 +1072,15 @@ def test_analyze_structure_file_prefers_display_type_in_written_payload(
 ):
     input_path = tmp_path / "sample.cif"
     input_path.write_text("dummy", encoding="utf-8")
+    saved_structure = {}
+
+    def _save_structure(structure, output_path):
+        saved_structure["res_name"] = list(structure.res_name)
+        Path(output_path).write_text("filtered-structure", encoding="utf-8")
 
     dummy_pdb = SimpleNamespace(
         load_structure=lambda input_path, assembly_policy="biological": "input",
-        save_structure=lambda structure, output_path: Path(output_path).write_text(
-            "filtered-structure",
-            encoding="utf-8",
-        ),
+        save_structure=_save_structure,
         ensure_b_factor_annotation=lambda structure: None,
         compute_sse_fractions=lambda prepared_structure: {
             "frac_alpha": 0.1,
@@ -1099,7 +1101,7 @@ def test_analyze_structure_file_prefers_display_type_in_written_payload(
                     },
                 ]
             ),
-            _DummyOutputStructure(["POK"]),
+            _DummyOutputStructure(["CAV"]),
         ),
     )
     dummy_utils = SimpleNamespace(
@@ -1126,6 +1128,7 @@ def test_analyze_structure_file_prefers_display_type_in_written_payload(
     assert payload["largest_type"] == "cavity"
     assert payload["volumes"][0]["type"] == "pocket"
     assert payload["volumes"][0]["display_type"] == "cavity"
+    assert saved_structure["res_name"] == ["PRO", "CAV"]
 
 
 def test_run_cli_parallel_jobs_processes_multiple_structures(monkeypatch, tmp_path: Path):

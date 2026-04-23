@@ -11,14 +11,6 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const NODE_TIMING_PREFIX = '__VOLUMIZER_TIMING__ ';
 const VALID_RENDER_BACKENDS = new Set(['software', 'hardware', 'auto']);
 const VALID_AXIS_RENDER_MODES = new Set(['compatibility', 'fast']);
-const RAW_VOLUME_KIND_TO_COMP_ID = Object.freeze({
-  hub: 'HUB',
-  pore: 'POR',
-  pocket: 'POK',
-  cavity: 'CAV',
-  occluded: 'OCC',
-});
-const DISPLAY_VOLUME_COMP_IDS = ['POR', 'POK', 'CAV'];
 
 const USAGE = [
   'Usage: node scripts/molstar_render_single.mjs --structure PATH --format mmcif|pdb|bcif --out-dir DIR [options]',
@@ -26,7 +18,6 @@ const USAGE = [
   'Options:',
   '  --width N                  Output image width (default: 320)',
   '  --height N                 Output image height (default: 240)',
-  '  --annotation PATH          Optional annotation JSON for display-type rendering',
   '  --style-json JSON          Optional style payload passed from Python queue',
   '  --render-backend MODE      software|hardware|auto (default: software)',
   '  --axis-render-mode MODE    compatibility|fast (default: compatibility)',
@@ -46,7 +37,6 @@ function parseArgs(argv) {
     outDir: null,
     width: 320,
     height: 240,
-    annotation: null,
     styleJson: '{}',
     renderBackend: 'software',
     axisRenderMode: 'compatibility',
@@ -70,7 +60,6 @@ function parseArgs(argv) {
     else if (key === 'out-dir') result.outDir = value;
     else if (key === 'width') result.width = Number.parseInt(value, 10);
     else if (key === 'height') result.height = Number.parseInt(value, 10);
-    else if (key === 'annotation') result.annotation = value;
     else if (key === 'style-json') result.styleJson = value;
     else if (key === 'render-backend') result.renderBackend = String(value).toLowerCase();
     else if (key === 'axis-render-mode') result.axisRenderMode = String(value).toLowerCase();
@@ -209,114 +198,6 @@ async function readStructure(structurePath, format) {
     binaryBase64: null,
     textData,
   };
-}
-
-async function readAnnotation(annotationPath) {
-  if (!annotationPath) return null;
-
-  try {
-    const text = await fs.readFile(annotationPath, 'utf8');
-    return JSON.parse(text);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(
-      `[molstar-render] display annotation unavailable, using raw volume labels: ${message}\n`,
-    );
-    return null;
-  }
-}
-
-function normalizeVolumeKind(value) {
-  const normalized = String(value ?? '').trim().toLowerCase();
-  return RAW_VOLUME_KIND_TO_COMP_ID[normalized] ? normalized : null;
-}
-
-function normalizeVolumeId(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric) || !Number.isInteger(numeric)) return null;
-  return numeric;
-}
-
-function recordsFromAnnotationPayload(payload) {
-  if (Array.isArray(payload)) {
-    return payload.filter((row) => row && typeof row === 'object');
-  }
-
-  if (!payload || typeof payload !== 'object') return [];
-  if (Array.isArray(payload.volumes)) {
-    return payload.volumes.filter((row) => row && typeof row === 'object');
-  }
-
-  const ids = payload.id;
-  const types = payload.type;
-  if (!ids || !types || typeof ids !== 'object' || typeof types !== 'object') {
-    return [];
-  }
-
-  return Object.keys(types)
-    .sort((left, right) => Number(left) - Number(right))
-    .map((key) => ({
-      id: ids[key],
-      type: types[key],
-      display_type: payload.display_type && typeof payload.display_type === 'object'
-        ? payload.display_type[key]
-        : undefined,
-    }));
-}
-
-function buildVolumeDisplaySelections(annotationPayload) {
-  const selections = Object.fromEntries(
-    DISPLAY_VOLUME_COMP_IDS.map((compId) => [compId, []]),
-  );
-  let hasUsableAnnotation = false;
-
-  for (const record of recordsFromAnnotationPayload(annotationPayload)) {
-    const rawKind = normalizeVolumeKind(record.type);
-    if (!rawKind) continue;
-
-    const rawCompId = RAW_VOLUME_KIND_TO_COMP_ID[rawKind];
-    if (!rawCompId) continue;
-
-    const displayKind = normalizeVolumeKind(record.display_type) || rawKind;
-    const displayCompId = RAW_VOLUME_KIND_TO_COMP_ID[displayKind];
-    if (!DISPLAY_VOLUME_COMP_IDS.includes(displayCompId)) continue;
-
-    const id = normalizeVolumeId(record.id);
-    if (id === null) continue;
-
-    selections[displayCompId].push({ compId: rawCompId, id });
-    hasUsableAnnotation = true;
-  }
-
-  return hasUsableAnnotation ? selections : null;
-}
-
-function buildVolumeSelectionExpression(compId, displaySelections) {
-  if (!displaySelections) {
-    return `(= atom.label_comp_id ${compId})`;
-  }
-
-  const selectors = displaySelections[compId] || [];
-  if (selectors.length === 0) {
-    return `(and (= atom.label_comp_id ${compId}) (= atom.auth_seq_id -999999999))`;
-  }
-
-  const terms = selectors.map(
-    (selector) =>
-      `(and (= atom.label_comp_id ${selector.compId}) (= atom.auth_seq_id ${selector.id}))`,
-  );
-  return terms.length === 1 ? terms[0] : `(or ${terms.join(' ')})`;
-}
-
-function buildVolumeDisplayExpressions(annotationPayload) {
-  const displaySelections = buildVolumeDisplaySelections(annotationPayload);
-  return Object.fromEntries(
-    DISPLAY_VOLUME_COMP_IDS.map((compId) => [
-      compId,
-      buildVolumeSelectionExpression(compId, displaySelections),
-    ]),
-  );
 }
 
 function clipCifByAxis(cifText, axisIdx) {
@@ -556,14 +437,9 @@ async function loadStructureIntoViewer(page, structureData) {
             { id: 'POK', color: 0x3366CC, label: 'Pockets' },
             { id: 'CAV', color: 0xCC33CC, label: 'Cavities' },
           ];
-          const volumeDisplayExpressions = payload.volumeDisplayExpressions || {};
 
           for (const volumeType of volumeTypes) {
             try {
-              const residueExpression = (
-                volumeDisplayExpressions[volumeType.id]
-                || `(= atom.label_comp_id ${volumeType.id})`
-              );
               const comp = await plugin.builders.structure.tryCreateComponent(
                 structRef.cell,
                 {
@@ -571,7 +447,7 @@ async function loadStructureIntoViewer(page, structureData) {
                     name: 'script',
                     params: {
                       language: 'mol-script',
-                      expression: `(sel.atom.atom-groups :residue-test ${residueExpression})`,
+                      expression: `(sel.atom.atom-groups :residue-test (= atom.label_comp_id ${volumeType.id}))`,
                     },
                   },
                   nullIfEmpty: true,
@@ -806,21 +682,15 @@ async function renderThumbnails(args) {
   const style = JSON.parse(args.styleJson || '{}');
   const structurePath = path.resolve(args.structure);
   const outDir = path.resolve(args.outDir);
-  const annotationPath = args.annotation ? path.resolve(args.annotation) : null;
   const timingJsonlPath = args.timingJsonl ? path.resolve(args.timingJsonl) : null;
 
   await fs.mkdir(outDir, { recursive: true });
 
-  const [chromium, molstarAssets, rawStructureData, annotationPayload] = await Promise.all([
+  const [chromium, molstarAssets, structureData] = await Promise.all([
     loadPlaywright(),
     resolveMolstarAssets(),
     readStructure(structurePath, args.format),
-    readAnnotation(annotationPath),
   ]);
-  const structureData = {
-    ...rawStructureData,
-    volumeDisplayExpressions: buildVolumeDisplayExpressions(annotationPayload),
-  };
 
   const renderStartedAt = performance.now();
   let timing = null;

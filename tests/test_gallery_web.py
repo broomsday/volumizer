@@ -364,9 +364,15 @@ def test_gallery_web_static_filter_presets_restore_active_selection():
     assert "Number(volume.rank_in_kind) + 1" not in app_js
 
 
-def test_gallery_web_static_viewer_uses_display_type_for_volume_selections():
+def test_gallery_web_static_viewer_uses_structure_display_labels_for_volume_selections():
     static_dir = Path(__file__).resolve().parents[1] / "volumizer" / "web" / "static"
     app_js_path = static_dir / "app.js"
+    app_js = app_js_path.read_text(encoding="utf-8")
+
+    assert "buildVolumeDisplaySelections" not in app_js
+    assert "fetchOptionalJson" not in app_js
+    assert "annotationPayload" not in app_js
+    assert "displaySelections" not in app_js
 
     node_script = textwrap.dedent(
         f"""
@@ -374,7 +380,7 @@ def test_gallery_web_static_viewer_uses_display_type_for_volume_selections():
         const vm = require('node:vm');
 
         const source = fs.readFileSync({str(app_js_path)!r}, 'utf8')
-          + '\\n;globalThis.__galleryTest = {{ buildVolumeDisplaySelections, volumeScript }};';
+          + '\\n;globalThis.__galleryTest = {{ volumeScript }};';
 
         function stubElement() {{
           return {{
@@ -428,19 +434,11 @@ def test_gallery_web_static_viewer_uses_display_type_for_volume_selections():
         vm.createContext(context);
         vm.runInContext(source, context);
 
-        const annotation = {{
-          volumes: [
-            {{ id: 0, type: 'pore', display_type: 'pocket' }},
-            {{ id: 1, type: 'pocket', display_type: 'cavity' }},
-            {{ id: 2, type: 'pocket' }},
-          ],
-        }};
-        const selections = context.__galleryTest.buildVolumeDisplaySelections(annotation);
-        const pore = context.__galleryTest.volumeScript('POR', 'core', selections)
+        const pore = context.__galleryTest.volumeScript('POR', 'core')
           .type.params.expression;
-        const pocket = context.__galleryTest.volumeScript('POK', 'core', selections)
+        const pocket = context.__galleryTest.volumeScript('POK', 'core')
           .type.params.expression;
-        const cavity = context.__galleryTest.volumeScript('CAV', 'mouth', selections)
+        const cavity = context.__galleryTest.volumeScript('CAV', 'mouth')
           .type.params.expression;
 
         console.log(JSON.stringify({{ pore, pocket, cavity }}));
@@ -455,14 +453,18 @@ def test_gallery_web_static_viewer_uses_display_type_for_volume_selections():
     )
     payload = json.loads(result.stdout)
 
-    assert "(= atom.auth_seq_id -999999999)" in payload["pore"]
-    assert "(= atom.label_comp_id POR)" in payload["pocket"]
-    assert "(= atom.auth_seq_id 0)" in payload["pocket"]
-    assert "(= atom.label_comp_id POK)" in payload["pocket"]
-    assert "(= atom.auth_seq_id 2)" in payload["pocket"]
-    assert "(= atom.label_comp_id POK)" in payload["cavity"]
-    assert "(= atom.auth_seq_id 1)" in payload["cavity"]
-    assert ":atom-test (> atom.B_iso_or_equiv 0)" in payload["cavity"]
+    assert payload["pore"] == (
+        "(sel.atom.atom-groups :residue-test "
+        "(= atom.label_comp_id POR) :atom-test (<= atom.B_iso_or_equiv 0))"
+    )
+    assert payload["pocket"] == (
+        "(sel.atom.atom-groups :residue-test "
+        "(= atom.label_comp_id POK) :atom-test (<= atom.B_iso_or_equiv 0))"
+    )
+    assert payload["cavity"] == (
+        "(sel.atom.atom-groups :residue-test "
+        "(= atom.label_comp_id CAV) :atom-test (> atom.B_iso_or_equiv 0))"
+    )
 
 
 def test_gallery_web_static_sparse_filter_presets_reset_previous_values():
