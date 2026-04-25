@@ -265,6 +265,12 @@ If you want to retry rows whose thumbnails previously failed to render without r
 ./gallery /path/to/run.summary.json --include-failed
 ```
 
+If you want to rerender thumbnails for one or more specific gallery entries, use:
+
+```bash
+uv run --python 3.11 python scripts/rerender_gallery_targets.py --db data/gallery.db 9bq2
+```
+
 Current web-app scope:
 - `GET /api/runs`, `GET /api/hits`, `GET /api/hits/{structure_id}`, `GET /api/hits/{structure_id}/viewer-data`
 - static browser UI for filtering and browsing hits

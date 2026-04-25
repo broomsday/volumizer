@@ -426,6 +426,7 @@ def render_gallery_thumbnails(
     db_path: Path,
     render_root: Path,
     run_id: str | None = None,
+    structure_ids: list[int] | None = None,
     limit: int | None = None,
     include_failed: bool = False,
     force: bool = False,
@@ -478,6 +479,11 @@ def render_gallery_thumbnails(
     normalized_limit = None
     if limit is not None:
         normalized_limit = _safe_non_negative_int(limit, "limit")
+    normalized_structure_ids = None
+    if structure_ids is not None:
+        normalized_structure_ids = sorted({int(structure_id) for structure_id in structure_ids})
+        if len(normalized_structure_ids) == 0:
+            raise ValueError("structure_ids must not be empty when provided")
 
     effective_style = dict(DEFAULT_RENDER_STYLE)
     if style is not None:
@@ -509,6 +515,10 @@ def render_gallery_thumbnails(
     if run_id is not None:
         query += " AND s.run_id = ?"
         params.append(str(run_id))
+    if normalized_structure_ids is not None:
+        placeholders = ", ".join("?" for _ in normalized_structure_ids)
+        query += f" AND s.structure_id IN ({placeholders})"
+        params.extend(normalized_structure_ids)
 
     query += " ORDER BY s.structure_id ASC"
     planning_started_at = time.monotonic()
