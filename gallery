@@ -19,7 +19,7 @@ fail() {
 
 usage() {
   cat <<EOF
-Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--skip-thumbnails] [--progress-interval SECONDS] [--jobs N] [--render-backend MODE] [--axis-render-mode MODE] [--worker-timeout-seconds SECONDS] [--timing-jsonl PATH] [--host HOST] [--port PORT]
+Usage: ./gallery [RUN_PATH] [--force-index] [--force-thumbnails] [--include-failed] [--skip-thumbnails] [--progress-interval SECONDS] [--jobs N] [--render-backend MODE] [--axis-render-mode MODE] [--worker-timeout-seconds SECONDS] [--timing-jsonl PATH] [--host HOST] [--port PORT]
 
 Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 
@@ -29,6 +29,7 @@ Rebuild the gallery index, render missing thumbnails, and serve the web UI.
 Options:
   --force-index        Rebuild the index even if it is up to date
   --force-thumbnails   Re-render all thumbnails even if they already exist
+  --include-failed     Retry thumbnails whose DB rows are currently marked failed
   --skip-thumbnails    Skip new thumbnail rendering, relink existing cached thumbnails, and serve placeholders for missing ones
   --progress-interval  Seconds between thumbnail progress updates (default: 30)
   --jobs               Parallel thumbnail render workers (default: 1)
@@ -113,6 +114,7 @@ ensure_playwright_browser() {
 RUN_PATH=""
 FORCE_INDEX=false
 FORCE_THUMBNAILS=false
+INCLUDE_FAILED=false
 SKIP_THUMBNAILS=false
 PROGRESS_INTERVAL="30"
 JOBS="1"
@@ -135,6 +137,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --force-thumbnails)
       FORCE_THUMBNAILS=true
+      shift
+      ;;
+    --include-failed)
+      INCLUDE_FAILED=true
       shift
       ;;
     --skip-thumbnails)
@@ -297,6 +303,9 @@ else
   )
   if [[ "$FORCE_THUMBNAILS" == true ]]; then
     THUMBNAIL_ARGS+=(--force)
+  fi
+  if [[ "$INCLUDE_FAILED" == true ]]; then
+    THUMBNAIL_ARGS+=(--include-failed)
   fi
   if [[ -n "$TIMING_JSONL" ]]; then
     THUMBNAIL_ARGS+=(--timing-jsonl "$TIMING_JSONL")

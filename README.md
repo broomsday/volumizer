@@ -259,6 +259,12 @@ If Chromium is not installed yet, run `bash scripts/bootstrap_linux.sh` or `npm 
 ./gallery /path/to/run.summary.json --skip-thumbnails
 ```
 
+If you want to retry rows whose thumbnails previously failed to render without rerendering successful rows, use:
+
+```bash
+./gallery /path/to/run.summary.json --include-failed
+```
+
 Current web-app scope:
 - `GET /api/runs`, `GET /api/hits`, `GET /api/hits/{structure_id}`, `GET /api/hits/{structure_id}/viewer-data`
 - static browser UI for filtering and browsing hits
