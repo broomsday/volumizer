@@ -15,13 +15,6 @@ from volumizer.types import Annotation
 
 
 _T = TypeVar("_T")
-_VOLUME_TYPE_TO_STRUCTURE_CODE = {
-    "hub": "HUB",
-    "pore": "POR",
-    "pocket": "POK",
-    "cavity": "CAV",
-    "occluded": "OCC",
-}
 
 
 def _timed_call(
@@ -45,71 +38,48 @@ def _timed_call(
     return result
 
 
-def _apply_display_type_overrides(
-    annotation_df: pd.DataFrame,
-    voxel_grid,
+def _refine_classified_voxel_groups(
     pockets,
-) -> pd.DataFrame:
+    hubs,
+    pores,
+    cavities,
+    first_shell_exposed_voxels,
+    voxel_grid,
+    enable_neck_refinement: bool,
+) -> tuple[dict[int, voxel.VoxelGroup], ...]:
     """
-    Add user-facing display labels when a pocket should be presented as a cavity.
+    Apply final type refinement and rebucket voxel groups by canonical output type.
     """
-    if len(annotation_df) == 0 or len(pockets) == 0:
-        return annotation_df
+    bucketed_groups = {
+        "hub": {},
+        "pore": {},
+        "pocket": {},
+        "cavity": {},
+    }
+    next_bucket_id = {key: 0 for key in bucketed_groups}
 
-    display_type_overrides: dict[tuple[str, int], str] = {}
-    for pocket_id, pocket in pockets.items():
-        display_type = voxel.get_voxel_group_display_type(
-            pocket,
-            voxel_grid.x_y_z,
-        )
-        if display_type != "pocket":
-            display_type_overrides[("pocket", int(pocket_id))] = display_type
+    for group_dict in (hubs, pores, pockets, cavities):
+        for voxel_group in group_dict.values():
+            refined_group = voxel.refine_voxel_group_annotation(
+                voxel_group,
+                first_shell_exposed_voxels.voxels,
+                voxel_grid.x_y_z,
+                enable_neck_refinement=bool(enable_neck_refinement),
+            )
+            refined_type = str(refined_group.voxel_type or "")
+            if refined_type not in bucketed_groups:
+                raise ValueError(f"Unsupported refined voxel type: {refined_type!r}")
 
-    if len(display_type_overrides) == 0:
-        return annotation_df
+            bucket_id = next_bucket_id[refined_type]
+            bucketed_groups[refined_type][bucket_id] = refined_group
+            next_bucket_id[refined_type] += 1
 
-    updated_annotation_df = annotation_df.copy()
-    updated_annotation_df["display_type"] = updated_annotation_df["type"].astype(str)
-
-    for row_index, row in updated_annotation_df.iterrows():
-        display_type = display_type_overrides.get((str(row["type"]), int(row["id"])))
-        if display_type is not None:
-            updated_annotation_df.at[row_index, "display_type"] = display_type
-
-    return updated_annotation_df
-
-
-def _get_structure_display_type_overrides(
-    annotation_df: pd.DataFrame,
-) -> dict[tuple[str, int], str]:
-    if (
-        len(annotation_df) == 0
-        or "type" not in annotation_df.columns
-        or "display_type" not in annotation_df.columns
-        or "id" not in annotation_df.columns
-    ):
-        return {}
-
-    display_type_overrides: dict[tuple[str, int], str] = {}
-    for _, row in annotation_df.iterrows():
-        raw_type = str(row["type"]).strip().lower()
-        display_type = str(row["display_type"]).strip().lower()
-        if raw_type == display_type:
-            continue
-
-        raw_code = _VOLUME_TYPE_TO_STRUCTURE_CODE.get(raw_type)
-        display_code = _VOLUME_TYPE_TO_STRUCTURE_CODE.get(display_type)
-        if raw_code is None or display_code is None:
-            continue
-
-        try:
-            volume_id = int(row["id"])
-        except (TypeError, ValueError):
-            continue
-
-        display_type_overrides[(raw_code, volume_id)] = display_code
-
-    return display_type_overrides
+    return (
+        bucketed_groups["hub"],
+        bucketed_groups["pore"],
+        bucketed_groups["pocket"],
+        bucketed_groups["cavity"],
+    )
 
 
 def annotate_structure_volumes(
@@ -207,6 +177,18 @@ def annotate_structure_volumes(
             )
         )
 
+    hubs, pores, pockets, cavities = _timed_call(
+        stage_timings,
+        "refine_classified_voxel_groups",
+        _refine_classified_voxel_groups,
+        pockets,
+        hubs,
+        pores,
+        cavities,
+        first_shell_exposed_voxels,
+        voxel_grid,
+        bool(enable_necked_pocket_cavity),
+    )
 
     def _filter_and_sort_groups(group_dict):
         return utils.sort_voxelgroups_by_volume(
@@ -277,16 +259,6 @@ def annotate_structure_volumes(
         utils.make_annotation_dataframe,
         annotation,
     )
-    if enable_necked_pocket_cavity:
-        annotation_df = _timed_call(
-            stage_timings,
-            "apply_display_type_overrides",
-            _apply_display_type_overrides,
-            annotation_df,
-            voxel_grid,
-            pockets,
-        )
-    display_type_overrides = _get_structure_display_type_overrides(annotation_df)
 
     annotation_structure = _timed_call(
         stage_timings,
@@ -299,7 +271,6 @@ def annotate_structure_volumes(
         cavities,
         occluded,
         existing_chain_ids=set(structure.chain_id),
-        display_type_overrides=display_type_overrides,
     )
 
     return annotation_df, annotation_structure

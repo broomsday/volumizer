@@ -158,7 +158,7 @@ def test_build_parser_defaults_necked_pocket_cavity_to_enabled():
     assert args.necked_pocket_cavity is True
 
 
-def test_build_parser_cluster_defaults_merge_mouth_and_necked_pocket_display():
+def test_build_parser_cluster_defaults_merge_mouth_and_neck_refinement():
     args = cli.build_parser().parse_args(
         ["cluster", "--cluster-identity", "30", "--output-dir", "out"]
     )
@@ -166,7 +166,7 @@ def test_build_parser_cluster_defaults_merge_mouth_and_necked_pocket_display():
     assert args.necked_pocket_cavity is True
 
 
-def test_build_parser_no_necked_pocket_cavity_disables_display_override():
+def test_build_parser_no_necked_pocket_cavity_disables_final_neck_refinement():
     args = cli.build_parser().parse_args(
         [
             "analyze",
@@ -1066,7 +1066,7 @@ def test_analyze_structure_file_include_hubs_preserves_written_outputs(
     assert saved_structure["res_name"] == ["PRO", "HUB", "POR"]
 
 
-def test_analyze_structure_file_prefers_display_type_in_written_payload(
+def test_analyze_structure_file_writes_canonical_types_in_payload(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -1095,8 +1095,7 @@ def test_analyze_structure_file_prefers_display_type_in_written_payload(
                 [
                     {
                         "id": 0,
-                        "type": "pocket",
-                        "display_type": "cavity",
+                        "type": "cavity",
                         "volume": 49113.0,
                     },
                 ]
@@ -1126,8 +1125,7 @@ def test_analyze_structure_file_prefers_display_type_in_written_payload(
     payload = json.loads((tmp_path / "sample.annotation.json").read_text(encoding="utf-8"))
     assert result["largest_type"] == "cavity"
     assert payload["largest_type"] == "cavity"
-    assert payload["volumes"][0]["type"] == "pocket"
-    assert payload["volumes"][0]["display_type"] == "cavity"
+    assert payload["volumes"][0]["type"] == "cavity"
     assert saved_structure["res_name"] == ["PRO", "CAV"]
 
 

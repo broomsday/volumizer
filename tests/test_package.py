@@ -17,6 +17,7 @@ GENERAL_TEST_CIF = TEST_PDB_DIR / "4jpn.cif"
 GENERAL_TEST_MMTF = TEST_PDB_DIR / "4jpn.mmtf"
 GENERAL_TEST_DF = TEST_DF_DIR / "4jpn.json"
 ASSEMBLY_TEST_CIF = TEST_PDB_DIR / "4jpp.cif"
+SEVEN_ODW_CIF = TEST_PDB_DIR / "7odw.cif"
 
 
 def test_annotate_structure_volumes_defaults_min_voxels_to_four():
@@ -113,6 +114,18 @@ def test_9lj9_promotes_both_symmetric_large_volumes_to_hubs():
     hub_volumes = set(annotation_df.loc[annotation_df["type"] == "hub", "volume"].tolist())
     assert 17091.0 in hub_volumes
     assert 18117.0 in hub_volumes
+
+
+def test_7odw_has_large_cavity_and_no_pores():
+    utils.set_resolution(3.0)
+
+    pdb_structure = pdb.load_structure(SEVEN_ODW_CIF)
+    prepared_structure = volumizer.prepare_pdb_structure(pdb_structure)
+    annotation_df, _ = volumizer.annotate_structure_volumes(prepared_structure)
+
+    assert annotation_df.iloc[0].type == "cavity"
+    assert annotation_df.iloc[0].volume == 3043440.0
+    assert int((annotation_df["type"] == "pore").sum()) == 0
 
 
 @pytest.mark.parametrize(

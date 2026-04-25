@@ -127,7 +127,7 @@ def test_volumes_to_structure_combines_voxel_groups():
         assert float(structure.b_factor[index]) == b_factor
 
 
-def test_volumes_to_structure_uses_display_type_overrides_for_labels():
+def test_volumes_to_structure_uses_canonical_type_labels():
     voxel_centers = np.array(
         [
             [0.0, 0.0, 0.0],
@@ -147,7 +147,6 @@ def test_volumes_to_structure_uses_display_type_overrides_for_labels():
         pockets=pockets,
         cavities=cavities,
         occluded={},
-        display_type_overrides={("POK", 5): "CAV"},
     )
 
     assert len(structure) == 3
@@ -164,11 +163,11 @@ def test_volumes_to_structure_uses_display_type_overrides_for_labels():
     }
 
     assert by_atom_id == {
-        0: ("CAV", "D", "S", "S", 5, 0.0),
-        1: ("CAV", "D", "S", "S", 5, 50.0),
+        0: ("POK", "C", "N", "N", 5, 0.0),
+        1: ("POK", "C", "N", "N", 5, 50.0),
         2: ("CAV", "D", "S", "S", 9, 50.0),
     }
-    assert "POK" not in set(np.asarray(structure.res_name).tolist())
+    assert set(np.asarray(structure.res_name).tolist()) == {"POK", "CAV"}
 
 
 def test_save_structure_cif_preserves_b_factor_after_concat(tmp_path: Path):

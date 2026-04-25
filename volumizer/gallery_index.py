@@ -139,7 +139,6 @@ def _records_from_dataframe_json(payload: dict[str, Any]) -> list[dict[str, Any]
         return []
 
     optional_columns = (
-        "display_type",
         "cross_section_circularity",
         "cross_section_uniformity",
     )
@@ -194,8 +193,7 @@ def _normalize_volume_rows(
         if topology_kind not in _INDEXABLE_VOLUME_KINDS:
             continue
 
-        display_kind = str(raw_row.get("display_type") or topology_kind).strip().lower()
-        kind = display_kind if display_kind in _INDEXABLE_VOLUME_KINDS else topology_kind
+        kind = topology_kind
 
         volume_value = _safe_float(raw_row.get("volume"))
         if volume_value is None:

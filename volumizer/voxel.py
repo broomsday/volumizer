@@ -1058,18 +1058,128 @@ def _expand_direct_surface_component_shell(
     return shell_indices
 
 
-def _get_direct_surface_shell_gap(
+def _get_direct_surface_indices(
+    query_indices: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+    exposed_voxels: tuple[np.ndarray, ...],
+    voxel_grid_dimensions: np.ndarray,
+) -> set[int]:
+    """
+    Return buried component voxels that directly contact exposed solvent.
+    """
+    if len(query_indices) == 0:
+        return set()
+
+    exposed_coordinate_set = {
+        (
+            int(exposed_voxels[0][exposed_index]),
+            int(exposed_voxels[1][exposed_index]),
+            int(exposed_voxels[2][exposed_index]),
+        )
+        for exposed_index in range(len(exposed_voxels[0]))
+    }
+
+    direct_surface_indices = set()
+    for query_index in query_indices:
+        query_voxel = get_single_voxel(buried_voxels, query_index)
+        if is_edge_voxel(query_voxel, voxel_grid_dimensions):
+            direct_surface_indices.add(query_index)
+            continue
+
+        query_coord = (
+            int(query_voxel[0]),
+            int(query_voxel[1]),
+            int(query_voxel[2]),
+        )
+        for delta_x, delta_y, delta_z in SURFACE_6_NEIGHBOR_OFFSETS:
+            if (
+                query_coord[0] + delta_x,
+                query_coord[1] + delta_y,
+                query_coord[2] + delta_z,
+            ) in exposed_coordinate_set:
+                direct_surface_indices.add(query_index)
+                break
+
+    return direct_surface_indices
+
+
+def _get_neighbor_surface_indices(
+    query_indices: set[int],
+    direct_surface_indices: set[int],
+    buried_voxels: tuple[np.ndarray, ...],
+) -> set[int]:
+    """
+    Return one-layer buried neighbors for the direct solvent-contact shell.
+    """
+    if len(query_indices) == 0 or len(direct_surface_indices) == 0:
+        return set()
+
+    direct_surface_coordinate_set = {
+        (
+            int(buried_voxels[0][surface_index]),
+            int(buried_voxels[1][surface_index]),
+            int(buried_voxels[2][surface_index]),
+        )
+        for surface_index in direct_surface_indices
+    }
+
+    neighbor_surface_indices = set()
+    for query_index in query_indices - direct_surface_indices:
+        query_voxel = get_single_voxel(buried_voxels, query_index)
+        query_coord = (
+            int(query_voxel[0]),
+            int(query_voxel[1]),
+            int(query_voxel[2]),
+        )
+        for delta_x, delta_y, delta_z in SURFACE_6_NEIGHBOR_OFFSETS:
+            if (
+                query_coord[0] + delta_x,
+                query_coord[1] + delta_y,
+                query_coord[2] + delta_z,
+            ) in direct_surface_coordinate_set:
+                neighbor_surface_indices.add(query_index)
+                break
+
+    return neighbor_surface_indices
+
+
+def _get_direct_surface_component_shells(
+    query_indices: set[int],
+    direct_surface_components: list[set[int]],
+    buried_voxels: tuple[np.ndarray, ...],
+) -> list[set[int]]:
+    """
+    Return one expanded shell set for each direct mouth component.
+    """
+    if len(direct_surface_components) == 0:
+        return []
+
+    query_coordinate_to_index = _build_query_coordinate_index(
+        query_indices,
+        buried_voxels,
+    )
+    return [
+        _expand_direct_surface_component_shell(
+            direct_surface_component,
+            buried_voxels,
+            query_coordinate_to_index,
+        )
+        for direct_surface_component in direct_surface_components
+    ]
+
+
+def _get_direct_surface_shell_bridge_indices(
     query_indices: set[int],
     direct_surface_components: list[set[int]],
     buried_voxels: tuple[np.ndarray, ...],
     max_gap_voxels: int,
-) -> int | None:
+) -> set[int] | None:
     """
-    Return the shortest gap between two expanded mouth shells when it is within threshold.
+    Return the shortest interior bridge between two expanded mouth shells.
 
-    The gap is measured after expanding each direct mouth by one buried voxel.
-    Overlapping or face-touching shells therefore have gap `0`, one intermediate
-    buried voxel gives gap `1`, and so on.
+    The returned set excludes indices already in either shell. An empty set means
+    the two shells already overlap or face-touch and therefore already form a
+    single effective mouth.
     """
     if len(direct_surface_components) != 2 or max_gap_voxels < 0:
         return None
@@ -1090,10 +1200,13 @@ def _get_direct_surface_shell_gap(
     )
 
     if first_shell_indices.intersection(second_shell_indices):
-        return 0
+        return set()
 
     max_path_edges = max_gap_voxels + 1
     visited_indices = set(first_shell_indices)
+    predecessor_index_by_index: dict[int, int | None] = {
+        surface_index: None for surface_index in first_shell_indices
+    }
     queue_indices: deque[tuple[int, int]] = deque(
         (surface_index, 0) for surface_index in first_shell_indices
     )
@@ -1115,14 +1228,45 @@ def _get_direct_surface_shell_gap(
             if neighbor_index is None or neighbor_index in visited_indices:
                 continue
 
+            predecessor_index_by_index[neighbor_index] = current_index
             next_path_edges = path_edges + 1
             if neighbor_index in second_shell_indices:
-                return max(next_path_edges - 1, 0)
+                bridge_indices = set()
+                path_index = current_index
+                while path_index is not None and path_index not in first_shell_indices:
+                    if path_index not in second_shell_indices:
+                        bridge_indices.add(path_index)
+                    path_index = predecessor_index_by_index.get(path_index)
+                return bridge_indices
 
             visited_indices.add(neighbor_index)
             queue_indices.append((neighbor_index, next_path_edges))
 
     return None
+
+
+def _get_direct_surface_shell_gap(
+    query_indices: set[int],
+    direct_surface_components: list[set[int]],
+    buried_voxels: tuple[np.ndarray, ...],
+    max_gap_voxels: int,
+) -> int | None:
+    """
+    Return the shortest gap between two expanded mouth shells when it is within threshold.
+
+    The gap is measured after expanding each direct mouth by one buried voxel.
+    Overlapping or face-touching shells therefore have gap `0`, one intermediate
+    buried voxel gives gap `1`, and so on.
+    """
+    bridge_indices = _get_direct_surface_shell_bridge_indices(
+        query_indices,
+        direct_surface_components,
+        buried_voxels,
+        max_gap_voxels,
+    )
+    if bridge_indices is None:
+        return None
+    return len(bridge_indices)
 
 
 def _get_surface_direction_bucket_counts(
@@ -1207,31 +1351,16 @@ def get_agglomerated_type(
     connected patch, fall back to a directional spread heuristic to distinguish
     a wrapped hub-like surface from a single-mouth pocket.
     """
-    direct_surface_indices = set()
-    for query_index in query_indices:
-        query_voxel = get_single_voxel(buried_voxels, query_index)
-        if is_edge_voxel(query_voxel, voxel_grid_dimensions):
-            direct_surface_indices.add(query_index)
-            continue
-        for exposed_voxel_index in range(len(exposed_voxels[0])):
-            exposed_voxel = get_single_voxel(exposed_voxels, exposed_voxel_index)
-            if is_neighbor_voxel(query_voxel, exposed_voxel):
-                direct_surface_indices.add(query_index)
-                break
+    direct_surface_indices = _get_direct_surface_indices(
+        query_indices,
+        buried_voxels,
+        exposed_voxels,
+        voxel_grid_dimensions,
+    )
 
     # if there are no surface contacts, this must be a cavity
     if len(direct_surface_indices) == 0:
         return direct_surface_indices, "cavity"
-
-    # add all voxels that are neighbours to the direct surface voxels
-    neighbor_surface_indices = set()
-    for query_index in query_indices - direct_surface_indices:
-        query_voxel = get_single_voxel(buried_voxels, query_index)
-        for surface_index in direct_surface_indices:
-            surface_voxel = get_single_voxel(buried_voxels, surface_index)
-            if is_neighbor_voxel(surface_voxel, query_voxel):
-                neighbor_surface_indices.add(query_index)
-                break
 
     # we pass all surface indices and the buried voxels for BFS
     # If there is more than one distinct surface (e.g. a pore) then
@@ -1239,11 +1368,21 @@ def get_agglomerated_type(
     #   and `single_surface_indices` will be less than `surface_indices`
     # NOTE: we have to union the direct and neighbor surfaces, otherwise small discritization
     #   on the surface would look like a distinct surface
+    neighbor_surface_indices = _get_neighbor_surface_indices(
+        query_indices,
+        direct_surface_indices,
+        buried_voxels,
+    )
     surface_indices = direct_surface_indices.union(neighbor_surface_indices)
     direct_surface_components = _get_surface_components(
         direct_surface_indices,
         buried_voxels,
         support_indices=surface_indices,
+    )
+    effective_surface_components = _get_direct_surface_component_shells(
+        query_indices,
+        direct_surface_components,
+        buried_voxels,
     )
     direction_bucket_counts = sorted(
         _get_surface_direction_bucket_counts(
@@ -1259,17 +1398,22 @@ def get_agglomerated_type(
         if _is_wrapped_hub_direction_spread(direction_bucket_counts):
             return surface_indices, "hub"
         mouth_merge_gap_voxels = utils.get_surface_mouth_merge_gap_voxels()
-        shell_gap_voxels = _get_direct_surface_shell_gap(
+        bridge_indices = _get_direct_surface_shell_bridge_indices(
             query_indices,
             direct_surface_components,
             buried_voxels,
             mouth_merge_gap_voxels,
         )
-        if shell_gap_voxels is not None:
-            return surface_indices, "pocket"
-        return surface_indices, "pore"
+        if bridge_indices is not None:
+            effective_surface_components = [
+                effective_surface_components[0]
+                .union(effective_surface_components[1])
+                .union(bridge_indices)
+            ]
+            return set().union(*effective_surface_components), "pocket"
+        return set().union(*effective_surface_components), "pore"
     if len(direct_surface_indices) < MIN_DIRECTIONAL_SURFACE_VOXELS:
-        return surface_indices, "pocket"
+        return set().union(*effective_surface_components), "pocket"
 
     largest_direction_count = direction_bucket_counts[0]
     second_direction_count = direction_bucket_counts[1]
@@ -1286,14 +1430,15 @@ def get_agglomerated_type(
         and second_direction_count
         >= largest_direction_count * DIRECT_SURFACE_DIRECTION_PORE_RATIO
     ):
-        return surface_indices, "pore"
+        return set().union(*effective_surface_components), "pore"
 
-    return surface_indices, "pocket"
+    return set().union(*effective_surface_components), "pocket"
 
 
 def _get_voxel_group_neck_width(
     voxel_group: VoxelGroup,
     voxel_grid_dimensions: np.ndarray,
+    surface_indices: set[int] | np.ndarray | None = None,
 ) -> int | None:
     """
     Estimate the narrowest near-mouth interior layer using the stored surface shell.
@@ -1328,7 +1473,9 @@ def _get_voxel_group_neck_width(
         coord: flat_index for flat_index, coord in index_to_coord.items()
     }
 
-    surface_index_array = _index_values_to_array(voxel_group.surface_indices)
+    surface_index_array = _index_values_to_array(
+        voxel_group.surface_indices if surface_indices is None else surface_indices
+    )
     surface_indices = {
         int(surface_index)
         for surface_index in surface_index_array
@@ -1384,47 +1531,235 @@ def _get_voxel_group_neck_width(
     return min(candidate_layer_counts)
 
 
-def get_voxel_group_display_type(
+def _get_voxel_group_effective_surface_components(
+    voxel_group: VoxelGroup,
+    exposed_voxels: tuple[np.ndarray, ...],
+    voxel_grid_dimensions: np.ndarray,
+) -> list[set[int]]:
+    """
+    Return effective mouth shells for one classified voxel group.
+    """
+    query_indices = set(range(len(voxel_group.voxels[0])))
+    if len(query_indices) == 0:
+        return []
+
+    direct_surface_indices = _get_direct_surface_indices(
+        query_indices,
+        voxel_group.voxels,
+        exposed_voxels,
+        voxel_grid_dimensions,
+    )
+    if len(direct_surface_indices) == 0:
+        return []
+
+    neighbor_surface_indices = _get_neighbor_surface_indices(
+        query_indices,
+        direct_surface_indices,
+        voxel_group.voxels,
+    )
+    support_indices = direct_surface_indices.union(neighbor_surface_indices)
+    direct_surface_components = _get_surface_components(
+        direct_surface_indices,
+        voxel_group.voxels,
+        support_indices=support_indices,
+    )
+    effective_surface_components = _get_direct_surface_component_shells(
+        query_indices,
+        direct_surface_components,
+        voxel_group.voxels,
+    )
+
+    if len(direct_surface_components) == 2:
+        bridge_indices = _get_direct_surface_shell_bridge_indices(
+            query_indices,
+            direct_surface_components,
+            voxel_group.voxels,
+            int(utils.get_surface_mouth_merge_gap_voxels()),
+        )
+        if bridge_indices is not None:
+            return [
+                effective_surface_components[0]
+                .union(effective_surface_components[1])
+                .union(bridge_indices)
+            ]
+
+    return effective_surface_components
+
+
+def _local_surface_component_to_flat_indices(
     voxel_group: VoxelGroup,
     voxel_grid_dimensions: np.ndarray,
-) -> str:
+    local_surface_indices: set[int],
+) -> set[int]:
     """
-    Return the user-facing label for a voxel group without changing topology.
-
-    Large pocket components that connect to solvent only through a very narrow
-    near-mouth bottleneck are presented as `cavity` for display purposes while
-    retaining their underlying topological `pocket` classification.
+    Convert voxel-group-local shell indices to flattened voxel-grid indices.
     """
-    topology_type = str(voxel_group.voxel_type or "")
-    if topology_type != "pocket":
-        return topology_type
+    if len(local_surface_indices) == 0:
+        return set()
 
-    mouth_shell_count = len(
-        {
-            int(surface_index)
-            for surface_index in _index_values_to_array(voxel_group.surface_indices)
-        }
+    volume_index_array = _compute_voxel_indices_array(
+        voxel_group.voxels,
+        voxel_grid_dimensions,
     )
+    if volume_index_array.size == 0:
+        return set()
+
+    return {
+        int(volume_index_array[local_index])
+        for local_index in local_surface_indices
+        if 0 <= int(local_index) < int(volume_index_array.size)
+    }
+
+
+def _is_necked_surface_component(
+    voxel_group: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray,
+    local_surface_indices: set[int],
+) -> bool:
+    """
+    Return True when one effective mouth shell should be treated as necked.
+    """
+    mouth_shell_count = len(local_surface_indices)
     core_count = int(voxel_group.num_voxels) - int(mouth_shell_count)
     if mouth_shell_count <= 0 or core_count <= 0:
-        return topology_type
+        return False
 
     neck_width = _get_voxel_group_neck_width(
         voxel_group,
         voxel_grid_dimensions,
+        surface_indices=_local_surface_component_to_flat_indices(
+            voxel_group,
+            voxel_grid_dimensions,
+            local_surface_indices,
+        ),
     )
     if neck_width is None:
-        return topology_type
+        return False
 
     core_to_mouth_shell_ratio = core_count / float(mouth_shell_count)
-    if (
+    return (
         neck_width <= CAVITY_LIKE_POCKET_NECK_WIDTH_VOXELS
         and core_to_mouth_shell_ratio
         > CAVITY_LIKE_POCKET_CORE_TO_MOUTH_SHELL_RATIO
-    ):
-        return "cavity"
+    )
 
-    return topology_type
+
+def _is_narrow_surface_component(
+    voxel_group: VoxelGroup,
+    voxel_grid_dimensions: np.ndarray,
+    local_surface_indices: set[int],
+) -> bool:
+    """
+    Return True when one effective mouth shell is only one voxel wide.
+    """
+    neck_width = _get_voxel_group_neck_width(
+        voxel_group,
+        voxel_grid_dimensions,
+        surface_indices=_local_surface_component_to_flat_indices(
+            voxel_group,
+            voxel_grid_dimensions,
+            local_surface_indices,
+        ),
+    )
+    return neck_width is not None and neck_width <= CAVITY_LIKE_POCKET_NECK_WIDTH_VOXELS
+
+
+def refine_voxel_group_annotation(
+    voxel_group: VoxelGroup,
+    exposed_voxels: tuple[np.ndarray, ...],
+    voxel_grid_dimensions: np.ndarray,
+    enable_neck_refinement: bool = True,
+) -> VoxelGroup:
+    """
+    Return a voxel group with canonical final type and effective surface shell.
+    """
+    topology_type = str(voxel_group.voxel_type or "")
+    if topology_type == "occluded":
+        return voxel_group
+
+    effective_surface_components = _get_voxel_group_effective_surface_components(
+        voxel_group,
+        exposed_voxels,
+        voxel_grid_dimensions,
+    )
+    final_type = topology_type
+    final_surface_components = list(effective_surface_components)
+
+    if enable_neck_refinement:
+        if topology_type == "pocket":
+            if (
+                len(effective_surface_components) == 1
+                and _is_necked_surface_component(
+                    voxel_group,
+                    voxel_grid_dimensions,
+                    effective_surface_components[0],
+                )
+            ):
+                final_type = "cavity"
+                final_surface_components = []
+        elif topology_type == "pore":
+            if len(effective_surface_components) == 0:
+                final_type = "cavity"
+                final_surface_components = []
+            elif len(effective_surface_components) == 1:
+                if _is_necked_surface_component(
+                    voxel_group,
+                    voxel_grid_dimensions,
+                    effective_surface_components[0],
+                ):
+                    final_type = "cavity"
+                    final_surface_components = []
+                else:
+                    final_type = "pocket"
+            else:
+                narrow_flags = [
+                    _is_narrow_surface_component(
+                        voxel_group,
+                        voxel_grid_dimensions,
+                        surface_component,
+                    )
+                    for surface_component in effective_surface_components
+                ]
+                surviving_components = [
+                    surface_component
+                    for surface_component, is_narrow in zip(
+                        effective_surface_components,
+                        narrow_flags,
+                    )
+                    if not is_narrow
+                ]
+                if len(surviving_components) == 0:
+                    final_type = "cavity"
+                    final_surface_components = []
+                elif len(surviving_components) == 1:
+                    final_type = "pocket"
+                    final_surface_components = surviving_components
+                else:
+                    final_type = "pore"
+                    final_surface_components = surviving_components
+
+    final_surface_indices = set()
+    for surface_component in final_surface_components:
+        final_surface_indices.update(
+            _local_surface_component_to_flat_indices(
+                voxel_group,
+                voxel_grid_dimensions,
+                surface_component,
+            )
+        )
+
+    return VoxelGroup(
+        voxels=voxel_group.voxels,
+        indices=voxel_group.indices,
+        num_voxels=voxel_group.num_voxels,
+        surface_indices=final_surface_indices,
+        voxel_type=final_type,
+        volume=voxel_group.volume,
+        center=voxel_group.center,
+        axial_lengths=voxel_group.axial_lengths,
+        cross_section_circularity=voxel_group.cross_section_circularity,
+        cross_section_uniformity=voxel_group.cross_section_uniformity,
+    )
 
 
 def _get_voxel_group_center_from_indices(

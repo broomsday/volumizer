@@ -254,8 +254,8 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         dest="necked_pocket_cavity",
         default=True,
         help=(
-            "Disable the display-only relabel that presents large pockets "
-            "with single-voxel necks as cavities."
+            "Disable final neck-based relabeling that can promote cavity-like "
+            "pockets/pores into their canonical output type."
         ),
     )
     parser.add_argument(
@@ -278,8 +278,8 @@ def _add_common_analysis_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=DIRECT_SURFACE_MOUTH_MERGE_GAP_VOXELS,
         help=(
-            "Merge very close raw pore mouths into a single human-facing mouth. "
-            "Negative values disable the override (default: 1)."
+            "Merge very close raw pore mouths before final annotation. "
+            "Negative values disable mouth merging (default: 1)."
         ),
     )
     parser.add_argument(
@@ -3011,7 +3011,7 @@ def _build_annotation_payload(
             volumes,
             key=lambda volume: float(volume.get("volume") or 0.0),
         )
-        largest_type = largest_volume.get("display_type") or largest_volume.get("type")
+        largest_type = largest_volume.get("type")
         largest_volume_value = largest_volume.get("volume")
     payload = {
         "source": source_label,

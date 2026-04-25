@@ -760,7 +760,6 @@ def volumes_to_structure(
     cavities: dict[int, VoxelGroup],
     occluded: dict[int, VoxelGroup],
     existing_chain_ids: set[str] | None = None,
-    display_type_overrides: dict[tuple[str, int], str] | None = None,
 ) -> bts.AtomArray:
     """
     Convert the voxels of all volumes into a set atoms in a biotite AtomArray.
@@ -768,9 +767,6 @@ def volumes_to_structure(
     *existing_chain_ids*, when provided, is the set of chain IDs already
     used by the protein structure.  Volume pseudo-atoms will be assigned
     chain IDs that do not collide with these.
-
-    *display_type_overrides* maps raw structure volume codes and ids to the
-    residue code that should be written for display.
     """
     chain_map = (
         _build_volume_chain_map(existing_chain_ids)
@@ -785,7 +781,6 @@ def volumes_to_structure(
         ("CAV", cavities),
         ("OCC", occluded),
     ]
-    display_overrides = display_type_overrides or {}
 
     volume_chunks: list[tuple[str, int, np.ndarray, np.ndarray]] = []
     total_voxels = 0
@@ -825,13 +820,6 @@ def volumes_to_structure(
         voxel_index_array,
         surface_index_array,
     ) in volume_chunks:
-        display_voxel_type = display_overrides.get(
-            (voxel_type, int(voxel_group_index)),
-            voxel_type,
-        )
-        if display_voxel_type not in VOXEL_TYPE_ATOM_MAP:
-            display_voxel_type = voxel_type
-
         chunk_size = int(voxel_index_array.size)
         next_cursor = cursor + chunk_size
 
@@ -843,11 +831,11 @@ def volumes_to_structure(
                 0.0,
             )
 
-        all_atom_names[cursor:next_cursor] = VOXEL_TYPE_ATOM_MAP[display_voxel_type]
-        all_res_names[cursor:next_cursor] = display_voxel_type
+        all_atom_names[cursor:next_cursor] = VOXEL_TYPE_ATOM_MAP[voxel_type]
+        all_res_names[cursor:next_cursor] = voxel_type
         all_res_ids[cursor:next_cursor] = voxel_group_index
-        all_chain_ids[cursor:next_cursor] = chain_map[display_voxel_type]
-        all_elements[cursor:next_cursor] = VOXEL_TYPE_ELEMENT_MAP[display_voxel_type]
+        all_chain_ids[cursor:next_cursor] = chain_map[voxel_type]
+        all_elements[cursor:next_cursor] = VOXEL_TYPE_ELEMENT_MAP[voxel_type]
 
         cursor = next_cursor
 

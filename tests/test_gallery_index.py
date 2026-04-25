@@ -232,7 +232,7 @@ def test_build_gallery_index_ignores_hub_rows(tmp_path: Path):
     assert aggregate_row == (1, 200.0, 0, None)
 
 
-def test_build_gallery_index_groups_by_display_type(tmp_path: Path):
+def test_build_gallery_index_uses_canonical_type_over_legacy_display_type(tmp_path: Path):
     summary_path = tmp_path / "run.summary.json"
     annotation_path = tmp_path / "hit-a.annotation.json"
     structure_output_path = tmp_path / "hit-a.annotated.cif"
@@ -292,8 +292,8 @@ def test_build_gallery_index_groups_by_display_type(tmp_path: Path):
             """
         ).fetchone()
 
-    assert volume_rows == [("cavity", 1, 600.0), ("cavity", 2, 80.0)]
-    assert aggregate_row == (0, None, 2, 600.0)
+    assert volume_rows == [("pocket", 1, 600.0), ("cavity", 1, 80.0)]
+    assert aggregate_row == (1, 600.0, 1, 80.0)
 
 
 def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_path: Path):
@@ -360,7 +360,7 @@ def test_build_gallery_index_supports_dataframe_oriented_json_and_replace(tmp_pa
             """
         ).fetchall()
 
-    assert rows == [("cavity", 222.0, 9.0, 2.0, 4.0, 0.75, 0.50)]
+    assert rows == [("pore", 222.0, 9.0, 2.0, 4.0, 0.75, 0.50)]
 
 
 def test_build_gallery_index_infers_pdb_id_from_source_when_missing(tmp_path: Path):
