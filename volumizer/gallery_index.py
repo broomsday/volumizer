@@ -305,12 +305,12 @@ def _sequence_overlap(seq1: tuple[str, ...], seq2: tuple[str, ...]) -> float:
 
     Uses best-offset alignment to handle terminal truncation: slides the
     shorter sequence along the longer one and returns the best match ratio
-    relative to the longer sequence length.
+    relative to the shorter sequence length.
     """
     len1, len2 = len(seq1), len(seq2)
-    max_len = max(len1, len2)
-    if max_len == 0:
-        return 1.0
+    min_len = min(len1, len2)
+    if min_len == 0:
+        return 1.0 if len1 == 0 and len2 == 0 else 0.0
 
     # Ensure seq1 is the longer one
     if len1 < len2:
@@ -326,7 +326,7 @@ def _sequence_overlap(seq1: tuple[str, ...], seq2: tuple[str, ...]) -> float:
             if best_matches == len2:
                 break
 
-    return best_matches / max_len
+    return best_matches / min_len
 
 
 def _count_sequence_unique_chains(
@@ -337,8 +337,8 @@ def _count_sequence_unique_chains(
     Count sequence-unique chains using fuzzy matching.
 
     Chains with >= identity_threshold fractional overlap are considered
-    the same, which handles minor terminal truncation differences between
-    symmetry copies.
+    the same, which treats contained subsequences as matches and handles
+    minor terminal truncation differences between symmetry copies.
     """
     sequences = list(chain_sequences.values())
     if len(sequences) == 0:

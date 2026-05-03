@@ -661,14 +661,14 @@ class TestSequenceOverlap:
         full = ("GLY", "GLY", "MET", "GLU", "LYS", "ALA", "VAL", "THR", "PRO", "LEU")
         truncated = ("MET", "GLU", "LYS", "ALA", "VAL", "THR", "PRO", "LEU")
         overlap = _sequence_overlap(full, truncated)
-        # 8 matches out of 10 max length = 0.8
-        assert overlap == pytest.approx(0.8)
+        # 8 matches out of 8 shorter-sequence length = 1.0
+        assert overlap == pytest.approx(1.0)
 
     def test_suffix_truncation(self):
         full = ("ALA", "GLY", "VAL", "LEU", "ILE")
         truncated = ("ALA", "GLY", "VAL")
         overlap = _sequence_overlap(full, truncated)
-        assert overlap == pytest.approx(0.6)
+        assert overlap == pytest.approx(1.0)
 
     def test_completely_different(self):
         seq1 = ("ALA", "ALA", "ALA")
@@ -702,10 +702,16 @@ class TestCountSequenceUniqueChains:
 
     def test_below_threshold_counted_as_different(self):
         base = tuple(["ALA"] * 100)
-        # Differ by 6 residues at the start -> 94/100 = 0.94 < 0.95
+        # Best offset yields 94/100 matches, normalized by the shorter length.
         different = tuple(["GLY"] * 6 + ["ALA"] * 94)
         seqs = {"A": base, "B": different}
         assert _count_sequence_unique_chains(seqs) == 2
+
+    def test_contained_shorter_sequence_counts_as_same(self):
+        base = tuple(["ALA"] * 50 + ["GLY"] * 100 + ["VAL"] * 50)
+        contained = tuple(["GLY"] * 100)
+        seqs = {"A": base, "B": contained}
+        assert _count_sequence_unique_chains(seqs) == 1
 
     def test_empty(self):
         assert _count_sequence_unique_chains({}) == 0
