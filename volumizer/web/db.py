@@ -89,6 +89,7 @@ def get_hit_detail(db_path: Path, structure_id: int) -> dict[str, Any] | None:
                 s.frac_alpha,
                 s.frac_beta,
                 s.frac_coil,
+                run_meta.resolution AS run_resolution,
                 a.num_pores,
                 a.largest_pore_volume_a3,
                 a.largest_pore_length_a,
@@ -118,6 +119,7 @@ def get_hit_detail(db_path: Path, structure_id: int) -> dict[str, Any] | None:
                 r.render_error,
                 r.updated_at
             FROM structures s
+            LEFT JOIN runs run_meta ON run_meta.run_id = s.run_id
             LEFT JOIN structure_aggregates a ON a.structure_id = s.structure_id
             LEFT JOIN renders r ON r.structure_id = s.structure_id
             WHERE s.structure_id = ?

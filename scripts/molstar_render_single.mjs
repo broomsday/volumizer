@@ -354,7 +354,22 @@ async function clearViewer(page) {
   });
 }
 
-async function loadStructureIntoViewer(page, structureData) {
+function getVolumeSurfaceTypeParams(style) {
+  const volumeSurface = style?.volume_surface || {};
+  const radiusOffset = Number(volumeSurface.radius_offset);
+  const smoothness = Number(volumeSurface.smoothness);
+  const quality = typeof volumeSurface.quality === 'string'
+    ? volumeSurface.quality
+    : 'custom';
+
+  return {
+    quality,
+    radiusOffset: Number.isFinite(radiusOffset) ? radiusOffset : 0,
+    smoothness: Number.isFinite(smoothness) ? smoothness : 1.5,
+  };
+}
+
+async function loadStructureIntoViewer(page, structureData, style) {
   await page.evaluate(async (payload) => {
     const viewer = globalThis.__volumizerViewer;
     if (!viewer) throw new Error('Mol* viewer not initialized');
@@ -437,6 +452,11 @@ async function loadStructureIntoViewer(page, structureData) {
             { id: 'POK', color: 0x3366CC, label: 'Pockets' },
             { id: 'CAV', color: 0xCC33CC, label: 'Cavities' },
           ];
+          const volumeSurfaceTypeParams = payload.volumeSurfaceTypeParams || {
+            quality: 'custom',
+            radiusOffset: 0,
+            smoothness: 1.5,
+          };
 
           for (const volumeType of volumeTypes) {
             try {
@@ -456,21 +476,20 @@ async function loadStructureIntoViewer(page, structureData) {
                 `volume-${volumeType.id.toLowerCase()}`,
               );
               if (comp) {
-                const volumeSurfaceTypeParams = {
-                  quality: 'custom',
-                  doubleSided: false,
-                  interior: {
-                    color: volumeType.color,
-                    colorStrength: 1,
-                    substance: { metalness: 0, roughness: 1, bumpiness: 0 },
-                    substanceStrength: 0,
-                  },
-                };
                 const volumeRepr = await plugin.builders.structure.representation.addRepresentation(
                   comp,
                   {
                     type: 'gaussian-surface',
-                    typeParams: volumeSurfaceTypeParams,
+                    typeParams: {
+                      ...volumeSurfaceTypeParams,
+                      doubleSided: false,
+                      interior: {
+                        color: volumeType.color,
+                        colorStrength: 1,
+                        substance: { metalness: 0, roughness: 1, bumpiness: 0 },
+                        substanceStrength: 0,
+                      },
+                    },
                     color: 'uniform',
                     colorParams: { value: volumeType.color },
                   },
@@ -487,7 +506,10 @@ async function loadStructureIntoViewer(page, structureData) {
     }
 
     await new Promise((resolve) => requestAnimationFrame(() => resolve(true)));
-  }, structureData);
+  }, {
+    ...structureData,
+    volumeSurfaceTypeParams: getVolumeSurfaceTypeParams(style),
+  });
 }
 
 async function setAxisView(page, axis, timeoutMs = 1000) {
@@ -622,7 +644,7 @@ async function renderThumbnailsOnce({
       const axes = ['x', 'y', 'z'];
       if (args.axisRenderMode === 'fast') {
         const loadStartedAt = performance.now();
-        await loadStructureIntoViewer(page, structureData);
+        await loadStructureIntoViewer(page, structureData, style);
         timing.first_structure_load_ms = performance.now() - loadStartedAt;
 
         for (const axis of axes) {
@@ -649,7 +671,7 @@ async function renderThumbnailsOnce({
           }
 
           const loadStartedAt = performance.now();
-          await loadStructureIntoViewer(page, axisStructureData[axis]);
+          await loadStructureIntoViewer(page, axisStructureData[axis], style);
           const structureLoadMs = performance.now() - loadStartedAt;
           if (timing.first_structure_load_ms === null) {
             timing.first_structure_load_ms = structureLoadMs;

@@ -17,6 +17,11 @@ import sys
 import time
 from typing import Any, Callable
 
+from volumizer.molstar import (
+    VOLUME_SURFACE_STYLE_VERSION,
+    build_volume_surface_style,
+)
+
 
 AXIS_FILENAMES = {
     "x": "x.png",
@@ -30,6 +35,7 @@ DEFAULT_RENDER_STYLE: dict[str, Any] = {
     "height": 240,
     "camera_axes": ["x", "y", "z"],
     "representation": "default",
+    "volume_surface_style_version": VOLUME_SURFACE_STYLE_VERSION,
 }
 
 
@@ -47,6 +53,7 @@ class PlannedRenderJob:
     run_id: str
     source_label: str
     structure_path: Path
+    voxel_resolution: float | None
     output_dir: Path
     x_path: Path
     y_path: Path
@@ -345,6 +352,11 @@ def _build_planned_job(
         run_id=str(row["run_id"]),
         source_label=source_label,
         structure_path=_coerce_absolute_path(str(row["annotated_cif_path"])),
+        voxel_resolution=(
+            float(row["voxel_resolution"])
+            if row["voxel_resolution"] is not None
+            else None
+        ),
         output_dir=output_dir,
         x_path=output_dir / AXIS_FILENAMES["x"],
         y_path=output_dir / AXIS_FILENAMES["y"],
@@ -353,6 +365,22 @@ def _build_planned_job(
 
 
 RenderFunction = Callable[[Path, Path, int, int, dict[str, Any]], Any]
+
+
+def _build_job_style(
+    base_style: dict[str, Any],
+    voxel_resolution: float | None,
+) -> dict[str, Any]:
+    job_style = dict(base_style)
+    volume_surface = build_volume_surface_style(voxel_resolution)
+    custom_volume_surface = job_style.get("volume_surface")
+    if isinstance(custom_volume_surface, dict):
+        merged_volume_surface = dict(volume_surface)
+        merged_volume_surface.update(custom_volume_surface)
+        job_style["volume_surface"] = merged_volume_surface
+    else:
+        job_style["volume_surface"] = volume_surface
+    return job_style
 
 
 def _execute_render_job(
@@ -370,6 +398,7 @@ def _execute_render_job(
     worker_timeout_seconds: float | None,
 ) -> dict[str, Any]:
     started_at = time.monotonic()
+    job_style = _build_job_style(style, job.voxel_resolution)
     result: dict[str, Any] = {
         "structure_id": job.structure_id,
         "run_id": job.run_id,
@@ -391,7 +420,13 @@ def _execute_render_job(
         job.output_dir.mkdir(parents=True, exist_ok=True)
 
         if render_fn is not None:
-            maybe_result = render_fn(job.structure_path, job.output_dir, width, height, style)
+            maybe_result = render_fn(
+                job.structure_path,
+                job.output_dir,
+                width,
+                height,
+                job_style,
+            )
         else:
             maybe_result = _render_single_structure_with_node(
                 renderer_script=renderer_script,
@@ -400,7 +435,7 @@ def _execute_render_job(
                 output_dir=job.output_dir,
                 width=width,
                 height=height,
-                style=style,
+                style=job_style,
                 render_backend=render_backend,
                 axis_render_mode=axis_render_mode,
                 worker_timeout_seconds=worker_timeout_seconds,
@@ -505,8 +540,10 @@ def render_gallery_thumbnails(
     query = (
         "SELECT "
         "s.structure_id, s.run_id, s.source_label, s.annotated_cif_path, "
+        "run_meta.resolution AS voxel_resolution, "
         "r.render_status, r.render_style_hash "
         "FROM structures s "
+        "INNER JOIN runs run_meta ON run_meta.run_id = s.run_id "
         "INNER JOIN renders r ON r.structure_id = s.structure_id "
         "WHERE s.annotated_cif_path IS NOT NULL AND length(s.annotated_cif_path) > 0"
     )

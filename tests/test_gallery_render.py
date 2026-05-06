@@ -39,6 +39,7 @@ def _build_render_fixture_db(
     tmp_path: Path,
     *,
     run_id: str = "render-fixture",
+    resolution: float = 3.0,
     missing_structures: set[str] | None = None,
     source_labels: list[str] | None = None,
 ) -> tuple[Path, str, Path]:
@@ -73,7 +74,7 @@ def _build_render_fixture_db(
             {
                 "config": {
                     "assembly_policy": "biological",
-                    "resolution": 3.0,
+                    "resolution": resolution,
                     "keep_non_protein": False,
                     "output_dir": str(run_dir),
                 },
@@ -152,6 +153,38 @@ def test_render_gallery_thumbnails_updates_rows_and_paths(tmp_path: Path):
         assert style_hash == result["style_hash"]
         for raw_path in (x_path, y_path, z_path):
             assert Path(raw_path).is_file()
+
+
+def test_render_gallery_thumbnails_passes_resolution_linked_volume_surface_style(
+    tmp_path: Path,
+):
+    db_path, run_id, _ = _build_render_fixture_db(tmp_path, resolution=5.0)
+    render_root = tmp_path / "renders"
+    seen_styles: list[dict] = []
+
+    def fake_render(
+        structure_path: Path,
+        output_dir: Path,
+        width: int,
+        height: int,
+        style: dict,
+    ) -> None:
+        seen_styles.append(style)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for axis in ("x", "y", "z"):
+            (output_dir / f"{axis}.png").write_bytes(b"ok")
+
+    gallery_render.render_gallery_thumbnails(
+        db_path=db_path,
+        render_root=render_root,
+        run_id=run_id,
+        render_fn=fake_render,
+    )
+
+    assert len(seen_styles) == 2
+    assert all(style["volume_surface"]["quality"] == "custom" for style in seen_styles)
+    assert all(style["volume_surface"]["smoothness"] == 1.5 for style in seen_styles)
+    assert all(style["volume_surface"]["radius_offset"] == 1.0 for style in seen_styles)
 
 
 def test_render_gallery_thumbnails_skips_completed_rows_when_cache_is_fresh(tmp_path: Path):

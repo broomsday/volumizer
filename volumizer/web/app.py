@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from volumizer import gallery_query
+from volumizer.molstar import build_volume_surface_style
 from volumizer.web import db as web_db
 
 
@@ -361,10 +362,13 @@ def create_app(
     def get_viewer_data(structure_id: int) -> dict[str, Any]:
         detail = _get_detail_or_404(app.state.db_path, structure_id)
         structure_path = web_db.resolve_artifact_path(detail.get("annotated_cif_path"))
+        voxel_resolution = detail.get("run_resolution")
 
         return {
             "structure_id": structure_id,
             "source_label": detail.get("source_label"),
+            "voxel_resolution": voxel_resolution,
+            "volume_surface": build_volume_surface_style(voxel_resolution),
             "structure_format": web_db.detect_structure_format(structure_path),
             "structure_url": (
                 f"/files/structure/{structure_id}"

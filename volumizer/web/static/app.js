@@ -527,10 +527,22 @@ async function mountViewer(viewerData) {
     viewerData.structure_format,
     viewerData.structure_format === 'bcif',
   );
-  await applyVolumeStyle(viewer);
+  await applyVolumeStyle(viewer, viewerData.volume_surface);
 }
 
-async function applyVolumeStyle(viewer) {
+function getVolumeSurfaceTypeParams(volumeSurface) {
+  const radiusOffset = Number(volumeSurface?.radius_offset);
+  const smoothness = Number(volumeSurface?.smoothness);
+  const quality = typeof volumeSurface?.quality === 'string' ? volumeSurface.quality : 'custom';
+
+  return {
+    quality,
+    radiusOffset: Number.isFinite(radiusOffset) ? radiusOffset : 0,
+    smoothness: Number.isFinite(smoothness) ? smoothness : 1.5,
+  };
+}
+
+async function applyVolumeStyle(viewer, volumeSurface) {
   try {
     const plugin = viewer.plugin;
     if (!plugin || !plugin.managers || !plugin.managers.structure) return;
@@ -588,6 +600,7 @@ async function applyVolumeStyle(viewer) {
     }
 
     // Add per-type volume components with darker overlays for mouth shells.
+    const volumeSurfaceTypeParams = getVolumeSurfaceTypeParams(volumeSurface);
     for (const [compId, style] of Object.entries(VOLUME_STYLES)) {
       const componentSpecs = [
         {
@@ -613,6 +626,7 @@ async function applyVolumeStyle(viewer) {
             await plugin.builders.structure.representation.addRepresentation(
               comp, {
                 type: 'gaussian-surface',
+                typeParams: volumeSurfaceTypeParams,
                 color: 'uniform',
                 colorParams: { value: spec.color },
               },

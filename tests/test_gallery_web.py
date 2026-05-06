@@ -1362,6 +1362,10 @@ def test_gallery_web_detail_and_viewer_data(tmp_path: Path):
     viewer_response = client.get(f"/api/hits/{structure_id}/viewer-data")
     assert viewer_response.status_code == 200
     viewer_payload = viewer_response.json()
+    assert viewer_payload["voxel_resolution"] == 3.0
+    assert viewer_payload["volume_surface"]["quality"] == "custom"
+    assert viewer_payload["volume_surface"]["radius_offset"] == 0.0
+    assert viewer_payload["volume_surface"]["smoothness"] == 1.5
     assert viewer_payload["structure_format"] == "mmcif"
     assert viewer_payload["structure_url"] == f"/files/structure/{structure_id}"
     assert viewer_payload["annotation_url"] == f"/files/annotation/{structure_id}"
