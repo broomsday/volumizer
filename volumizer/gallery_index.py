@@ -265,6 +265,16 @@ def _collect_summary_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _extract_chain_sequences(structure) -> dict[str, tuple[str, ...]]:
+    chain_residues = _extract_chain_residue_records(structure)
+    return {
+        chain_key: tuple(residue_name for _, _, residue_name in residues)
+        for chain_key, residues in chain_residues.items()
+    }
+
+
+def _extract_chain_residue_records(
+    structure,
+) -> dict[str, tuple[tuple[str, str, str], ...]]:
     if len(structure) == 0:
         return {}
 
@@ -276,7 +286,7 @@ def _extract_chain_sequences(structure) -> dict[str, tuple[str, ...]]:
     else:
         insertion_codes = np.full(len(structure), "", dtype=object)
 
-    chain_sequences: dict[str, list[str]] = {}
+    chain_sequences: dict[str, list[tuple[str, str, str]]] = {}
     previous_residue_key: dict[str, tuple[str, str]] = {}
 
     for chain_id, residue_id, insertion_code, residue_name in zip(
@@ -291,7 +301,9 @@ def _extract_chain_sequences(structure) -> dict[str, tuple[str, ...]]:
             continue
 
         previous_residue_key[chain_key] = residue_key
-        chain_sequences.setdefault(chain_key, []).append(str(residue_name))
+        chain_sequences.setdefault(chain_key, []).append(
+            (str(residue_id), str(insertion_code), str(residue_name))
+        )
 
     return {
         chain_key: tuple(sequence)
@@ -358,6 +370,79 @@ def _count_sequence_unique_chains(
     return len(cluster_reps)
 
 
+def _residue_position_overlap(
+    residues1: tuple[tuple[str, str, str], ...],
+    residues2: tuple[tuple[str, str, str], ...],
+) -> float:
+    """
+    Compute overlap using deposited residue numbering when chains share it.
+
+    This complements the plain sequence matcher for cases where otherwise
+    identical chains have different missing segments in the observed model.
+    """
+    min_len = min(len(residues1), len(residues2))
+    if min_len == 0:
+        return 1.0 if len(residues1) == 0 and len(residues2) == 0 else 0.0
+
+    residue_map1 = {
+        (residue_id, insertion_code): residue_name
+        for residue_id, insertion_code, residue_name in residues1
+    }
+    residue_map2 = {
+        (residue_id, insertion_code): residue_name
+        for residue_id, insertion_code, residue_name in residues2
+    }
+    shared_positions = residue_map1.keys() & residue_map2.keys()
+    if len(shared_positions) == 0:
+        return 0.0
+
+    matches = sum(
+        1
+        for position in shared_positions
+        if residue_map1[position] == residue_map2[position]
+    )
+    return matches / min_len
+
+
+def _count_sequence_unique_chain_residue_records(
+    chain_residue_records: dict[str, tuple[tuple[str, str, str], ...]],
+    identity_threshold: float = 0.95,
+) -> int:
+    """
+    Count sequence-unique chains with residue-position-aware matching.
+
+    Position-aware overlap preserves equivalence for chains that share
+    deposited numbering but differ in which residues were modeled, while
+    the plain sequence overlap still covers inputs without comparable
+    numbering.
+    """
+    chain_keys = list(chain_residue_records.keys())
+    if len(chain_keys) == 0:
+        return 0
+
+    cluster_reps: list[str] = [chain_keys[0]]
+    for chain_key in chain_keys[1:]:
+        residues = chain_residue_records[chain_key]
+        sequence = tuple(residue_name for _, _, residue_name in residues)
+        matched = False
+        for rep_key in cluster_reps:
+            rep_residues = chain_residue_records[rep_key]
+            rep_sequence = tuple(
+                residue_name for _, _, residue_name in rep_residues
+            )
+            overlap = max(
+                _sequence_overlap(sequence, rep_sequence),
+                _residue_position_overlap(residues, rep_residues),
+            )
+            if overlap >= identity_threshold:
+                matched = True
+                break
+        if not matched:
+            cluster_reps.append(chain_key)
+
+    return len(cluster_reps)
+
+
 def _compute_structure_metrics(
     input_path: Path,
     assembly_policy: str,
@@ -369,13 +454,17 @@ def _compute_structure_metrics(
         _warn(f"failed to load/clean {input_path}: {error}")
         return None, None, None
 
-    chain_sequences = _extract_chain_sequences(cleaned)
-    if len(chain_sequences) == 0:
+    chain_residue_records = _extract_chain_residue_records(cleaned)
+    if len(chain_residue_records) == 0:
         return 0, 0, 0
 
-    num_chains = len(chain_sequences)
-    num_residues = int(sum(len(sequence) for sequence in chain_sequences.values()))
-    num_sequence_unique_chains = _count_sequence_unique_chains(chain_sequences)
+    num_chains = len(chain_residue_records)
+    num_residues = int(
+        sum(len(sequence) for sequence in chain_residue_records.values())
+    )
+    num_sequence_unique_chains = _count_sequence_unique_chain_residue_records(
+        chain_residue_records
+    )
 
     return num_chains, num_residues, num_sequence_unique_chains
 

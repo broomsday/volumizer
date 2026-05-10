@@ -5,7 +5,11 @@ import sqlite3
 import pytest
 
 from volumizer import gallery_index, pdb
-from volumizer.gallery_index import _sequence_overlap, _count_sequence_unique_chains
+from volumizer.gallery_index import (
+    _sequence_overlap,
+    _count_sequence_unique_chains,
+    _count_sequence_unique_chain_residue_records,
+)
 from volumizer.paths import TEST_DIR
 
 
@@ -720,7 +724,23 @@ class TestCountSequenceUniqueChains:
         assert _count_sequence_unique_chains({"A": ("ALA",)}) == 1
 
 
+class TestCountSequenceUniqueChainResidueRecords:
+    def test_internal_gap_and_truncation_still_cluster(self):
+        chain_a = tuple(
+            (str(i), "", "ALA")
+            for i in list(range(5, 53)) + list(range(55, 314))
+        )
+        chain_b = tuple((str(i), "", "ALA") for i in range(15, 314))
+        chain_c = tuple(
+            (str(i), "", "ALA")
+            for i in list(range(15, 53)) + list(range(54, 314))
+        )
+        seqs = {"A": chain_a, "B": chain_b, "C": chain_c}
+        assert _count_sequence_unique_chain_residue_records(seqs) == 1
+
+
 RCSB_2ZBT = Path("data/runs/rcsb70/downloads/2ZBT.cif")
+RCSB_2YZR = Path("data/runs/rcsb70/downloads/2YZR.cif")
 
 
 @pytest.mark.skipif(not RCSB_2ZBT.exists(), reason="2ZBT test data not available")
@@ -728,6 +748,17 @@ class TestBiologicalAssemblyMetrics2ZBT:
     def test_2zbt_has_12_chains_1_unique(self):
         chains, residues, unique = gallery_index._compute_structure_metrics(
             RCSB_2ZBT, "biological"
+        )
+        assert chains == 12
+        assert unique == 1
+        assert residues is not None and residues > 3000
+
+
+@pytest.mark.skipif(not RCSB_2YZR.exists(), reason="2YZR test data not available")
+class TestBiologicalAssemblyMetrics2YZR:
+    def test_2yzr_has_12_chains_1_unique(self):
+        chains, residues, unique = gallery_index._compute_structure_metrics(
+            RCSB_2YZR, "biological"
         )
         assert chains == 12
         assert unique == 1
