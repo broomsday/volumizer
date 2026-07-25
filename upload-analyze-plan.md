@@ -63,6 +63,12 @@ helper that upserts a single structure without deleting the run.
 
 Three independently testable stages. Build and verify in order.
 
+Progress:
+- **Stage 1**: complete. `index_single_structure(...)` now shares the batch indexing
+  insert path through `_index_one(...)`; focused gallery index and web regression tests pass.
+- **Stage 2**: not started.
+- **Stage 3**: not started.
+
 ### Stage 1 — Incremental single-structure indexing
 
 **File**: `volumizer/gallery_index.py`
@@ -101,7 +107,10 @@ Behavior:
 
 Refactor note: extract the loop body of `build_gallery_index` (structure + aliases +
 volumes + aggregates + renders insert) into `_index_one(connection, entry, ...)` so both
-the batch path and `index_single_structure` call it.
+the batch path and `index_single_structure` call it. For upload indexing, construct a
+small `result`-like dict (`source`, `input_path`, `structure_output`,
+`annotation_output`) and pass that through the same internal helper rather than creating a
+second structure-insert data path.
 
 **Tests** (`tests/`): new test that builds a temp DB, calls `index_single_structure` twice
 with different labels, and asserts: both structures present under run `uploads`, aggregates
@@ -115,10 +124,13 @@ than duplicates.
 **Job registry** (`volumizer/web/jobs.py`):
 - In-process registry (`dict[str, Job]`) guarded by a lock. Single-user local app, so a
   single background worker thread + queue serializes jobs (avoids SQLite write contention).
-- `Job` fields: `job_id`, `status` (`queued` / `running` / `indexing` / `rendering` /
-  `done` / `error`), `message`, `structure_id` (on success), `error` (on failure),
-  `created_at`, `updated_at`.
-- `submit_analysis(...)` enqueues; a worker runs the pipeline (Stage 3 orchestration).
+- `Job` fields: `job_id`, `status` (`queued` / `running` / `indexing` / `done` /
+  `error`), `message`, `structure_id` (on success), `error` (on failure),
+  `created_at`, `updated_at`, and `thumbnail_status` (`pending` / `rendering` / `done` /
+  `failed` / `skipped`) so the viewer can be shown as soon as indexing completes.
+- `submit_analysis(...)` enqueues; a worker runs the pipeline. Design the registry with
+  injectable analysis and thumbnail-render functions so FastAPI tests can avoid slow
+  real analysis and Playwright rendering.
 
 **Pipeline orchestration** (in the worker):
 1. Save the uploaded bytes to `data/runs/uploads/incoming/<job_id>.<ext>` (accept `.pdb`,
@@ -130,11 +142,12 @@ than duplicates.
    deduped against existing labels in the run).
 3. On analysis success: `status = indexing`; call
    `gallery_index.index_single_structure(...)` → `structure_id`.
-4. `status = rendering`: invoke `gallery_render` against the DB in the background (subprocess
-   `python -m volumizer.gallery_render --db <db>` or the library function). This picks up the
-   new `pending` row. Thumbnail failure is **non-fatal** — the row stays `failed`/`pending`
-   and the live viewer still works.
-5. `status = done`, set `structure_id`.
+4. `status = done`, set `structure_id` immediately after indexing so the frontend can route
+   to the live detail viewer without waiting for PNG thumbnails.
+5. Separately set `thumbnail_status = rendering` and invoke `gallery_render` against the DB
+   in the background (subprocess `python -m volumizer.gallery_render --db <db>` or the
+   library function). This picks up the new `pending` row. Thumbnail failure is **non-fatal**
+   and updates only `thumbnail_status`; the indexed structure remains usable.
    Any exception → `status = error` with a user-safe message; keep the traceback server-side.
 
 **Endpoints** (`app.py`):
@@ -151,6 +164,8 @@ than duplicates.
   `renderer_available`) so the frontend can hide the upload UI when unavailable.
 - Enforce an upload size limit and a per-analysis `max_residues` guard (reuse
   `PostAssemblyResidueLimitExceeded` handling) to bound runtime.
+- Confirm the FastAPI multipart dependency (`python-multipart`) is available; add it to the
+  project dependencies if the first endpoint test reports it missing.
 - `data/runs/uploads/` should be created on demand.
 
 ### Stage 3 — Frontend landing view + upload flow
@@ -169,7 +184,8 @@ than duplicates.
 - **Upload flow** (`app.js`):
   1. On submit, `POST /api/analyze` with `FormData`; disable the form (single-flight).
   2. Show a progress panel driven by polling `GET /api/analyze/{job_id}` (~1s interval),
-     surfacing `status` transitions (`queued → running → indexing → rendering → done`).
+     surfacing `status` transitions (`queued → running → indexing → done`) and, after
+     `done`, showing thumbnail progress via `thumbnail_status` without blocking the viewer.
   3. On `done`, route to the detail view for `structure_id` (reuse the existing hit-detail
      loader that calls `/api/hits/{id}` + `/api/hits/{id}/viewer-data`) so the live 3D shows
      immediately. The gallery card thumbnail fills in once background rendering completes.
@@ -200,7 +216,8 @@ than duplicates.
   pending render rows).
 - **Stage 2**: FastAPI `TestClient` test that posts a small fixture PDB (or mocks the analysis
   worker) and polls the job to `done`, asserting a `structure_id` and a queryable
-  `/api/hits/{id}`. Assert `error` handling for a bad upload.
+  `/api/hits/{id}`. Mock analysis and thumbnail rendering through the job registry's
+  injectable test seams. Assert `error` handling for a bad upload.
 - **Stage 3**: manual run via the `gallery` script / `uvicorn`, upload a known small PDB
   (e.g. a `tests/pdbs` fixture), confirm the live viewer appears on completion and the
   gallery card thumbnail fills in shortly after.

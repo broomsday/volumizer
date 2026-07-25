@@ -650,6 +650,140 @@ def test_build_gallery_index_can_skip_structure_metrics(tmp_path: Path):
     assert row == (None, None, None, 0.5, 0.2, 0.3)
 
 
+def test_index_single_structure_upserts_into_shared_uploads_run(tmp_path: Path):
+    db_path = tmp_path / "gallery.db"
+    annotated_a_path = tmp_path / "hit-a.annotated.cif"
+    annotation_a_path = tmp_path / "hit-a.annotation.json"
+    annotated_b_path = tmp_path / "hit-b.annotated.cif"
+    annotation_b_path = tmp_path / "hit-b.annotation.json"
+
+    annotated_a_path.write_text("data_hit_a\n#\n", encoding="utf-8")
+    annotated_b_path.write_text("data_hit_b\n#\n", encoding="utf-8")
+
+    def _write_annotation(path: Path, source_label: str, volume: float) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "source": source_label,
+                    "num_volumes": 1,
+                    "frac_alpha": 0.5,
+                    "frac_beta": 0.2,
+                    "frac_coil": 0.3,
+                    "volumes": [
+                        {
+                            "id": 0,
+                            "type": "pore",
+                            "volume": volume,
+                            "x": 10.0,
+                            "y": 4.0,
+                            "z": 2.0,
+                            "cross_section_circularity": 0.8,
+                            "cross_section_uniformity": 0.7,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    _write_annotation(annotation_a_path, "hit-a", 100.0)
+    _write_annotation(annotation_b_path, "hit-b", 200.0)
+
+    first_id = gallery_index.index_single_structure(
+        db_path=db_path,
+        run_id="uploads",
+        source_label="hit-a",
+        input_path=TEST_INPUT_PDB,
+        annotated_cif_path=annotated_a_path,
+        annotation_json_path=annotation_a_path,
+        resolution=3.0,
+        assembly_policy="biological",
+    )
+    second_id = gallery_index.index_single_structure(
+        db_path=db_path,
+        run_id="uploads",
+        source_label="hit-b",
+        input_path=TEST_INPUT_PDB,
+        annotated_cif_path=annotated_b_path,
+        annotation_json_path=annotation_b_path,
+        resolution=2.0,
+        assembly_policy="biological",
+    )
+
+    _write_annotation(annotation_a_path, "hit-a", 333.0)
+    replacement_id = gallery_index.index_single_structure(
+        db_path=db_path,
+        run_id="uploads",
+        source_label="hit-a",
+        input_path=TEST_INPUT_PDB,
+        annotated_cif_path=annotated_a_path,
+        annotation_json_path=annotation_a_path,
+        resolution=4.0,
+        assembly_policy="biological",
+    )
+
+    assert first_id != second_id
+    assert replacement_id not in {first_id, second_id}
+
+    with sqlite3.connect(db_path) as connection:
+        run_row = connection.execute(
+            """
+            SELECT run_id, resolution, assembly_policy
+            FROM runs
+            WHERE run_id = 'uploads'
+            """
+        ).fetchone()
+        structure_rows = connection.execute(
+            """
+            SELECT source_label, structure_id
+            FROM structures
+            WHERE run_id = 'uploads'
+            ORDER BY source_label ASC
+            """
+        ).fetchall()
+        volume_rows = connection.execute(
+            """
+            SELECT s.source_label, v.kind, v.rank_in_kind, v.volume_a3
+            FROM volumes v
+            JOIN structures s ON s.structure_id = v.structure_id
+            ORDER BY s.source_label ASC
+            """
+        ).fetchall()
+        aggregate_rows = connection.execute(
+            """
+            SELECT s.source_label, a.num_pores, a.largest_pore_volume_a3
+            FROM structure_aggregates a
+            JOIN structures s ON s.structure_id = a.structure_id
+            ORDER BY s.source_label ASC
+            """
+        ).fetchall()
+        render_rows = connection.execute(
+            """
+            SELECT
+                s.source_label,
+                r.render_status,
+                r.x_png_path,
+                r.y_png_path,
+                r.z_png_path
+            FROM renders r
+            JOIN structures s ON s.structure_id = r.structure_id
+            ORDER BY s.source_label ASC
+            """
+        ).fetchall()
+
+    assert run_row == ("uploads", 3.0, "biological")
+    assert structure_rows == [("hit-a", replacement_id), ("hit-b", second_id)]
+    assert volume_rows == [
+        ("hit-a", "pore", 1, 333.0),
+        ("hit-b", "pore", 1, 200.0),
+    ]
+    assert aggregate_rows == [("hit-a", 1, 333.0), ("hit-b", 1, 200.0)]
+    assert render_rows == [
+        ("hit-a", "pending", None, None, None),
+        ("hit-b", "pending", None, None, None),
+    ]
+
+
 class TestSequenceOverlap:
     def test_identical_sequences(self):
         seq = ("ALA", "GLY", "VAL")

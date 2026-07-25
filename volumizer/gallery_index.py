@@ -632,6 +632,355 @@ def _derive_default_run_id(summary_path: Path) -> str:
     return sanitized
 
 
+def _kind_aggregates(
+    grouped_rows: dict[str, list[dict[str, float | int | str | None]]],
+    kind: str,
+) -> tuple[
+    int,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+    float | None,
+]:
+    rows = grouped_rows[kind]
+    if len(rows) > 0:
+        largest = rows[0]
+        return (
+            len(rows),
+            float(largest["volume_a3"]),
+            float(largest["length_a"]),
+            float(largest["min_diameter_a"]),
+            float(largest["max_diameter_a"]),
+            largest["cross_section_circularity"],
+            largest["cross_section_uniformity"],
+        )
+    return (0, None, None, None, None, None, None)
+
+
+def _index_one(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    result: dict[str, Any],
+    source_label: str,
+    input_path: Path | None,
+    annotated_cif_path: Path | None,
+    annotation_path: Path,
+    assembly_policy: str,
+    now_utc: str,
+    compute_structure_metrics: bool = True,
+    input_metric_cache: (
+        dict[Path, tuple[int | None, int | None, int | None]] | None
+    ) = None,
+) -> tuple[int, int]:
+    num_chains = None
+    num_residues = None
+    num_sequence_unique_chains = None
+    if compute_structure_metrics:
+        if input_path is None or not input_path.is_file():
+            _warn(
+                f"structure metrics unavailable for {source_label}: "
+                f"input path missing ({input_path})"
+            )
+        else:
+            if input_metric_cache is None:
+                num_chains, num_residues, num_sequence_unique_chains = (
+                    _compute_structure_metrics(
+                        input_path,
+                        assembly_policy=assembly_policy,
+                    )
+                )
+            else:
+                if input_path not in input_metric_cache:
+                    input_metric_cache[input_path] = _compute_structure_metrics(
+                        input_path,
+                        assembly_policy=assembly_policy,
+                    )
+                (
+                    num_chains,
+                    num_residues,
+                    num_sequence_unique_chains,
+                ) = input_metric_cache[input_path]
+
+    annotation_payload = json.loads(annotation_path.read_text(encoding="utf-8"))
+    frac_alpha = _safe_float(
+        annotation_payload.get("frac_alpha")
+        if isinstance(annotation_payload, dict)
+        else None
+    )
+    frac_beta = _safe_float(
+        annotation_payload.get("frac_beta")
+        if isinstance(annotation_payload, dict)
+        else None
+    )
+    frac_coil = _safe_float(
+        annotation_payload.get("frac_coil")
+        if isinstance(annotation_payload, dict)
+        else None
+    )
+    volume_records = _parse_volume_records(annotation_payload)
+    grouped_rows = _normalize_volume_rows(volume_records)
+    pdb_id = _infer_pdb_id(
+        result,
+        source_label=source_label,
+        input_path=input_path,
+    )
+
+    cursor = connection.execute(
+        """
+        INSERT INTO structures (
+            run_id,
+            source_label,
+            pdb_id,
+            input_path,
+            annotated_cif_path,
+            annotation_json_path,
+            num_chains,
+            num_residues,
+            num_sequence_unique_chains,
+            frac_alpha,
+            frac_beta,
+            frac_coil
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            source_label,
+            pdb_id,
+            str(input_path) if input_path is not None else None,
+            str(annotated_cif_path) if annotated_cif_path is not None else None,
+            str(annotation_path),
+            num_chains,
+            num_residues,
+            num_sequence_unique_chains,
+            frac_alpha,
+            frac_beta,
+            frac_coil,
+        ),
+    )
+    structure_id = int(cursor.lastrowid)
+
+    alias_rows: list[tuple[int, str, str]] = []
+    seen_aliases: set[str] = set()
+    if pdb_id is not None:
+        alias_rows.append((structure_id, pdb_id, "canonical"))
+        seen_aliases.add(pdb_id)
+
+    for alias_pdb_id in _normalize_cluster_member_pdb_ids(
+        result.get("cluster_member_pdb_ids"),
+    ):
+        if alias_pdb_id in seen_aliases:
+            continue
+        alias_rows.append((structure_id, alias_pdb_id, "cluster_member"))
+        seen_aliases.add(alias_pdb_id)
+
+    if len(alias_rows) > 0:
+        connection.executemany(
+            """
+            INSERT INTO structure_pdb_aliases (
+                structure_id,
+                alias_pdb_id,
+                alias_source
+            ) VALUES (?, ?, ?)
+            """,
+            alias_rows,
+        )
+
+    indexed_volumes = 0
+    for kind, rows in grouped_rows.items():
+        for rank_in_kind, row in enumerate(rows, start=1):
+            connection.execute(
+                """
+                INSERT INTO volumes (
+                    structure_id,
+                    kind,
+                    rank_in_kind,
+                    volume_a3,
+                    length_a,
+                    min_diameter_a,
+                    max_diameter_a,
+                    centroid_x,
+                    centroid_y,
+                    centroid_z,
+                    cross_section_circularity,
+                    cross_section_uniformity
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    structure_id,
+                    kind,
+                    rank_in_kind,
+                    float(row["volume_a3"]),
+                    row["length_a"],
+                    row["min_diameter_a"],
+                    row["max_diameter_a"],
+                    row["centroid_x"],
+                    row["centroid_y"],
+                    row["centroid_z"],
+                    row["cross_section_circularity"],
+                    row["cross_section_uniformity"],
+                ),
+            )
+            indexed_volumes += 1
+
+    pore_agg = _kind_aggregates(grouped_rows, "pore")
+    pocket_agg = _kind_aggregates(grouped_rows, "pocket")
+    cavity_agg = _kind_aggregates(grouped_rows, "cavity")
+    hub_agg = (0, None, None, None, None, None, None)
+
+    connection.execute(
+        """
+        INSERT INTO structure_aggregates (
+            structure_id,
+            num_pores, largest_pore_volume_a3, largest_pore_length_a,
+            largest_pore_min_diameter_a, largest_pore_max_diameter_a,
+            largest_pore_circularity, largest_pore_uniformity,
+            num_pockets, largest_pocket_volume_a3, largest_pocket_length_a,
+            largest_pocket_min_diameter_a, largest_pocket_max_diameter_a,
+            largest_pocket_circularity, largest_pocket_uniformity,
+            num_cavities, largest_cavity_volume_a3, largest_cavity_length_a,
+            largest_cavity_min_diameter_a, largest_cavity_max_diameter_a,
+            largest_cavity_circularity, largest_cavity_uniformity,
+            num_hubs, largest_hub_volume_a3, largest_hub_length_a,
+            largest_hub_min_diameter_a, largest_hub_max_diameter_a,
+            largest_hub_circularity, largest_hub_uniformity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                  ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            structure_id,
+            *pore_agg,
+            *pocket_agg,
+            *cavity_agg,
+            *hub_agg,
+        ),
+    )
+
+    connection.execute(
+        """
+        INSERT INTO renders (
+            structure_id,
+            x_png_path,
+            y_png_path,
+            z_png_path,
+            render_style_hash,
+            render_status,
+            render_error,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            structure_id,
+            None,
+            None,
+            None,
+            None,
+            "pending",
+            None,
+            now_utc,
+        ),
+    )
+
+    return structure_id, indexed_volumes
+
+
+def index_single_structure(
+    db_path: Path,
+    run_id: str,
+    source_label: str,
+    input_path: Path,
+    annotated_cif_path: Path,
+    annotation_json_path: Path,
+    resolution: float,
+    assembly_policy: str,
+) -> int:
+    """
+    Upsert one analyzed structure into an existing gallery database run.
+
+    Uploads are grouped into a shared run. Because resolution is stored on
+    `runs`, the first upload for a run sets the run-level resolution used by
+    the current viewer metadata.
+    """
+    effective_run_id = str(run_id).strip()
+    if len(effective_run_id) == 0:
+        raise ValueError("run_id must not be empty")
+
+    effective_source_label = str(source_label).strip()
+    if len(effective_source_label) == 0:
+        raise ValueError("source_label must not be empty")
+
+    input_path = Path(input_path).expanduser().resolve()
+    annotated_cif_path = Path(annotated_cif_path).expanduser().resolve()
+    annotation_json_path = Path(annotation_json_path).expanduser().resolve()
+    if not input_path.is_file():
+        raise FileNotFoundError(f"Input structure does not exist: {input_path}")
+    if not annotated_cif_path.is_file():
+        raise FileNotFoundError(
+            f"Annotated structure does not exist: {annotated_cif_path}"
+        )
+    if not annotation_json_path.is_file():
+        raise FileNotFoundError(
+            f"Annotation JSON does not exist: {annotation_json_path}"
+        )
+
+    db_path = Path(db_path).expanduser().resolve()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    now_utc = datetime.now(tz=timezone.utc).isoformat()
+    synthetic_summary_path = (
+        db_path.parent / "runs" / effective_run_id / "run.summary.json"
+    )
+    result = {
+        "source": effective_source_label,
+        "input_path": str(input_path),
+        "structure_output": str(annotated_cif_path),
+        "annotation_output": str(annotation_json_path),
+    }
+
+    with sqlite3.connect(db_path) as connection:
+        connection.executescript(_SCHEMA_SQL)
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO runs (
+                run_id,
+                created_at,
+                source_summary_path,
+                resolution,
+                assembly_policy
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                effective_run_id,
+                now_utc,
+                str(synthetic_summary_path),
+                float(resolution),
+                assembly_policy,
+            ),
+        )
+        connection.execute(
+            """
+            DELETE FROM structures
+            WHERE run_id = ? AND source_label = ?
+            """,
+            (effective_run_id, effective_source_label),
+        )
+        structure_id, _ = _index_one(
+            connection,
+            run_id=effective_run_id,
+            result=result,
+            source_label=effective_source_label,
+            input_path=input_path,
+            annotated_cif_path=annotated_cif_path,
+            annotation_path=annotation_json_path,
+            assembly_policy=assembly_policy,
+            now_utc=now_utc,
+        )
+        connection.commit()
+
+    return structure_id
+
+
 def build_gallery_index(
     summary_path: Path,
     db_path: Path,
@@ -755,216 +1104,29 @@ def build_gallery_index(
                         )
                     continue
 
-                num_chains = None
-                num_residues = None
-                num_sequence_unique_chains = None
-                if compute_structure_metrics:
-                    if input_path is None or not input_path.is_file():
-                        _warn(
-                            f"structure metrics unavailable for {source_label}: input path missing ({input_path})"
-                        )
-                        if strict:
-                            raise FileNotFoundError(
-                                f"Missing input structure for {source_label}: {input_path}"
-                            )
-                    else:
-                        if input_path not in input_metric_cache:
-                            input_metric_cache[input_path] = _compute_structure_metrics(
-                                input_path,
-                                assembly_policy=assembly_policy,
-                            )
-                        (
-                            num_chains,
-                            num_residues,
-                            num_sequence_unique_chains,
-                        ) = input_metric_cache[input_path]
-
-                annotation_payload = json.loads(annotation_path.read_text(encoding="utf-8"))
-                frac_alpha = _safe_float(
-                    annotation_payload.get("frac_alpha") if isinstance(annotation_payload, dict) else None
-                )
-                frac_beta = _safe_float(
-                    annotation_payload.get("frac_beta") if isinstance(annotation_payload, dict) else None
-                )
-                frac_coil = _safe_float(
-                    annotation_payload.get("frac_coil") if isinstance(annotation_payload, dict) else None
-                )
-                volume_records = _parse_volume_records(annotation_payload)
-                grouped_rows = _normalize_volume_rows(volume_records)
-                pdb_id = _infer_pdb_id(
-                    result,
-                    source_label=source_label,
-                    input_path=input_path,
-                )
-
-                cursor = connection.execute(
-                    """
-                    INSERT INTO structures (
-                        run_id,
-                        source_label,
-                        pdb_id,
-                        input_path,
-                        annotated_cif_path,
-                        annotation_json_path,
-                        num_chains,
-                        num_residues,
-                        num_sequence_unique_chains,
-                        frac_alpha,
-                        frac_beta,
-                        frac_coil
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        effective_run_id,
-                        source_label,
-                        pdb_id,
-                        str(input_path) if input_path is not None else None,
-                        str(annotated_cif_path) if annotated_cif_path is not None else None,
-                        str(annotation_path),
-                        num_chains,
-                        num_residues,
-                        num_sequence_unique_chains,
-                        frac_alpha,
-                        frac_beta,
-                        frac_coil,
-                    ),
-                )
-                structure_id = int(cursor.lastrowid)
-
-                alias_rows: list[tuple[int, str, str]] = []
-                seen_aliases: set[str] = set()
-                if pdb_id is not None:
-                    alias_rows.append((structure_id, pdb_id, "canonical"))
-                    seen_aliases.add(pdb_id)
-
-                for alias_pdb_id in _normalize_cluster_member_pdb_ids(
-                    result.get("cluster_member_pdb_ids"),
+                if (
+                    compute_structure_metrics
+                    and (input_path is None or not input_path.is_file())
+                    and strict
                 ):
-                    if alias_pdb_id in seen_aliases:
-                        continue
-                    alias_rows.append((structure_id, alias_pdb_id, "cluster_member"))
-                    seen_aliases.add(alias_pdb_id)
-
-                if len(alias_rows) > 0:
-                    connection.executemany(
-                        """
-                        INSERT INTO structure_pdb_aliases (
-                            structure_id,
-                            alias_pdb_id,
-                            alias_source
-                        ) VALUES (?, ?, ?)
-                        """,
-                        alias_rows,
+                    raise FileNotFoundError(
+                        f"Missing input structure for {source_label}: {input_path}"
                     )
 
-                for kind, rows in grouped_rows.items():
-                    for rank_in_kind, row in enumerate(rows, start=1):
-                        connection.execute(
-                            """
-                            INSERT INTO volumes (
-                                structure_id,
-                                kind,
-                                rank_in_kind,
-                                volume_a3,
-                                length_a,
-                                min_diameter_a,
-                                max_diameter_a,
-                                centroid_x,
-                                centroid_y,
-                                centroid_z,
-                                cross_section_circularity,
-                                cross_section_uniformity
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                structure_id,
-                                kind,
-                                rank_in_kind,
-                                float(row["volume_a3"]),
-                                row["length_a"],
-                                row["min_diameter_a"],
-                                row["max_diameter_a"],
-                                row["centroid_x"],
-                                row["centroid_y"],
-                                row["centroid_z"],
-                                row["cross_section_circularity"],
-                                row["cross_section_uniformity"],
-                            ),
-                        )
-                        indexed_volumes += 1
-
-                def _kind_aggregates(kind: str) -> tuple[int, float | None, float | None, float | None, float | None, float | None, float | None]:
-                    rows = grouped_rows[kind]
-                    if len(rows) > 0:
-                        largest = rows[0]
-                        return (
-                            len(rows),
-                            float(largest["volume_a3"]),
-                            float(largest["length_a"]),
-                            float(largest["min_diameter_a"]),
-                            float(largest["max_diameter_a"]),
-                            largest["cross_section_circularity"],
-                            largest["cross_section_uniformity"],
-                        )
-                    return (0, None, None, None, None, None, None)
-
-                pore_agg = _kind_aggregates("pore")
-                pocket_agg = _kind_aggregates("pocket")
-                cavity_agg = _kind_aggregates("cavity")
-                hub_agg = (0, None, None, None, None, None, None)
-
-                connection.execute(
-                    """
-                    INSERT INTO structure_aggregates (
-                        structure_id,
-                        num_pores, largest_pore_volume_a3, largest_pore_length_a,
-                        largest_pore_min_diameter_a, largest_pore_max_diameter_a,
-                        largest_pore_circularity, largest_pore_uniformity,
-                        num_pockets, largest_pocket_volume_a3, largest_pocket_length_a,
-                        largest_pocket_min_diameter_a, largest_pocket_max_diameter_a,
-                        largest_pocket_circularity, largest_pocket_uniformity,
-                        num_cavities, largest_cavity_volume_a3, largest_cavity_length_a,
-                        largest_cavity_min_diameter_a, largest_cavity_max_diameter_a,
-                        largest_cavity_circularity, largest_cavity_uniformity,
-                        num_hubs, largest_hub_volume_a3, largest_hub_length_a,
-                        largest_hub_min_diameter_a, largest_hub_max_diameter_a,
-                        largest_hub_circularity, largest_hub_uniformity
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                              ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        structure_id,
-                        *pore_agg,
-                        *pocket_agg,
-                        *cavity_agg,
-                        *hub_agg,
-                    ),
+                _, entry_volumes = _index_one(
+                    connection,
+                    run_id=effective_run_id,
+                    result=result,
+                    source_label=source_label,
+                    input_path=input_path,
+                    annotated_cif_path=annotated_cif_path,
+                    annotation_path=annotation_path,
+                    assembly_policy=assembly_policy,
+                    now_utc=now_utc,
+                    compute_structure_metrics=compute_structure_metrics,
+                    input_metric_cache=input_metric_cache,
                 )
-
-                connection.execute(
-                    """
-                    INSERT INTO renders (
-                        structure_id,
-                        x_png_path,
-                        y_png_path,
-                        z_png_path,
-                        render_style_hash,
-                        render_status,
-                        render_error,
-                        updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        structure_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                        "pending",
-                        None,
-                        now_utc,
-                    ),
-                )
+                indexed_volumes += entry_volumes
 
                 indexed_structures += 1
                 if progress_every > 0 and (entry_index % progress_every) == 0:
