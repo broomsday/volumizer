@@ -16,6 +16,10 @@
         <h1 class="eyebrow masthead-title">Volumizer Gallery</h1>
       </div>
       <div class="masthead-pills">
+        <nav class="masthead-nav" aria-label="Primary">
+          <button type="button" class="secondary-button nav-button" id="home-view-button">Upload</button>
+          <button type="button" class="secondary-button nav-button" id="gallery-view-button">Browse</button>
+        </nav>
         <div class="pill">
           <span class="pill-label">DB</span>
           <span id="db-pill">Checking…</span>
@@ -24,10 +28,88 @@
           <span class="pill-label">Results</span>
           <span id="result-pill">0</span>
         </div>
+        <div class="pill">
+          <span class="pill-label">Uploads</span>
+          <span id="upload-pill">Checking…</span>
+        </div>
       </div>
     </header>
 
-    <main class="workspace">
+    <main id="landing-view" class="landing-view">
+      <section class="landing-hero">
+        <div class="landing-copy">
+          <p class="panel-kicker">Analyze locally</p>
+          <h2>Volumizer</h2>
+          <p class="landing-lede">
+            Upload a structure file, run the analysis, and open the annotated Mol* viewer as soon as indexing completes.
+          </p>
+          <div class="landing-actions">
+            <button type="button" class="primary-button" id="upload-focus-button">Upload PDB</button>
+            <button type="button" class="secondary-button" id="browse-gallery-button">Browse gallery</button>
+          </div>
+        </div>
+        <div class="landing-visual" aria-hidden="true">
+          <div class="volume-preview">
+            <span class="protein-chain chain-a"></span>
+            <span class="protein-chain chain-b"></span>
+            <span class="volume-core pore-core"></span>
+            <span class="volume-core pocket-core"></span>
+            <span class="volume-core cavity-core"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="upload-workbench">
+        <form id="upload-form" class="upload-form">
+          <div class="upload-form-heading">
+            <p class="panel-kicker section-title">Upload</p>
+          </div>
+          <label class="upload-file-field">
+            <span>Structure file</span>
+            <input id="upload-file" name="file" type="file" accept=".pdb,.cif,.mmcif" required />
+          </label>
+          <div class="upload-field-row">
+            <label>
+              <span>Resolution</span>
+              <input id="upload-resolution" name="resolution" type="number" min="0.1" step="0.1" value="3.0" required />
+            </label>
+            <label>
+              <span>Assembly policy</span>
+              <select id="upload-assembly-policy" name="assembly_policy">
+                <option value="biological">biological</option>
+                <option value="asymmetric">asymmetric</option>
+                <option value="auto">auto</option>
+              </select>
+            </label>
+          </div>
+          <div class="button-row">
+            <button type="submit" class="primary-button" id="upload-submit-button">Run analysis</button>
+            <button type="button" class="secondary-button" id="upload-reset-button">Clear</button>
+          </div>
+        </form>
+
+        <div id="upload-disabled-state" class="status-banner" hidden>
+          Upload analysis is disabled for this gallery.
+        </div>
+
+        <div id="upload-status-panel" class="upload-status-panel" hidden>
+          <div>
+            <p class="panel-kicker">Status</p>
+            <h3 id="upload-status-title">Queued</h3>
+          </div>
+          <p id="upload-status-message">Waiting for the worker.</p>
+          <div class="upload-steps" aria-label="Upload progress">
+            <span data-upload-step="queued">Queued</span>
+            <span data-upload-step="running">Running</span>
+            <span data-upload-step="indexing">Indexing</span>
+            <span data-upload-step="done">Done</span>
+          </div>
+          <p id="upload-thumbnail-status" class="upload-thumbnail-status"></p>
+        </div>
+      </section>
+    </main>
+
+    <main id="gallery-view" class="workspace" hidden>
       <aside class="filters-panel">
         <div class="panel-heading">
           <p class="panel-kicker section-title">Filters</p>

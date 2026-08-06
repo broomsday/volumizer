@@ -69,7 +69,9 @@ Progress:
 - **Stage 2**: complete. The FastAPI app now exposes upload analysis endpoints backed by
   an in-process serialized job registry with injectable analysis/render seams; focused
   upload API and gallery web regression tests pass under `uv run --group test`.
-- **Stage 3**: not started.
+- **Stage 3**: complete. The static UI now defaults to a landing/upload view,
+  supports hash routing for landing/gallery/detail, posts uploads to the analyze API,
+  polls job/thumbnail status, and opens the live detail viewer when indexing completes.
 
 ### Stage 1 — Incremental single-structure indexing
 

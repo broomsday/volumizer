@@ -36,6 +36,9 @@ const BUILTIN_FILTER_PRESET_PREFIX = '__builtin__:';
 const DISPLAY_PRESET_DEFAULT_LABEL = 'Default';
 const BUILTIN_DISPLAY_PRESET_PREFIX = '__builtin-display__:';
 const NON_FILTER_FORM_FIELD_NAMES = new Set(['sort_by', 'sort_dir', 'limit']);
+const DEFAULT_UPLOAD_RESOLUTION = '3.0';
+const DEFAULT_ASSEMBLY_POLICIES = Object.freeze(['biological', 'asymmetric', 'auto']);
+const UPLOAD_POLL_INTERVAL_MS = 1000;
 const SORT_BY_ALIASES = Object.freeze({
   largest_pore_volume_a3: 'largest_pore_volume',
   largest_pore_length_a: 'largest_pore_length',
@@ -155,13 +158,36 @@ function volumeScript(compId, variant = 'all') {
 }
 
 const state = {
+  currentView: 'landing',
   currentOffset: 0,
   totalCount: 0,
   currentLimit: 24,
   currentViewer: null,
+  health: null,
+  uploadPollId: null,
+  uploadRoutedJobId: null,
+  suppressDetailCloseRoute: false,
 };
 
 const elements = {
+  landingView: document.getElementById('landing-view'),
+  galleryView: document.getElementById('gallery-view'),
+  homeViewButton: document.getElementById('home-view-button'),
+  galleryViewButton: document.getElementById('gallery-view-button'),
+  uploadFocusButton: document.getElementById('upload-focus-button'),
+  browseGalleryButton: document.getElementById('browse-gallery-button'),
+  uploadForm: document.getElementById('upload-form'),
+  uploadFileInput: document.getElementById('upload-file'),
+  uploadResolutionInput: document.getElementById('upload-resolution'),
+  uploadAssemblyPolicySelect: document.getElementById('upload-assembly-policy'),
+  uploadSubmitButton: document.getElementById('upload-submit-button'),
+  uploadResetButton: document.getElementById('upload-reset-button'),
+  uploadDisabledState: document.getElementById('upload-disabled-state'),
+  uploadStatusPanel: document.getElementById('upload-status-panel'),
+  uploadStatusTitle: document.getElementById('upload-status-title'),
+  uploadStatusMessage: document.getElementById('upload-status-message'),
+  uploadThumbnailStatus: document.getElementById('upload-thumbnail-status'),
+  uploadPill: document.getElementById('upload-pill'),
   filtersForm: document.getElementById('filters-form'),
   pdbIdQueryInput: document.getElementById('pdb-id-query'),
   runSelect: document.getElementById('run-id'),
@@ -232,8 +258,10 @@ function buildSearchParams() {
   return params;
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+async function fetchJson(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+  const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
@@ -249,7 +277,207 @@ async function fetchJson(url) {
 
 async function loadHealth() {
   const health = await fetchJson('/api/health');
+  state.health = health;
   elements.dbPill.textContent = health.db_exists ? health.db.split('/').slice(-2).join('/') : 'Missing DB';
+  elements.uploadPill.textContent = health.upload_enabled ? 'Enabled' : 'Disabled';
+  configureUploadForm(health);
+}
+
+function configureUploadForm(health) {
+  const policies = Array.isArray(health.assembly_policies) && health.assembly_policies.length > 0
+    ? health.assembly_policies
+    : DEFAULT_ASSEMBLY_POLICIES;
+  const previousPolicy = elements.uploadAssemblyPolicySelect.value;
+  elements.uploadAssemblyPolicySelect.innerHTML = '';
+  for (const policy of policies) {
+    const option = document.createElement('option');
+    option.value = String(policy);
+    option.textContent = String(policy);
+    elements.uploadAssemblyPolicySelect.append(option);
+  }
+  if (policies.includes(previousPolicy)) {
+    elements.uploadAssemblyPolicySelect.value = previousPolicy;
+  } else if (policies.includes('biological')) {
+    elements.uploadAssemblyPolicySelect.value = 'biological';
+  }
+
+  elements.uploadResolutionInput.value = elements.uploadResolutionInput.value || DEFAULT_UPLOAD_RESOLUTION;
+  elements.uploadForm.hidden = !health.upload_enabled;
+  elements.uploadDisabledState.hidden = health.upload_enabled;
+}
+
+function clearUploadPoll() {
+  if (state.uploadPollId !== null) {
+    window.clearInterval(state.uploadPollId);
+    state.uploadPollId = null;
+  }
+}
+
+function setUploadBusy(isBusy) {
+  for (const element of elements.uploadForm.elements) {
+    element.disabled = isBusy;
+  }
+  elements.uploadResetButton.disabled = isBusy;
+}
+
+function formatBytes(bytes) {
+  const numericBytes = Number(bytes);
+  if (!Number.isFinite(numericBytes) || numericBytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = numericBytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function uploadStatusLabel(status) {
+  const labels = {
+    queued: 'Queued',
+    running: 'Running analysis',
+    indexing: 'Indexing result',
+    done: 'Analysis complete',
+    error: 'Analysis failed',
+  };
+  return labels[status] || 'Analyzing';
+}
+
+function thumbnailStatusLabel(status) {
+  const labels = {
+    pending: 'Thumbnail pending',
+    rendering: 'Rendering thumbnail',
+    done: 'Thumbnail ready',
+    failed: 'Thumbnail failed',
+    skipped: 'Thumbnail skipped',
+  };
+  return labels[status] || '';
+}
+
+function updateUploadProgressSteps(status) {
+  const order = ['queued', 'running', 'indexing', 'done'];
+  const activeIndex = status === 'error' ? -1 : Math.max(0, order.indexOf(status));
+  for (const step of elements.uploadStatusPanel.querySelectorAll('[data-upload-step]')) {
+    const stepIndex = order.indexOf(step.dataset.uploadStep);
+    step.classList.toggle('is-active', stepIndex === activeIndex);
+    step.classList.toggle('is-complete', activeIndex >= 0 && stepIndex < activeIndex);
+    step.classList.toggle('is-error', status === 'error');
+  }
+}
+
+function showUploadStatus(payload) {
+  elements.uploadStatusPanel.hidden = false;
+  const status = payload.status || 'queued';
+  elements.uploadStatusTitle.textContent = uploadStatusLabel(status);
+  elements.uploadStatusMessage.textContent = payload.error || payload.message || 'Waiting for the worker.';
+  elements.uploadThumbnailStatus.textContent = thumbnailStatusLabel(payload.thumbnail_status);
+  elements.uploadStatusPanel.classList.toggle('is-error', status === 'error');
+  updateUploadProgressSteps(status);
+}
+
+async function pollUploadJob(jobId) {
+  const payload = await fetchJson(`/api/analyze/${encodeURIComponent(jobId)}`);
+  showUploadStatus(payload);
+
+  if (payload.status === 'done' && payload.structure_id) {
+    await loadRuns();
+    await search();
+    if (state.uploadRoutedJobId !== jobId) {
+      state.uploadRoutedJobId = jobId;
+      navigateToHit(payload.structure_id);
+    }
+    if (payload.thumbnail_status === 'done' || payload.thumbnail_status === 'failed' || payload.thumbnail_status === 'skipped') {
+      clearUploadPoll();
+      setUploadBusy(false);
+    }
+    return payload;
+  }
+
+  if (payload.status === 'error') {
+    clearUploadPoll();
+    setUploadBusy(false);
+  }
+  return payload;
+}
+
+async function submitUpload(event) {
+  event.preventDefault();
+  clearUploadPoll();
+  state.uploadRoutedJobId = null;
+
+  const file = elements.uploadFileInput.files[0];
+  if (!file) {
+    showUploadStatus({
+      status: 'error',
+      message: 'Choose a structure file before running analysis.',
+      thumbnail_status: 'skipped',
+    });
+    return;
+  }
+
+  const maxUploadBytes = Number(state.health?.max_upload_bytes);
+  if (Number.isFinite(maxUploadBytes) && maxUploadBytes > 0 && file.size > maxUploadBytes) {
+    showUploadStatus({
+      status: 'error',
+      message: `Selected file is larger than ${formatBytes(maxUploadBytes)}.`,
+      thumbnail_status: 'skipped',
+    });
+    return;
+  }
+
+  const formData = new FormData(elements.uploadForm);
+  setUploadBusy(true);
+  showUploadStatus({
+    status: 'queued',
+    message: 'Submitting upload.',
+    thumbnail_status: 'pending',
+  });
+
+  try {
+    const submitted = await fetchJson('/api/analyze', {
+      method: 'POST',
+      body: formData,
+    });
+    showUploadStatus({
+      ...submitted,
+      message: 'Queued for analysis.',
+      thumbnail_status: 'pending',
+    });
+    const firstPoll = await pollUploadJob(submitted.job_id);
+    const terminalThumbnail = ['done', 'failed', 'skipped'].includes(firstPoll.thumbnail_status);
+    if (state.uploadPollId === null && firstPoll.status !== 'error' && !(firstPoll.status === 'done' && terminalThumbnail)) {
+      state.uploadPollId = window.setInterval(() => {
+        pollUploadJob(submitted.job_id).catch((error) => {
+          showUploadStatus({
+            status: 'error',
+            message: `Unable to poll analysis job: ${error.message}`,
+            thumbnail_status: 'skipped',
+          });
+          clearUploadPoll();
+          setUploadBusy(false);
+        });
+      }, UPLOAD_POLL_INTERVAL_MS);
+    }
+  } catch (error) {
+    showUploadStatus({
+      status: 'error',
+      message: error.message,
+      thumbnail_status: 'skipped',
+    });
+    setUploadBusy(false);
+  }
+}
+
+function resetUploadForm() {
+  clearUploadPoll();
+  state.uploadRoutedJobId = null;
+  elements.uploadForm.reset();
+  elements.uploadResolutionInput.value = DEFAULT_UPLOAD_RESOLUTION;
+  configureUploadForm(state.health || {});
+  elements.uploadStatusPanel.hidden = true;
+  elements.uploadStatusPanel.classList.remove('is-error');
+  setUploadBusy(false);
 }
 
 async function loadRuns() {
@@ -377,7 +605,7 @@ function renderResults(rows) {
     openButton.type = 'button';
     openButton.className = 'primary-button';
     openButton.textContent = 'Open Detail';
-    openButton.addEventListener('click', () => openDetail(row.structure_id));
+    openButton.addEventListener('click', () => navigateToHit(row.structure_id));
     actions.append(openButton);
 
     body.append(titleRow, subtitle, metrics, actions);
@@ -642,7 +870,62 @@ async function applyVolumeStyle(viewer, volumeSurface) {
   }
 }
 
-async function openDetail(structureId) {
+function getRoute() {
+  const hash = window.location.hash || '#/';
+  const hitMatch = hash.match(/^#\/hit\/(\d+)$/);
+  if (hitMatch) {
+    return { view: 'detail', structureId: Number(hitMatch[1]) };
+  }
+  if (hash === '#/gallery') {
+    return { view: 'gallery', structureId: null };
+  }
+  return { view: 'landing', structureId: null };
+}
+
+function setCurrentView(view) {
+  state.currentView = view;
+  elements.landingView.hidden = view !== 'landing';
+  elements.galleryView.hidden = view === 'landing';
+  elements.homeViewButton.classList.toggle('is-active', view === 'landing');
+  elements.galleryViewButton.classList.toggle('is-active', view !== 'landing');
+}
+
+function navigateTo(hash) {
+  if (window.location.hash === hash) {
+    renderRoute().catch((error) => {
+      console.warn('Route update failed:', error);
+    });
+    return;
+  }
+  window.location.hash = hash;
+}
+
+function navigateToHit(structureId) {
+  navigateTo(`#/hit/${structureId}`);
+}
+
+async function renderRoute() {
+  const route = getRoute();
+  if (route.view === 'landing') {
+    setCurrentView('landing');
+    if (elements.detailDialog.open) closeDetail({ updateHash: false });
+    return;
+  }
+
+  setCurrentView('gallery');
+  if (route.view === 'detail' && route.structureId) {
+    await openDetail(route.structureId, { updateHash: false });
+  } else if (elements.detailDialog.open) {
+    closeDetail({ updateHash: false });
+  }
+}
+
+async function openDetail(structureId, options = {}) {
+  if (options.updateHash !== false && window.location.hash !== `#/hit/${structureId}`) {
+    navigateToHit(structureId);
+    return;
+  }
+
   try {
     const [detail, viewerData] = await Promise.all([
       fetchJson(`/api/hits/${structureId}`),
@@ -661,9 +944,15 @@ async function openDetail(structureId) {
   }
 }
 
-function closeDetail() {
+function closeDetail(options = {}) {
   if (elements.detailDialog.open) {
+    if (options.updateHash === false) {
+      state.suppressDetailCloseRoute = true;
+    }
     elements.detailDialog.close();
+  }
+  if (options.updateHash !== false && getRoute().view === 'detail') {
+    navigateTo('#/gallery');
   }
 }
 
@@ -1002,6 +1291,21 @@ function wirePresets() {
 }
 
 function wireEvents() {
+  elements.homeViewButton.addEventListener('click', () => navigateTo('#/'));
+  elements.galleryViewButton.addEventListener('click', () => navigateTo('#/gallery'));
+  elements.browseGalleryButton.addEventListener('click', () => navigateTo('#/gallery'));
+  elements.uploadFocusButton.addEventListener('click', () => {
+    navigateTo('#/');
+    window.setTimeout(() => elements.uploadFileInput.focus(), 0);
+  });
+  elements.uploadForm.addEventListener('submit', submitUpload);
+  elements.uploadResetButton.addEventListener('click', resetUploadForm);
+  window.addEventListener('hashchange', () => {
+    renderRoute().catch((error) => {
+      console.warn('Route update failed:', error);
+    });
+  });
+
   elements.filtersForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     state.currentOffset = 0;
@@ -1049,6 +1353,15 @@ function wireEvents() {
   }
 
   elements.closeDetailButton.addEventListener('click', closeDetail);
+  elements.detailDialog.addEventListener('close', () => {
+    if (state.suppressDetailCloseRoute) {
+      state.suppressDetailCloseRoute = false;
+      return;
+    }
+    if (getRoute().view === 'detail') {
+      navigateTo('#/gallery');
+    }
+  });
   elements.detailDialog.addEventListener('click', (event) => {
     const rect = elements.detailDialog.getBoundingClientRect();
     const insideDialog =
@@ -1069,6 +1382,7 @@ async function init() {
   await loadRuns();
   restoreActiveFilterPreset();
   await search();
+  await renderRoute();
 }
 
 window.addEventListener('DOMContentLoaded', () => {
