@@ -9,18 +9,26 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from volumizer import gallery_query
 from volumizer.molstar import build_volume_surface_style
+from volumizer import pdb
 from volumizer.web import db as web_db
+from volumizer.web.jobs import (
+    ALLOWED_UPLOAD_EXTENSIONS,
+    DEFAULT_MAX_UPLOAD_BYTES,
+    AnalysisJobRegistry,
+)
 
 
 DEFAULT_DB_PATH = Path("data") / "gallery.db"
 GALLERY_DB_ENV = "VOLUMIZER_GALLERY_DB"
 MOLSTAR_ASSET_ROOT_ENV = "MOLSTAR_ASSET_ROOT"
+ENABLE_UPLOAD_ENV = "VOLUMIZER_ENABLE_UPLOAD"
+MAX_UPLOAD_BYTES_ENV = "VOLUMIZER_UPLOAD_MAX_BYTES"
 DEFAULT_MOLSTAR_ASSET_ROOT = Path("node_modules") / "molstar" / "build" / "viewer"
 MOLSTAR_ASSET_FILENAMES = frozenset({"molstar.js", "molstar.css"})
 
@@ -54,6 +62,32 @@ def _resolve_molstar_asset_root(explicit_asset_root: Path | None = None) -> Path
         if all((resolved / filename).is_file() for filename in MOLSTAR_ASSET_FILENAMES):
             return resolved
     return None
+
+
+def _resolve_upload_enabled(explicit_upload_enabled: bool | None = None) -> bool:
+    if explicit_upload_enabled is not None:
+        return bool(explicit_upload_enabled)
+
+    raw_value = os.getenv(ENABLE_UPLOAD_ENV)
+    if raw_value is None:
+        return True
+
+    normalized = raw_value.strip().lower()
+    return normalized not in {"0", "false", "no", "off"}
+
+
+def _resolve_max_upload_bytes(explicit_max_upload_bytes: int | None = None) -> int:
+    if explicit_max_upload_bytes is not None:
+        return int(explicit_max_upload_bytes)
+
+    raw_value = os.getenv(MAX_UPLOAD_BYTES_ENV)
+    if raw_value:
+        try:
+            return int(raw_value)
+        except ValueError:
+            return DEFAULT_MAX_UPLOAD_BYTES
+
+    return DEFAULT_MAX_UPLOAD_BYTES
 
 
 def _load_index_html(static_dir: Path) -> str:
@@ -158,8 +192,13 @@ def _molstar_asset_response_or_404(
 def create_app(
     db_path: Path | None = None,
     molstar_asset_root: Path | None = None,
+    upload_enabled: bool | None = None,
+    job_registry: AnalysisJobRegistry | None = None,
+    max_upload_bytes: int | None = None,
 ) -> FastAPI:
     resolved_db_path = _resolve_db_path(db_path)
+    resolved_upload_enabled = _resolve_upload_enabled(upload_enabled)
+    resolved_max_upload_bytes = _resolve_max_upload_bytes(max_upload_bytes)
     static_dir = Path(__file__).with_name("static")
     index_html = _load_index_html(static_dir)
 
@@ -170,6 +209,16 @@ def create_app(
     )
     app.state.db_path = resolved_db_path
     app.state.molstar_asset_root = _resolve_molstar_asset_root(molstar_asset_root)
+    app.state.upload_enabled = resolved_upload_enabled
+    app.state.max_upload_bytes = resolved_max_upload_bytes
+    app.state.analysis_jobs = job_registry or (
+        AnalysisJobRegistry(
+            db_path=resolved_db_path,
+            max_upload_bytes=resolved_max_upload_bytes,
+        )
+        if resolved_upload_enabled
+        else None
+    )
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
@@ -189,7 +238,80 @@ def create_app(
                 else None
             ),
             "molstar_assets_available": app.state.molstar_asset_root is not None,
+            "upload_enabled": app.state.upload_enabled,
+            "max_upload_bytes": app.state.max_upload_bytes,
+            "assembly_policies": list(pdb.VALID_ASSEMBLY_POLICIES),
+            "renderer_available": app.state.analysis_jobs is not None,
         }
+
+    @app.post("/api/analyze")
+    async def submit_analysis(
+        file: UploadFile = File(...),
+        resolution: float = Form(...),
+        assembly_policy: str = Form(pdb.DEFAULT_ASSEMBLY_POLICY),
+    ) -> dict[str, Any]:
+        if not app.state.upload_enabled or app.state.analysis_jobs is None:
+            raise HTTPException(status_code=403, detail="Upload analysis is disabled")
+
+        filename = Path(file.filename or "").name
+        if len(filename.strip()) == 0:
+            raise HTTPException(status_code=422, detail="Upload filename is required")
+
+        suffix = Path(filename).suffix.lower()
+        if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unsupported upload type. Expected one of: "
+                    + ", ".join(sorted(ALLOWED_UPLOAD_EXTENSIONS))
+                ),
+            )
+
+        if float(resolution) <= 0:
+            raise HTTPException(status_code=422, detail="resolution must be greater than 0")
+
+        if assembly_policy not in pdb.VALID_ASSEMBLY_POLICIES:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unsupported assembly_policy. Expected one of: "
+                    + ", ".join(pdb.VALID_ASSEMBLY_POLICIES)
+                ),
+            )
+
+        content = await file.read(int(app.state.max_upload_bytes) + 1)
+        if len(content) == 0:
+            raise HTTPException(status_code=422, detail="Uploaded file is empty")
+        if len(content) > int(app.state.max_upload_bytes):
+            raise HTTPException(status_code=413, detail="Uploaded file is too large")
+
+        job = app.state.analysis_jobs.submit_analysis(
+            filename=filename,
+            content=content,
+            resolution=float(resolution),
+            assembly_policy=assembly_policy,
+        )
+        return {
+            "job_id": job.job_id,
+            "status": job.status,
+        }
+
+    @app.get("/api/analyze")
+    def list_analysis_jobs() -> dict[str, Any]:
+        registry = app.state.analysis_jobs
+        if registry is None:
+            return {"jobs": []}
+        return {"jobs": [job.to_dict() for job in registry.list_jobs()]}
+
+    @app.get("/api/analyze/{job_id}")
+    def get_analysis_job(job_id: str) -> dict[str, Any]:
+        registry = app.state.analysis_jobs
+        if registry is None:
+            raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+        job = registry.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
+        return job.to_dict()
 
     @app.get("/assets/molstar.js")
     def get_molstar_js() -> FileResponse:

@@ -71,6 +71,25 @@ def list_runs(db_path: Path) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def list_source_labels(db_path: Path, run_id: str) -> list[str]:
+    resolved = Path(db_path).resolve()
+    if not resolved.is_file():
+        return []
+
+    with _connect(resolved) as connection:
+        rows = connection.execute(
+            """
+            SELECT source_label
+            FROM structures
+            WHERE run_id = ?
+            ORDER BY source_label ASC
+            """,
+            (str(run_id),),
+        ).fetchall()
+
+    return [str(row["source_label"]) for row in rows]
+
+
 def get_hit_detail(db_path: Path, structure_id: int) -> dict[str, Any] | None:
     with _connect(db_path) as connection:
         row = connection.execute(

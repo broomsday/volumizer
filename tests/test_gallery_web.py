@@ -3,12 +3,14 @@ from pathlib import Path
 import sqlite3
 import subprocess
 import textwrap
+import time
 
 from fastapi.testclient import TestClient
 
 from volumizer import gallery_index, gallery_render
 from volumizer.paths import TEST_DIR
 from volumizer.web.app import create_app
+from volumizer.web.jobs import AnalysisJobRegistry
 
 
 TEST_INPUT_PDB = TEST_DIR / "pdbs" / "cavity.pdb"
@@ -157,6 +159,173 @@ def test_gallery_web_root_and_health(tmp_path: Path):
     assert payload["db"] == str(db_path.resolve())
     assert payload["molstar_assets_available"] is True
     assert payload["molstar_asset_root"] == str(asset_root.resolve())
+    assert payload["upload_enabled"] is True
+    assert "biological" in payload["assembly_policies"]
+
+
+def test_gallery_web_analyze_upload_indexes_structure(tmp_path: Path):
+    db_path = tmp_path / "gallery.db"
+    thumbnail_calls: list[int] = []
+
+    def fake_analysis(
+        *,
+        source_label: str,
+        input_path: Path,
+        output_dir: Path,
+        resolution: float,
+        assembly_policy: str,
+        max_residues: int | None,
+    ) -> dict:
+        assert input_path.is_file()
+        assert resolution == 3.0
+        assert assembly_policy == "biological"
+        assert max_residues == 123
+        output_dir.mkdir(parents=True, exist_ok=True)
+        annotated_path = output_dir / f"{source_label}.annotated.cif"
+        annotation_path = output_dir / f"{source_label}.annotation.json"
+        annotated_path.write_text("data_upload\n#\n", encoding="utf-8")
+        _write_annotation(annotation_path, 150.0)
+        return {
+            "source": source_label,
+            "input_path": str(input_path),
+            "structure_output": str(annotated_path),
+            "annotation_output": str(annotation_path),
+        }
+
+    def fake_thumbnail(
+        *,
+        db_path: Path,
+        render_root: Path,
+        structure_id: int,
+    ) -> dict:
+        thumbnail_calls.append(int(structure_id))
+        output_dir = render_root / str(structure_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = {}
+        for axis in ("x", "y", "z"):
+            path = output_dir / f"{axis}.png"
+            path.write_bytes(f"png-{axis}".encode("utf-8"))
+            paths[axis] = path
+
+        with sqlite3.connect(db_path) as connection:
+            connection.execute(
+                """
+                UPDATE renders
+                SET x_png_path = ?,
+                    y_png_path = ?,
+                    z_png_path = ?,
+                    render_status = 'done',
+                    render_error = NULL
+                WHERE structure_id = ?
+                """,
+                (
+                    str(paths["x"]),
+                    str(paths["y"]),
+                    str(paths["z"]),
+                    int(structure_id),
+                ),
+            )
+            connection.commit()
+        return {"rendered_jobs": 1}
+
+    registry = AnalysisJobRegistry(
+        db_path=db_path,
+        analysis_fn=fake_analysis,
+        thumbnail_fn=fake_thumbnail,
+        max_residues=123,
+    )
+    client = TestClient(
+        create_app(
+            db_path,
+            job_registry=registry,
+            upload_enabled=True,
+            max_upload_bytes=1_000_000,
+        )
+    )
+
+    response = client.post(
+        "/api/analyze",
+        files={
+            "file": (
+                "uploaded.pdb",
+                TEST_INPUT_PDB.read_bytes(),
+                "chemical/x-pdb",
+            )
+        },
+        data={
+            "resolution": "3.0",
+            "assembly_policy": "biological",
+        },
+    )
+    assert response.status_code == 200
+    submitted = response.json()
+    assert submitted["status"] == "queued"
+    job_id = submitted["job_id"]
+
+    job_payload = None
+    for _ in range(100):
+        poll_response = client.get(f"/api/analyze/{job_id}")
+        assert poll_response.status_code == 200
+        job_payload = poll_response.json()
+        if (
+            job_payload["status"] == "done"
+            and job_payload["thumbnail_status"] == "done"
+        ):
+            break
+        time.sleep(0.05)
+
+    assert job_payload is not None
+    assert job_payload["status"] == "done"
+    assert job_payload["thumbnail_status"] == "done"
+    assert job_payload["source_label"] == "uploaded"
+    structure_id = int(job_payload["structure_id"])
+    assert thumbnail_calls == [structure_id]
+
+    detail_response = client.get(f"/api/hits/{structure_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["run_id"] == "uploads"
+    assert detail["source_label"] == "uploaded"
+    assert detail["render_status"] == "done"
+    assert detail["urls"]["thumbnail_x"] == f"/files/render/{structure_id}/x.png"
+
+    viewer_response = client.get(f"/api/hits/{structure_id}/viewer-data")
+    assert viewer_response.status_code == 200
+    viewer_payload = viewer_response.json()
+    assert viewer_payload["structure_url"] == f"/files/structure/{structure_id}"
+
+
+def test_gallery_web_analyze_rejects_bad_upload(tmp_path: Path):
+    client = TestClient(create_app(tmp_path / "gallery.db", max_upload_bytes=16))
+
+    bad_type_response = client.post(
+        "/api/analyze",
+        files={"file": ("bad.txt", b"ATOM\n", "text/plain")},
+        data={"resolution": "3.0", "assembly_policy": "biological"},
+    )
+    assert bad_type_response.status_code == 422
+
+    too_large_response = client.post(
+        "/api/analyze",
+        files={"file": ("bad.pdb", b"x" * 17, "chemical/x-pdb")},
+        data={"resolution": "3.0", "assembly_policy": "biological"},
+    )
+    assert too_large_response.status_code == 413
+
+
+def test_gallery_web_analyze_can_be_disabled(tmp_path: Path):
+    client = TestClient(create_app(tmp_path / "gallery.db", upload_enabled=False))
+
+    health_response = client.get("/api/health")
+    assert health_response.status_code == 200
+    assert health_response.json()["upload_enabled"] is False
+
+    response = client.post(
+        "/api/analyze",
+        files={"file": ("upload.pdb", b"ATOM\n", "chemical/x-pdb")},
+        data={"resolution": "3.0", "assembly_policy": "biological"},
+    )
+    assert response.status_code == 403
 
 
 def test_gallery_web_serves_local_molstar_assets(tmp_path: Path):

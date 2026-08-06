@@ -65,8 +65,10 @@ Three independently testable stages. Build and verify in order.
 
 Progress:
 - **Stage 1**: complete. `index_single_structure(...)` now shares the batch indexing
-  insert path through `_index_one(...)`; focused gallery index and web regression tests pass.
-- **Stage 2**: not started.
+  insert path through `_index_one(...)`; focused gallery index test passes under `uv run`.
+- **Stage 2**: complete. The FastAPI app now exposes upload analysis endpoints backed by
+  an in-process serialized job registry with injectable analysis/render seams; focused
+  upload API and gallery web regression tests pass under `uv run --group test`.
 - **Stage 3**: not started.
 
 ### Stage 1 — Incremental single-structure indexing
